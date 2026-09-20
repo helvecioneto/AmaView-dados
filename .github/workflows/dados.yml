@@ -1,0 +1,70 @@
+name: Atualizar dados do CEMADEN
+
+on:
+  schedule:
+    # A cada 10 minutos, alinhado com o quadro do GOES-19.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Um ciclo por vez. `cancel-in-progress: false` porque um ciclo interrompido no
+# meio publicaria uma grade pela metade — melhor deixar terminar e pular o
+# próximo, que refaz tudo de qualquer jeito.
+concurrency:
+  group: dados
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    name: Buscar e publicar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Testes das funções da grade
+        run: node --test scripts/serie.test.mjs
+
+      - name: Buscar o CEMADEN e montar a grade
+        env:
+          CEMADEN_TOKEN: ${{ secrets.CEMADEN_TOKEN }}
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/build.mjs
+
+      # Se o passo acima falhar, o job para aqui e NADA é publicado: a versão
+      # anterior continua no ar. É a razão de o build nunca escrever por cima
+      # de forma parcial.
+      - name: Conferir a saída
+        run: |
+          set -e
+          for f in site/cemaden/estacoes.json site/cemaden/serie.json site/cemaden/manifest.json; do
+            test -s "$f" || { echo "::error::$f vazio ou ausente"; exit 1; }
+          done
+          node -e '
+            const s = require("fs").readFileSync("site/cemaden/serie.json", "utf8");
+            const j = JSON.parse(s);
+            if (!Array.isArray(j.v) || j.v.length === 0) throw new Error("grade vazia");
+            if (j.v.some((l) => l.length !== j.slots)) throw new Error("linha com tamanho errado");
+            console.log(`grade validada: ${j.v.length} x ${j.slots}`);
+          '
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
