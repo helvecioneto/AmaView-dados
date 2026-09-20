@@ -106,6 +106,68 @@ export async function instantaneoAberto() {
   };
 }
 
+/**
+ * Série horária de 48 h de uma estação, do mesmo webservice que o Mapa
+ * Interativo usa (`Access-Control-Allow-Origin: *`, sem credencial).
+ *
+ * Serve para PREENCHER a grade na primeira execução: sem isso, o modo aberto
+ * levaria 24 h para ter história e quem abrisse o AmaView antes disso veria a
+ * camada vazia. 48 h porque calcular o acumulado de 24 h na fatia mais antiga
+ * exige as 24 h anteriores a ela.
+ *
+ * Devolve `[{ ms, mm }]` — `ms` é o INÍCIO da hora, em UTC.
+ */
+export async function horarias48(idEstacao) {
+  const r = await buscar(`${MAPSERVICES}/horario/${idEstacao}/47`, {}, 2);
+  const j = await r.json();
+  const linhas = Array.isArray(j?.acumulados) ? j.acumulados : [];
+  const n = Array.isArray(j?.horarios) ? j.horarios.length : 0;
+  if (!n || !linhas.length) return [];
+
+  // `acumulados` é [dia][k]: para cada k só um dia tem valor não nulo.
+  const serie = new Array(n).fill(null);
+  for (const dia of linhas) {
+    if (!Array.isArray(dia)) continue;
+    for (let k = 0; k < n; k++) {
+      const v = dia[k];
+      if (v !== null && v !== undefined && Number.isFinite(Number(v))) serie[k] = Number(v);
+    }
+  }
+
+  // O último índice é a hora corrente; as anteriores recuam de hora em hora.
+  const inicioHoraAtual = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  return serie
+    .map((mm, k) => ({ ms: inicioHoraAtual - (n - 1 - k) * 3_600_000, mm }))
+    .filter((h) => h.mm !== null);
+}
+
+const MAPSERVICES = 'https://mapservices.cemaden.gov.br/MapaInterativoWS/resources';
+
+/**
+ * Roda `tarefa` sobre `itens` com no máximo `limite` em paralelo.
+ *
+ * O `mapservices` é o backend do Mapa Interativo público: seis conexões é o
+ * suficiente para preencher as ~570 estações em cerca de 20 s sem pesar para
+ * quem mais estiver usando o site deles.
+ */
+export async function emLotes(itens, tarefa, limite = 6) {
+  const resultados = new Array(itens.length);
+  let proximo = 0;
+  async function trabalhador() {
+    for (;;) {
+      const i = proximo++;
+      if (i >= itens.length) return;
+      try {
+        resultados[i] = await tarefa(itens[i], i);
+      } catch {
+        resultados[i] = null;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limite, itens.length) }, trabalhador));
+  return resultados;
+}
+
 // ---------------------------------------------------------------------------
 // Caminho oficial (com token)
 // ---------------------------------------------------------------------------

@@ -22,10 +22,11 @@ import { mkdir, writeFile, readFile, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cadastro, dadosRede, instantaneoAberto, UFS_AMAZONIA } from './cemaden.mjs';
+import { cadastro, dadosRede, emLotes, horarias48, instantaneoAberto, UFS_AMAZONIA } from './cemaden.mjs';
 import {
   PASSO_MS,
   SLOTS,
+  acum24hPorFatia,
   alinhar,
   arredondar,
   contarMedidas,
@@ -85,8 +86,42 @@ async function viaAberta(fim, anterior) {
 
   const codigos = estacoes.map((e) => e.cod);
   const valores = new Map(estacoes.filter((e) => e.valor !== null).map((e) => [e.cod, e.valor]));
-  const { t0, v } = deslocarEGravar(anterior, codigos, valores, fim);
+
+  // Sem grade anterior a série começaria com uma coluna só, e quem abrisse o
+  // AmaView veria a camada vazia até o dia seguinte. O preenchimento inicial
+  // monta as 24 h de uma vez, a partir das séries horárias públicas.
+  const base = anterior ?? (await preencherInicial(estacoes, fim));
+
+  const { t0, v } = deslocarEGravar(base, codigos, valores, fim);
   return { estacoes, codigos, t0, v, grandeza: 'acum24h', modo: 'aberto' };
+}
+
+/** Grade completa a partir das séries horárias de 48 h (uma vez, no 1º ciclo). */
+async function preencherInicial(estacoes, fim) {
+  const comId = estacoes.filter((e) => Number.isFinite(e.id));
+  if (comId.length === 0) return null;
+
+  console.log(`  Preenchimento inicial: ${comId.length} séries horárias…`);
+  const t0 = fim - (SLOTS - 1) * PASSO_MS;
+  const inicio = Date.now();
+
+  const linhas = await emLotes(comId, async (e) => {
+    const horas = await horarias48(e.id);
+    return horas.length ? acum24hPorFatia(horas, t0) : null;
+  });
+
+  const codigos = [];
+  const v = [];
+  let ok = 0;
+  comId.forEach((e, i) => {
+    if (!linhas[i]) return;
+    codigos.push(e.cod);
+    v.push(linhas[i]);
+    ok++;
+  });
+
+  console.log(`  Preenchidas ${ok} de ${comId.length} em ${((Date.now() - inicio) / 1000).toFixed(0)} s`);
+  return ok > 0 ? { t0, codigos, v } : null;
 }
 
 async function main() {

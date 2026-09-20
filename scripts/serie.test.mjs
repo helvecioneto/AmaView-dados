@@ -151,3 +151,70 @@ test('contarMedidas separa medição de chuva', () => {
     total: 6,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Preenchimento inicial a partir das séries horárias
+// ---------------------------------------------------------------------------
+
+import { acum24hPorFatia } from './serie.mjs';
+
+const H = 3_600_000;
+
+test('acum24hPorFatia soma as horas da janela de 24 h', () => {
+  const t0 = T;
+  // Uma hora de 5 mm começando 2 h antes de t0 conta em todas as fatias.
+  const linha = acum24hPorFatia([{ ms: t0 - 2 * H, mm: 5 }], t0, 3);
+  assert.deepEqual(linha, [5, 5, 5]);
+});
+
+test('horas fora da janela de 24 h não contam', () => {
+  const t0 = T;
+  // 25 h antes do fim da 1ª fatia: já saiu da janela.
+  assert.deepEqual(acum24hPorFatia([{ ms: t0 - 25 * H, mm: 9 }], t0, 1), [SEM_DADO]);
+});
+
+test('a hora entra na janela conforme as fatias avançam', () => {
+  // Hora exatamente 24 h antes de t0: fora de (t0-24h, t0] por ser o limite.
+  const t0 = T;
+  const linha = acum24hPorFatia([{ ms: t0 - 24 * H, mm: 4 }], t0, 2);
+  // Na fatia 0 o início é t0-24h, e a hora não é > que ele: fora.
+  assert.equal(linha[0], SEM_DADO);
+});
+
+test('a hora sai da janela quando a fatia avança além dela', () => {
+  const t0 = T;
+  // A hora está a 24 h − 1 min do fim da fatia 0, então entra nela. Na fatia 1
+  // a janela já começa 10 min depois, e a hora ficou para trás: é isso que
+  // torna a janela DESLIZANTE, e não um acumulado que só cresce.
+  const linha = acum24hPorFatia([{ ms: t0 - 24 * H + 60_000, mm: 4 }], t0, 2);
+  assert.deepEqual(linha, [4, SEM_DADO]);
+});
+
+test('várias horas somam', () => {
+  const t0 = T;
+  const linha = acum24hPorFatia(
+    [
+      { ms: t0 - 3 * H, mm: 1 },
+      { ms: t0 - 2 * H, mm: 2 },
+      { ms: t0 - H, mm: 3 },
+    ],
+    t0,
+    1,
+  );
+  assert.deepEqual(linha, [6]);
+});
+
+test('série vazia devolve a linha toda sem dado', () => {
+  assert.deepEqual(acum24hPorFatia([], T, 3), [SEM_DADO, SEM_DADO, SEM_DADO]);
+  assert.deepEqual(acum24hPorFatia(null, T, 2), [SEM_DADO, SEM_DADO]);
+});
+
+test('horas medidas com 0 mm dão acumulado 0, não ausência', () => {
+  assert.deepEqual(acum24hPorFatia([{ ms: T - H, mm: 0 }], T, 1), [0]);
+});
+
+test('a ordem de entrada não importa', () => {
+  const a = acum24hPorFatia([{ ms: T - H, mm: 3 }, { ms: T - 5 * H, mm: 2 }], T, 1);
+  const b = acum24hPorFatia([{ ms: T - 5 * H, mm: 2 }, { ms: T - H, mm: 3 }], T, 1);
+  assert.deepEqual(a, b);
+});

@@ -103,6 +103,40 @@ export function deslocarEGravar(anterior, codigos, valores, fim, slots = SLOTS) 
   return { t0, v };
 }
 
+/**
+ * Acumulado de 24 h em cada fatia, a partir de uma série HORÁRIA.
+ *
+ * Usado para preencher a grade na primeira execução do modo aberto. Para a
+ * fatia que termina em T, soma as horas cujo INÍCIO cai em (T − 24 h, T] — a
+ * mesma grandeza que o instantâneo publicado pelo CEMADEN, para que as
+ * colunas preenchidas e as acrescentadas depois signifiquem a mesma coisa.
+ *
+ * Uma fatia sem nenhuma hora conhecida no período vira `SEM_DADO`, nunca 0:
+ * não há como afirmar que não choveu numa janela que não foi medida.
+ *
+ * @param horas `[{ ms, mm }]` com `ms` no início da hora (UTC)
+ */
+export function acum24hPorFatia(horas, t0, slots = SLOTS) {
+  const linha = linhaVazia(slots);
+  if (!horas?.length) return linha;
+  const ordenadas = [...horas].sort((a, b) => a.ms - b.ms);
+
+  for (let s = 0; s < slots; s++) {
+    const fim = t0 + s * PASSO_MS;
+    const inicio = fim - 24 * 3_600_000;
+    let soma = 0;
+    let n = 0;
+    for (const h of ordenadas) {
+      if (h.ms > inicio && h.ms <= fim) {
+        soma += h.mm;
+        n++;
+      }
+    }
+    if (n > 0) linha[s] = soma;
+  }
+  return linha;
+}
+
 /** Arredonda para 1 casa decimal, preservando `SEM_DADO`. */
 export function arredondar(v) {
   return v.map((linha) => linha.map((x) => (x === SEM_DADO ? SEM_DADO : Math.round(x * 10) / 10)));
