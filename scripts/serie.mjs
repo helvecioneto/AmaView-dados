@@ -58,9 +58,12 @@ export function gradeDeLeituras(codigos, leituras, fim, slots = SLOTS) {
     if (i === undefined) continue;
     const s = indiceDaFatia(t0, l.ms, slots);
     if (s < 0) continue;
+    // Leitura sem valor não escreve célula nenhuma: a fatia continua
+    // SEM_DADO. Gravar 0 aqui transformaria silêncio do sensor em "mediu e
+    // não choveu", que é a inversão que esta base inteira existe para evitar.
+    if (!Number.isFinite(l.valor)) continue;
     const atual = v[i][s];
-    const novo = Number.isFinite(l.valor) ? l.valor : 0;
-    v[i][s] = atual === SEM_DADO ? novo : atual + novo;
+    v[i][s] = atual === SEM_DADO ? l.valor : atual + l.valor;
   }
   return { t0, v };
 }
@@ -127,7 +130,12 @@ export function acum24hPorFatia(horas, t0, slots = SLOTS) {
     let soma = 0;
     let n = 0;
     for (const h of ordenadas) {
-      if (h.ms > inicio && h.ms <= fim) {
+      // `h.ms` é o INÍCIO da hora, e a chuva dela cai em [h, h+1h). A janela
+      // compara pelo FIM: comparar pelo início incluía a hora que só começa em
+      // `fim` — chuva ainda no futuro daquela fatia — e excluía a que começa
+      // em `inicio`, que está dentro da janela.
+      const fimDaHora = h.ms + 3_600_000;
+      if (fimDaHora > inicio && fimDaHora <= fim) {
         soma += h.mm;
         n++;
       }
@@ -137,9 +145,55 @@ export function acum24hPorFatia(horas, t0, slots = SLOTS) {
   return linha;
 }
 
-/** Arredonda para 1 casa decimal, preservando `SEM_DADO`. */
+/**
+ * Arredonda para 1 casa decimal, preservando `SEM_DADO`.
+ *
+ * O piso em 0 não é cosmético: `-0.96` arredondaria para `-1`, que é o próprio
+ * marcador de ausência — uma medição viraria "sem dado" por coincidência
+ * numérica. Chuva acumulada não é negativa, então 0 é o piso correto.
+ */
 export function arredondar(v) {
-  return v.map((linha) => linha.map((x) => (x === SEM_DADO ? SEM_DADO : Math.round(x * 10) / 10)));
+  return v.map((linha) =>
+    linha.map((x) => (x === SEM_DADO ? SEM_DADO : Math.max(0, Math.round(x * 10) / 10))),
+  );
+}
+
+/**
+ * Copia da grade anterior as linhas que este ciclo não conseguiu preencher.
+ *
+ * Uma UF que responde CSV só com cabeçalho devolve zero leituras sem erro, e
+ * todas as estações dela iriam a SEM_DADO nas 144 fatias — o ciclo publicaria
+ * uma grade estritamente pior que a anterior. Aqui a linha antiga é deslocada
+ * para a janela nova e reaproveitada.
+ *
+ * Só entra onde não há NENHUMA medição nova: onde o ciclo trouxe dado, o dado
+ * novo manda.
+ */
+export function herdarVazias(atual, codigos, anterior, slots = SLOTS) {
+  if (!anterior || !Number.isFinite(anterior.t0)) return { herdadas: 0, v: atual.v };
+  const desloc = Math.round((atual.t0 - anterior.t0) / PASSO_MS);
+  const linhaAntes = new Map(anterior.codigos.map((c, i) => [c, i]));
+
+  let herdadas = 0;
+  const v = atual.v.map((linha, i) => {
+    if (linha.some((x) => x !== SEM_DADO)) return linha;
+    const j = linhaAntes.get(codigos[i]);
+    if (j === undefined) return linha;
+    const origem = anterior.v[j] ?? [];
+    const nova = linhaVazia(slots);
+    let achou = false;
+    for (let s = 0; s < slots; s++) {
+      const o = s + desloc;
+      if (o >= 0 && o < origem.length && origem[o] !== SEM_DADO) {
+        nova[s] = origem[o];
+        achou = true;
+      }
+    }
+    if (!achou) return linha;
+    herdadas++;
+    return nova;
+  });
+  return { herdadas, v };
 }
 
 /**

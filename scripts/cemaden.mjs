@@ -42,10 +42,17 @@ async function throttle() {
   ultima = Date.now();
 }
 
-/** Busca com tentativas: erro de rede e 5xx são temporários; 4xx, não. */
-async function buscar(url, opts = {}, tentativas = 3) {
+/**
+ * Busca com tentativas: erro de rede e 5xx são temporários; 4xx, não.
+ *
+ * `limitado` faz cada TENTATIVA reservar um lugar no `throttle`. Sem isso uma
+ * rajada de 5xx multiplicava as chamadas por 3 sem contar para a cota — 9 UFs
+ * × 3 tentativas estouraria as 12 req/min.
+ */
+async function buscar(url, opts = {}, tentativas = 3, limitado = false) {
   let ultimoErro;
   for (let i = 0; i < tentativas; i++) {
+    if (limitado) await throttle();
     try {
       const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(60_000) });
       if (r.ok) return r;
@@ -100,7 +107,7 @@ export async function instantaneoAberto() {
         lon: Number(e.longitude),
         tipo: Number(e.idtipoestacao) || 1,
         // `acumulado` é a chuva das últimas 24 h em mm.
-        valor: Number.isFinite(Number(e.acumulado)) ? Number(e.acumulado) : null,
+        valor: lerMilimetros(e.acumulado),
       }))
       .filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lon)),
   };
@@ -117,7 +124,7 @@ export async function instantaneoAberto() {
  *
  * Devolve `[{ ms, mm }]` — `ms` é o INÍCIO da hora, em UTC.
  */
-export async function horarias48(idEstacao) {
+export async function horarias48(idEstacao, ancoraMs = inicioDaHora()) {
   const r = await buscar(`${MAPSERVICES}/horario/${idEstacao}/47`, {}, 2);
   const j = await r.json();
   const linhas = Array.isArray(j?.acumulados) ? j.acumulados : [];
@@ -135,10 +142,19 @@ export async function horarias48(idEstacao) {
   }
 
   // O último índice é a hora corrente; as anteriores recuam de hora em hora.
-  const inicioHoraAtual = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  //
+  // A âncora vem de FORA e é a mesma para todas as estações do ciclo: o
+  // preenchimento inicial leva dezenas de segundos, e usar `Date.now()` por
+  // estação faria as buscadas às 13:59:58 ancorarem em 13h e as das 14:00:02
+  // em 14h, deslocando metade da rede em uma hora.
   return serie
-    .map((mm, k) => ({ ms: inicioHoraAtual - (n - 1 - k) * 3_600_000, mm }))
+    .map((mm, k) => ({ ms: ancoraMs - (n - 1 - k) * 3_600_000, mm }))
     .filter((h) => h.mm !== null);
+}
+
+/** Início da hora corrente em UTC. Âncora compartilhada do preenchimento. */
+export function inicioDaHora(agora = Date.now()) {
+  return Math.floor(agora / 3_600_000) * 3_600_000;
 }
 
 const MAPSERVICES = 'https://mapservices.cemaden.gov.br/MapaInterativoWS/resources';
@@ -238,7 +254,6 @@ export function marcaPed(ms) {
  * Devolve a lista crua de leituras, normalizada.
  */
 export async function dadosRede(token, uf, inicio, fim) {
-  await throttle();
   const q = new URLSearchParams({
     inicio: marcaPed(inicio),
     fim: marcaPed(fim),
@@ -247,7 +262,7 @@ export async function dadosRede(token, uf, inicio, fim) {
     tipo_pcd: TIPO_PLUVIOMETRICA,
     formato: 'JSON',
   });
-  const r = await buscar(`${PED}/pcds/dados_rede?${q}`, { headers: { token } });
+  const r = await buscar(`${PED}/pcds/dados_rede?${q}`, { headers: { token } }, 3, true);
   const texto = await r.text();
   return lerDadosRede(texto, uf);
 }
@@ -333,16 +348,35 @@ function normalizarLeitura(l) {
   const ms = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
   if (!Number.isFinite(ms)) return null;
 
-  // Alguns webservices usam vírgula decimal.
-  const v = Number(String(valor).replace(',', '.'));
-  return { cod: String(cod), ms, valor: Number.isFinite(v) ? v : null };
+  return { cod: String(cod), ms, valor: lerMilimetros(valor) };
+}
+
+/**
+ * Milímetros de um campo da resposta, ou `null` quando não há medição.
+ *
+ * Três armadilhas, todas com o mesmo desfecho — silêncio de sensor publicado
+ * como "mediu e não choveu", que é o pior erro possível nesta base:
+ *
+ * - `Number('')` é **0**, não NaN: coluna vazia do CSV viraria chuva zero;
+ * - sentinelas negativas (`-99.9`, `-1`) seriam somadas como chuva;
+ * - `-1` é o próprio marcador de ausência da grade, então um valor negativo
+ *   que chegasse até lá seria lido como "sem dado" por coincidência.
+ *
+ * Chuva acumulada não pode ser negativa, então qualquer negativo é sentinela.
+ */
+export function lerMilimetros(valor) {
+  if (valor === null || valor === undefined) return null;
+  const texto = String(valor).trim().replace(',', '.');
+  if (texto === '') return null;
+  const v = Number(texto);
+  if (!Number.isFinite(v) || v < 0) return null;
+  return v;
 }
 
 /** Cadastro das PCDs de uma UF (lat/lon, nome, município). */
 export async function cadastro(token, uf) {
-  await throttle();
   const q = new URLSearchParams({ uf, tipoestacao: TIPO_PLUVIOMETRICA, formato: 'JSON' });
-  const r = await buscar(`${PED}/pcds-cadastro/dados-cadastrais?${q}`, { headers: { token } });
+  const r = await buscar(`${PED}/pcds-cadastro/dados-cadastrais?${q}`, { headers: { token } }, 3, true);
   const j = await r.json();
   const lista = Array.isArray(j) ? j : (j?.dados ?? []);
   return lista

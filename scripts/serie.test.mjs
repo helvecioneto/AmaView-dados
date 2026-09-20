@@ -173,21 +173,29 @@ test('horas fora da janela de 24 h não contam', () => {
   assert.deepEqual(acum24hPorFatia([{ ms: t0 - 25 * H, mm: 9 }], t0, 1), [SEM_DADO]);
 });
 
-test('a hora entra na janela conforme as fatias avançam', () => {
-  // Hora exatamente 24 h antes de t0: fora de (t0-24h, t0] por ser o limite.
-  const t0 = T;
-  const linha = acum24hPorFatia([{ ms: t0 - 24 * H, mm: 4 }], t0, 2);
-  // Na fatia 0 o início é t0-24h, e a hora não é > que ele: fora.
+test('a hora mais antiga da janela conta — ela cabe inteira nas 24 h', () => {
+  // Hora que COMEÇA 24 h antes de t0: a chuva dela cai em [t0-24h, t0-23h),
+  // inteiramente dentro da janela que termina em t0. Comparar pelo início da
+  // hora a excluía; a comparação é pelo FIM.
+  const linha = acum24hPorFatia([{ ms: T - 24 * H, mm: 4 }], T, 2);
+  assert.equal(linha[0], 4);
+});
+
+test('a hora que só COMEÇA no fim da fatia não conta — é chuva do futuro', () => {
+  // Hora [t0, t0+1h): nada dela caiu até t0. Comparar pelo início a incluía,
+  // e chuva de agora aparecia no acumulado de fatias de horas atrás.
+  const linha = acum24hPorFatia([{ ms: T, mm: 9 }], T, 1);
   assert.equal(linha[0], SEM_DADO);
 });
 
-test('a hora sai da janela quando a fatia avança além dela', () => {
-  const t0 = T;
-  // A hora está a 24 h − 1 min do fim da fatia 0, então entra nela. Na fatia 1
-  // a janela já começa 10 min depois, e a hora ficou para trás: é isso que
-  // torna a janela DESLIZANTE, e não um acumulado que só cresce.
-  const linha = acum24hPorFatia([{ ms: t0 - 24 * H + 60_000, mm: 4 }], t0, 2);
-  assert.deepEqual(linha, [4, SEM_DADO]);
+test('a hora sai da janela quando a fatia avança 24 h além dela', () => {
+  // Janela DESLIZANTE. A hora termina em T−23h, e a janela da fatia s começa
+  // em T + s·10min − 24h; ela só deixa de alcançá-la quando esse início passa
+  // de T−23h, ou seja, a partir da 7ª fatia (60 min).
+  const linha = acum24hPorFatia([{ ms: T - 24 * H, mm: 4 }], T, 7);
+  assert.equal(linha[0], 4);
+  assert.equal(linha[5], 4);
+  assert.equal(linha[6], SEM_DADO);
 });
 
 test('várias horas somam', () => {
@@ -226,4 +234,61 @@ test('fatiasComDado mede história, não quantidade de estações', () => {
   // Rede degradada: uma estação só, mas com história completa.
   const degradada = [[1, 2, 3], ...Array.from({ length: 49 }, () => [SEM_DADO, SEM_DADO, SEM_DADO])];
   assert.equal(fatiasComDado(degradada, 3), 3);
+});
+
+// ---------------------------------------------------------------------------
+// Ausência nunca vira zero (achados da auditoria)
+// ---------------------------------------------------------------------------
+
+import { herdarVazias } from './serie.mjs';
+
+test('leitura sem valor deixa a fatia SEM_DADO, não 0', () => {
+  // Era o pior bug possível: silêncio do sensor publicado como "não choveu".
+  const { v } = gradeDeLeituras(['A'], [{ cod: 'A', ms: T, valor: null }], T, 2);
+  assert.deepEqual(v[0], [SEM_DADO, SEM_DADO]);
+});
+
+test('leitura sem valor não apaga uma medição válida da mesma fatia', () => {
+  const { v } = gradeDeLeituras(
+    ['A'],
+    [
+      { cod: 'A', ms: T, valor: 3 },
+      { cod: 'A', ms: T, valor: null },
+    ],
+    T,
+    2,
+  );
+  assert.equal(v[0][1], 3);
+});
+
+test('arredondar nunca CRIA o marcador de ausência', () => {
+  // -0.96 arredondaria para -1, que é SEM_DADO: medição viraria "sem dado".
+  assert.deepEqual(arredondar([[-0.96, -0.04, 2.55]]), [[0, 0, 2.6]]);
+});
+
+test('arredondar preserva SEM_DADO como está', () => {
+  assert.deepEqual(arredondar([[SEM_DADO, 1.24]]), [[SEM_DADO, 1.2]]);
+});
+
+test('herdarVazias reaproveita a linha antiga quando o ciclo não trouxe nada', () => {
+  const anterior = { t0: inicioDaGrade(T, 3), codigos: ['A'], v: [[1, 2, 3]] };
+  const atual = { t0: inicioDaGrade(T + PASSO_MS, 3), v: [linhaVazia(3)] };
+  const { herdadas, v } = herdarVazias(atual, ['A'], anterior, 3);
+  assert.equal(herdadas, 1);
+  assert.deepEqual(v[0], [2, 3, SEM_DADO]);
+});
+
+test('herdarVazias NÃO sobrescreve linha com dado novo', () => {
+  const anterior = { t0: inicioDaGrade(T, 3), codigos: ['A'], v: [[1, 2, 3]] };
+  const atual = { t0: inicioDaGrade(T, 3), v: [[SEM_DADO, SEM_DADO, 9]] };
+  const { herdadas, v } = herdarVazias(atual, ['A'], anterior, 3);
+  assert.equal(herdadas, 0);
+  assert.deepEqual(v[0], [SEM_DADO, SEM_DADO, 9]);
+});
+
+test('herdarVazias ignora estação sem histórico e grade anterior inválida', () => {
+  const atual = { t0: T, v: [linhaVazia(3)] };
+  assert.equal(herdarVazias(atual, ['X'], { t0: T, codigos: ['A'], v: [[1, 2, 3]] }, 3).herdadas, 0);
+  assert.equal(herdarVazias(atual, ['A'], { t0: NaN, codigos: ['A'], v: [[1, 2, 3]] }, 3).herdadas, 0);
+  assert.equal(herdarVazias(atual, ['A'], null, 3).herdadas, 0);
 });

@@ -32,6 +32,7 @@ import {
   dadosRede,
   emLotes,
   horarias48,
+  inicioDaHora,
   instantaneoAberto,
   minutosAteExpirar,
   renovarToken,
@@ -47,6 +48,7 @@ import {
   deslocarEGravar,
   fatiasComDado,
   gradeDeLeituras,
+  herdarVazias,
 } from './serie.mjs';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -91,6 +93,38 @@ function descreverValidade(token) {
 const ATRIBUICAO =
   'Dados da Rede Observacional do CEMADEN/MCTI — Centro Nacional de Monitoramento e Alertas de Desastres Naturais (https://www.gov.br/cemaden/)';
 
+/**
+ * A publicação anterior só pode ser reaproveitada se for da MESMA grandeza e
+ * estiver íntegra.
+ *
+ * Sem o teste de grandeza, um ciclo que perdesse o token herdaria 143 colunas
+ * de `chuva10min` e escreveria só a última em `acum24h`, publicando a mistura
+ * sob um único rótulo — o mapa leria 0,2 mm de uma fatia de 10 min como se
+ * fosse o acumulado de 24 h.
+ *
+ * Sem o teste de `t0`, uma publicação corrompida passava por `fatiasComDado`
+ * (que via 144 fatias cheias, então o preenchimento inicial não disparava) e
+ * era rejeitada depois por `deslocarEGravar`, apagando o histórico.
+ */
+function gradeAnteriorUtil(serie, grandezaAtual) {
+  if (!serie?.v || !Array.isArray(serie.estacoes) || !Array.isArray(serie.v)) return null;
+  if (!Number.isFinite(serie.t0)) {
+    console.warn('[aviso] publicação anterior sem t0 válido — será refeita do zero.');
+    return null;
+  }
+  if (serie.v.length !== serie.estacoes.length) {
+    console.warn('[aviso] publicação anterior inconsistente (linhas ≠ estações) — descartada.');
+    return null;
+  }
+  if (serie.grandeza && serie.grandeza !== grandezaAtual) {
+    console.warn(
+      `[aviso] publicação anterior é '${serie.grandeza}' e este ciclo é '${grandezaAtual}' — descartada para não misturar grandezas.`,
+    );
+    return null;
+  }
+  return { t0: serie.t0, codigos: serie.estacoes, v: serie.v, grandeza: serie.grandeza ?? null };
+}
+
 /** Publicação anterior, para continuar a série. Ausência não é erro. */
 async function publicacaoAnterior(nome) {
   try {
@@ -112,7 +146,7 @@ async function publicacaoAnterior(nome) {
  * modos, e a lista não muda quando o token entra ou sai — além de economizar
  * 9 das 18 requisições do ciclo.
  */
-async function viaToken(TOKEN, fim) {
+async function viaToken(TOKEN, fim, anterior) {
   console.log('Modo: API oficial PED (com token)');
   const inicio = fim - (SLOTS - 1) * PASSO_MS;
 
@@ -127,10 +161,17 @@ async function viaToken(TOKEN, fim) {
   }
 
   const codigos = estacoes.map((e) => e.cod);
-  const { t0, v } = gradeDeLeituras(codigos, leituras, fim);
+  const grade = gradeDeLeituras(codigos, leituras, fim);
   const cobertos = new Set(leituras.map((l) => l.cod));
   console.log(`  ${cobertos.size} estações com leitura de ${codigos.length}`);
-  return { estacoes, codigos, t0, v, grandeza: 'chuva10min', modo: 'ped' };
+
+  // Uma UF que responde só o cabeçalho devolve zero leituras sem erro, e as
+  // estações dela iriam todas a SEM_DADO. Nesse caso vale mais a linha do
+  // ciclo passado, deslocada, que uma grade estritamente pior.
+  const { herdadas, v } = herdarVazias(grade, codigos, anterior);
+  if (herdadas > 0) console.log(`  ${herdadas} estações herdaram a linha do ciclo anterior`);
+
+  return { estacoes, codigos, t0: grade.t0, v, grandeza: 'chuva10min', modo: 'ped' };
 }
 
 /**
@@ -172,8 +213,11 @@ async function preencherInicial(estacoes, fim) {
   const t0 = fim - (SLOTS - 1) * PASSO_MS;
   const inicio = Date.now();
 
+  // Uma âncora só para o ciclo inteiro: com `Date.now()` por estação, as
+  // buscadas antes e depois da virada da hora ficariam 1 h deslocadas entre si.
+  const ancora = inicioDaHora();
   const linhas = await emLotes(comId, async (e) => {
-    const horas = await horarias48(e.id);
+    const horas = await horarias48(e.id, ancora);
     return horas.length ? acum24hPorFatia(horas, t0) : null;
   });
 
@@ -196,10 +240,7 @@ async function main() {
   const fim = alinhar(Date.now());
 
   const serieAnterior = await publicacaoAnterior('serie.json');
-  const anterior =
-    serieAnterior?.v && Array.isArray(serieAnterior.estacoes)
-      ? { t0: serieAnterior.t0, codigos: serieAnterior.estacoes, v: serieAnterior.v }
-      : null;
+  const anterior = gradeAnteriorUtil(serieAnterior, TOKEN_FIXO || (EMAIL && SENHA) ? 'chuva10min' : 'acum24h');
   if (anterior) {
     const idade = Math.round((fim - anterior.t0 - (SLOTS - 1) * PASSO_MS) / 60_000);
     console.log(`Grade anterior: ${anterior.codigos.length} estações, ${idade} min atrás`);
@@ -215,7 +256,7 @@ async function main() {
     console.warn(`[aviso] não consegui um token (${e.message}) — usando a fonte aberta.`);
   }
 
-  const r = token ? await viaToken(token, fim) : await viaAberta(fim, anterior);
+  const r = token ? await viaToken(token, fim, anterior) : await viaAberta(fim, anterior);
   const v = arredondar(r.v);
   const stats = contarMedidas(v);
 

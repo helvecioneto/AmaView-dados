@@ -93,3 +93,51 @@ test('token sem exp não vira zero nem erro', () => {
   const p = Buffer.from(JSON.stringify({ iss: 'br.gov.cemaden' })).toString('base64url');
   assert.equal(minutosAteExpirar(`eyJhbGciOiJIUzI1NiJ9.${p}.x`), null);
 });
+
+// ---------------------------------------------------------------------------
+// lerMilimetros — ausência e sentinelas nunca viram 0 medido
+// ---------------------------------------------------------------------------
+
+import { lerMilimetros, inicioDaHora } from './cemaden.mjs';
+
+test('campo vazio não vira 0 — Number("") é 0 e isso seria "não choveu"', () => {
+  assert.equal(lerMilimetros(''), null);
+  assert.equal(lerMilimetros('   '), null);
+  assert.equal(lerMilimetros(null), null);
+  assert.equal(lerMilimetros(undefined), null);
+});
+
+test('sentinelas negativas viram ausência, não chuva', () => {
+  assert.equal(lerMilimetros('-99.9'), null);
+  assert.equal(lerMilimetros(-1), null);
+  assert.equal(lerMilimetros('-0.5'), null);
+});
+
+test('texto não numérico vira ausência', () => {
+  assert.equal(lerMilimetros('ND'), null);
+  assert.equal(lerMilimetros('null'), null);
+});
+
+test('zero medido continua sendo zero', () => {
+  assert.equal(lerMilimetros('0'), 0);
+  assert.equal(lerMilimetros(0), 0);
+  assert.equal(lerMilimetros('0,0'), 0);
+});
+
+test('vírgula decimal e espaços em volta', () => {
+  assert.equal(lerMilimetros(' 2,5 '), 2.5);
+  assert.equal(lerMilimetros('2.5'), 2.5);
+});
+
+test('CSV com coluna de valor vazia não publica chuva zero', () => {
+  const csv = `cod.estacao;datahora;sensor;valor\nA;2026-09-19 17:00:00;chuva;\nB;2026-09-19 17:00:00;chuva;ND`;
+  const r = lerDadosRede(csv);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].valor, null);
+  assert.equal(r[1].valor, null);
+});
+
+test('inicioDaHora trunca em UTC', () => {
+  assert.equal(inicioDaHora(Date.UTC(2026, 8, 20, 13, 59, 58)), Date.UTC(2026, 8, 20, 13, 0, 0));
+  assert.equal(inicioDaHora(Date.UTC(2026, 8, 20, 14, 0, 2)), Date.UTC(2026, 8, 20, 14, 0, 0));
+});
