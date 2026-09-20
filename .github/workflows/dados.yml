@@ -35,7 +35,7 @@ jobs:
           node-version: 24
 
       - name: Testes das funções da grade
-        run: node --test scripts/serie.test.mjs
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs
 
       - name: Buscar o CEMADEN e montar a grade
         env:

@@ -29,7 +29,6 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  cadastro,
   dadosRede,
   emLotes,
   horarias48,
@@ -98,23 +97,33 @@ async function publicacaoAnterior(nome) {
   }
 }
 
-/** Caminho oficial: série real de 10 em 10 min a partir do dado bruto. */
+/**
+ * Caminho oficial: série real de 10 em 10 min a partir do dado bruto.
+ *
+ * O CADASTRO vem do instantâneo aberto, não da PED: ele traz as 569 estações
+ * da rede independente de terem reportado, enquanto `dados_rede` só devolve
+ * quem publicou na janela. Assim o mapa mostra todas as estações nos dois
+ * modos, e a lista não muda quando o token entra ou sai — além de economizar
+ * 9 das 18 requisições do ciclo.
+ */
 async function viaToken(TOKEN, fim) {
   console.log('Modo: API oficial PED (com token)');
   const inicio = fim - (SLOTS - 1) * PASSO_MS;
 
-  const estacoes = [];
+  const { estacoes } = await instantaneoAberto();
+  console.log(`  ${estacoes.length} estações no cadastro (fonte aberta)`);
+
   const leituras = [];
   for (const uf of UFS_AMAZONIA) {
-    const cad = await cadastro(TOKEN, uf);
-    estacoes.push(...cad);
     const dados = await dadosRede(TOKEN, uf, inicio, fim);
     leituras.push(...dados);
-    console.log(`  ${uf}: ${cad.length} estações, ${dados.length} leituras`);
+    console.log(`  ${uf}: ${dados.length} leituras`);
   }
 
   const codigos = estacoes.map((e) => e.cod);
   const { t0, v } = gradeDeLeituras(codigos, leituras, fim);
+  const cobertos = new Set(leituras.map((l) => l.cod));
+  console.log(`  ${cobertos.size} estações com leitura de ${codigos.length}`);
   return { estacoes, codigos, t0, v, grandeza: 'chuva10min', modo: 'ped' };
 }
 

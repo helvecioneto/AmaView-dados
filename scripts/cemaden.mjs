@@ -1,7 +1,7 @@
 /**
  * Cliente das fontes do CEMADEN.
  *
- * Dois caminhos, escolhidos conforme exista ou não `CEMADEN_TOKEN`:
+  * Dois caminhos, escolhidos conforme haja ou não credenciais:
  *
  *  - COM token  → API oficial PED (`sws.cemaden.gov.br/PED/rest`). Dado bruto
  *    com data-hora de cada leitura, que vira série de 10 em 10 minutos.
@@ -175,10 +175,11 @@ export async function emLotes(itens, tarefa, limite = 6) {
 /**
  * Obtém um JWT novo a partir de e-mail e senha.
  *
- * O token da PED vale **4 horas** (claim `exp` do próprio JWT), então não dá
- * para guardá-lo como secret: um cron de 10 minutos o veria expirar depois de
- * 24 ciclos. O que fica guardado são as credenciais, e cada execução pede um
- * token novo — que vive só na memória do runner.
+ * O token da PED é de vida curta — medido em produção, chega a valer apenas
+ * ~13 minutos, e o claim `exp` anuncia 4 h. De um jeito ou de outro não dá
+ * para guardá-lo como secret num cron de 10 minutos. O que fica guardado são
+ * as credenciais, e cada execução pede um token novo, que vive só na memória
+ * do runner.
  */
 export async function renovarToken(email, senha) {
   const r = await buscar(`${SGAA}/controle-token/tokens`, {
@@ -243,20 +244,71 @@ export async function dadosRede(token, uf, inicio, fim) {
   });
   const r = await buscar(`${PED}/pcds/dados_rede?${q}`, { headers: { token } });
   const texto = await r.text();
+  return lerDadosRede(texto, uf);
+}
 
-  let j;
-  try {
-    j = JSON.parse(texto);
-  } catch {
-    throw new Error(`Resposta não-JSON de dados_rede (${uf}): ${texto.slice(0, 200)}`);
-  }
-  // A PED responde com um alerta em JSON quando algo está errado (ex.: token).
-  if (!Array.isArray(j)) {
-    const alerta = j?.Alerta ?? j?.alerta;
+/**
+ * Interpreta a resposta de `dados_rede`.
+ *
+ * O endpoint é o de compatibilidade com o catálogo antigo e **ignora
+ * `formato=JSON`**: devolve CSV com `;`, precedido de uma linha de aviso
+ * ("OBS.: Rede com horario UTC!"). O parser aceita os dois formatos porque a
+ * plataforma tem webservices que respondem JSON de verdade, e um alerta de
+ * erro sempre volta em JSON.
+ */
+export function lerDadosRede(texto, uf = '') {
+  const t = texto.trim();
+  if (!t) return [];
+
+  if (t.startsWith('{') || t.startsWith('[')) {
+    let j;
+    try {
+      j = JSON.parse(t);
+    } catch {
+      throw new Error(`Resposta ilegível de dados_rede (${uf}): ${t.slice(0, 160)}`);
+    }
+    const item = Array.isArray(j) ? j[0] : j;
+    const alerta = item?.Alerta ?? item?.alerta;
     if (alerta) throw new Error(`CEMADEN recusou a chamada (${uf}): ${alerta}`);
-    j = j?.dados ?? j?.leituras ?? [];
+    const lista = Array.isArray(j) ? j : (j?.dados ?? j?.leituras ?? []);
+    return lista.map(normalizarLeitura).filter(Boolean);
   }
-  return j.map(normalizarLeitura).filter(Boolean);
+
+  // CSV: o cabeçalho pode vir depois de linhas de aviso.
+  const linhas = t.split(/\r?\n/);
+  const iCab = linhas.findIndex((l) => /cod[._]?estacao/i.test(l) && l.includes(';'));
+  if (iCab < 0) {
+    // Sem cabeçalho e sem JSON: normalmente é um alerta em texto puro.
+    throw new Error(`Resposta inesperada de dados_rede (${uf}): ${t.slice(0, 160)}`);
+  }
+
+  const col = linhas[iCab].split(';').map((c) => c.trim().toLowerCase());
+  const idx = (...nomes) => {
+    for (const n of nomes) {
+      const i = col.indexOf(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const iCod = idx('cod.estacao', 'codestacao', 'cod_estacao');
+  const iData = idx('datahora', 'data_hora', 'datahorautc');
+  const iValor = idx('valor', 'valormedida', 'medida');
+  const iSensor = idx('sensor');
+  if (iCod < 0 || iData < 0 || iValor < 0) {
+    throw new Error(`Colunas faltando em dados_rede (${uf}): ${col.join(',')}`);
+  }
+
+  const out = [];
+  for (let i = iCab + 1; i < linhas.length; i++) {
+    const linha = linhas[i];
+    if (!linha || !linha.includes(';')) continue;
+    const c = linha.split(';');
+    // Só o sensor de chuva: uma pluviométrica pode publicar outros.
+    if (iSensor >= 0 && c[iSensor] && !/chuv|precip/i.test(c[iSensor])) continue;
+    const l = normalizarLeitura({ codestacao: c[iCod]?.trim(), datahora: c[iData]?.trim(), valor: c[iValor]?.trim() });
+    if (l) out.push(l);
+  }
+  return out;
 }
 
 /**
@@ -276,7 +328,8 @@ function normalizarLeitura(l) {
   const ms = Date.parse(/[Zz]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`);
   if (!Number.isFinite(ms)) return null;
 
-  const v = Number(valor);
+  // Alguns webservices usam vírgula decimal.
+  const v = Number(String(valor).replace(',', '.'));
   return { cod: String(cod), ms, valor: Number.isFinite(v) ? v : null };
 }
 
