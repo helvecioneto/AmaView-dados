@@ -143,6 +143,109 @@ export function lerIndices(html) {
   return out;
 }
 
+/**
+ * Trajetória do balão: o CSV traz `time`, `latitude` e `longitude` a cada
+ * segundo, que é a posição medida por GPS enquanto a sonda sobe.
+ *
+ * `null` quando a estação publica só os níveis obrigatórios — nesses casos o
+ * CSV vem com a mesma posição e o mesmo instante em todas as linhas, e desenhar
+ * uma trilha de 0 km seria inventar um percurso que ninguém mediu.
+ */
+export async function trajetoria(idWmo, ms) {
+  await espacar();
+  const q = new URLSearchParams({
+    datetime: marcaWyoming(ms),
+    id: String(idWmo),
+    src: 'UNKNOWN',
+    type: 'TEXT:CSV',
+  });
+
+  let r;
+  try {
+    r = await fetch(`${BASE}?${q}`, { signal: AbortSignal.timeout(60_000) });
+  } catch (e) {
+    throw new Error(`rede (csv): ${e.message}`);
+  }
+  if (r.status === 400 || r.status === 404) {
+    void r.text().catch(() => {});
+    return null;
+  }
+  if (!r.ok) throw new Error(`HTTP ${r.status} (csv)`);
+
+  return lerTrajetoria(await r.text());
+}
+
+/** Colunas do CSV do Wyoming que nos interessam. */
+const COLS = {
+  time: 'time',
+  lon: 'longitude',
+  lat: 'latitude',
+  z: 'geopotential height_m',
+};
+
+export function lerTrajetoria(texto) {
+  const pre = /<PRE>([\s\S]*?)<\/PRE>/i.exec(texto);
+  const corpo = (pre ? pre[1] : texto).trim();
+  const linhas = corpo.split(/\r?\n/).filter((l) => l.includes(','));
+  if (linhas.length < 3) return null;
+
+  const cab = linhas[0].split(',').map((c) => c.trim());
+  const iT = cab.indexOf(COLS.time);
+  const iLon = cab.indexOf(COLS.lon);
+  const iLat = cab.indexOf(COLS.lat);
+  const iZ = cab.indexOf(COLS.z);
+  if (iT < 0 || iLon < 0 || iLat < 0 || iZ < 0) return null;
+
+  const pts = [];
+  for (let i = 1; i < linhas.length; i++) {
+    const c = linhas[i].split(',');
+    const lon = Number(c[iLon]);
+    const lat = Number(c[iLat]);
+    const z = Number(c[iZ]);
+    const t = Date.parse(String(c[iT]).trim().replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(z)) continue;
+    pts.push({ lon, lat, z, ms: Number.isFinite(t) ? t : null });
+  }
+  if (pts.length < 3) return null;
+
+  // Estação que só publica níveis obrigatórios repete a posição: não há
+  // percurso medido, e desenhar um seria invenção.
+  const lons = pts.map((p) => p.lon);
+  const lats = pts.map((p) => p.lat);
+  const espalhamento = Math.max(...lons) - Math.min(...lons) + (Math.max(...lats) - Math.min(...lats));
+  if (espalhamento < 0.01) return null;
+
+  return reduzirTrilha(pts);
+}
+
+/**
+ * Reduz a trilha a poucas dezenas de pontos, espaçados por ALTURA.
+ *
+ * Belém veio com 4.033 posições, uma por segundo. Espaçar por altura, e não
+ * por tempo, preserva a forma do percurso: o balão sobe devagar no começo e
+ * rápido no fim, então amostrar por tempo concentraria quase todos os pontos
+ * na base.
+ */
+export function reduzirTrilha(pts, alvo = 60) {
+  if (pts.length <= alvo) return pts;
+  const zMin = Math.min(...pts.map((p) => p.z));
+  const zMax = Math.max(...pts.map((p) => p.z));
+  if (!(zMax > zMin)) return pts.slice(0, alvo);
+
+  const passo = (zMax - zMin) / (alvo - 1);
+  const out = [pts[0]];
+  let proximo = zMin + passo;
+  for (const p of pts) {
+    if (p.z >= proximo) {
+      out.push(p);
+      while (proximo <= p.z) proximo += passo;
+    }
+  }
+  const ultimo = pts[pts.length - 1];
+  if (out[out.length - 1] !== ultimo) out.push(ultimo);
+  return out;
+}
+
 /** Página do Skew-T no Wyoming, para quem quiser o diagrama de verdade. */
 export function urlSkewT(idWmo, ms) {
   const q = new URLSearchParams({

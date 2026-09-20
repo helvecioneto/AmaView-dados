@@ -15,7 +15,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESTACOES_SONDAGEM, reduzirNiveis } from './estacoes-sondagem.mjs';
-import { instantesDeSondagem, sondagem, urlSkewT } from './wyoming.mjs';
+import { instantesDeSondagem, sondagem, trajetoria, urlSkewT } from './wyoming.mjs';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAIZ, process.env.SAIDA || 'site');
@@ -53,11 +53,18 @@ async function main() {
     try {
       const s = await ultimaSondagem(e.wmo, agora);
       if (!s) {
-        perfis.push({ wmo: e.wmo, ms: null, niveis: [], indices: {}, erro: null });
+        perfis.push({ wmo: e.wmo, ms: null, niveis: [], indices: {}, trilha: null, erro: null });
         console.log(`  ${e.nome.padEnd(26)} sem sondagem nas últimas ${JANELA_HORAS} h`);
         continue;
       }
       const niveis = reduzirNiveis(s.niveis);
+      // A trilha é um extra: se falhar, o perfil ainda vale.
+      let trilha = null;
+      try {
+        trilha = await trajetoria(e.wmo, s.ms);
+      } catch (err) {
+        console.warn(`  ${e.nome.padEnd(26)} trilha indisponível: ${err.message}`);
+      }
       perfis.push({
         wmo: e.wmo,
         ms: s.ms,
@@ -68,14 +75,28 @@ async function main() {
           d: n.d === null ? null : Math.round(n.d * 10) / 10,
         })),
         indices: s.indices,
+        // `t` é o instante medido em cada ponto: é o que permite mostrar
+        // ONDE o balão estava no quadro exibido, indo e voltando no tempo.
+        // Guardado como segundos desde o lançamento, que cabe em 4 dígitos.
+        trilha: trilha
+          ? trilha.map((p) => ({
+              y: Math.round(p.lat * 1e4) / 1e4,
+              x: Math.round(p.lon * 1e4) / 1e4,
+              z: Math.round(p.z),
+              t: p.ms === null ? null : Math.round((p.ms - s.ms) / 1000),
+            }))
+          : null,
         erro: null,
       });
       comDado++;
       const idade = ((agora - s.ms) / 3_600_000).toFixed(0);
-      console.log(`  ${e.nome.padEnd(26)} ${new Date(s.ms).toISOString().slice(0, 13)}Z · ${niveis.length} níveis (${s.niveis.length} brutos) · ${idade} h`);
+      console.log(
+        `  ${e.nome.padEnd(26)} ${new Date(s.ms).toISOString().slice(0, 13)}Z · ${niveis.length} níveis` +
+          `${trilha ? ` · trilha de ${trilha.length} pts` : ' · sem trilha'} · ${idade} h`,
+      );
     } catch (err) {
       comErro++;
-      perfis.push({ wmo: e.wmo, ms: null, niveis: [], indices: {}, erro: String(err.message).slice(0, 120) });
+      perfis.push({ wmo: e.wmo, ms: null, niveis: [], indices: {}, trilha: null, erro: String(err.message).slice(0, 120) });
       console.warn(`  ${e.nome.padEnd(26)} FALHOU: ${err.message}`);
     }
   }
@@ -102,6 +123,7 @@ async function main() {
     ...comum,
     estacoes: ESTACOES_SONDAGEM.length,
     comSondagem: comDado,
+    comTrilha: perfis.filter((p) => p.trilha?.length).length,
     comErro,
     janelaHoras: JANELA_HORAS,
     duracaoMs: Date.now() - inicio,
