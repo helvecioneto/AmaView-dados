@@ -138,10 +138,15 @@ execução.
 
 ### Credenciais da PED (opcional, mas recomendado)
 
-O JWT da PED **vale 4 horas** (claim `exp` do próprio token). Um cron de 10
-minutos faz 144 ciclos por dia, então guardar o token como secret o veria
-expirar depois de 24 ciclos. O que fica guardado são as **credenciais**, e cada
-execução pede um token novo, que existe só na memória do runner.
+O JWT da PED é de vida curta e o claim `exp` **não é confiável**: medido em
+produção, um token recém-emitido anunciou `exp` no passado e mesmo assim foi
+aceito, devolvendo as ~19 mil leituras do ciclo. De um jeito ou de outro não dá
+para guardar o token como secret num cron de 10 minutos. O que fica guardado
+são as **credenciais**, e cada execução pede um token novo, que existe só na
+memória do runner.
+
+Por isso o `exp` nunca decide se a chamada será feita — quem dá a palavra final
+é a própria API, e uma recusa dela cai na fonte aberta sem derrubar a camada.
 
 1. Cadastre-se em <https://ped.cemaden.gov.br/> → *Cadastrar Usuário*.
 2. Neste repositório: **Settings → Secrets and variables → Actions → New

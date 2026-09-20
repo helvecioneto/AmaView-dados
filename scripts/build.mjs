@@ -59,27 +59,33 @@ const SENHA = process.env.CEMADEN_SENHA || null;
 /**
  * Token para este ciclo. Credenciais têm prioridade sobre um token fixo,
  * porque só elas sobrevivem ao próximo ciclo.
+ *
+ * O claim `exp` da PED NÃO é confiável: um token recém-emitido já chegou a
+ * anunciar `exp` no passado e mesmo assim foi aceito, devolvendo as ~19 mil
+ * leituras do ciclo. Por isso ele nunca decide se vamos usar o token — só
+ * entra no relatório, e quem diz a palavra final é a própria API, cuja recusa
+ * já cai na fonte aberta em `main()`.
  */
 async function obterToken() {
   if (EMAIL && SENHA) {
     const t = await renovarToken(EMAIL, SENHA);
-    const min = minutosAteExpirar(t);
-    console.log(`Token renovado${min === null ? '' : ` (vale ${min.toFixed(0)} min)`}`);
+    console.log(`Token renovado${descreverValidade(t)}`);
     return t;
   }
   if (TOKEN_FIXO) {
-    const min = minutosAteExpirar(TOKEN_FIXO);
-    if (min !== null && min <= 0) {
-      console.warn(`[aviso] CEMADEN_TOKEN expirou há ${(-min).toFixed(0)} min — usando a fonte aberta.`);
-      console.warn('        Configure CEMADEN_EMAIL e CEMADEN_SENHA para renovar a cada ciclo.');
-      return null;
-    }
-    if (min !== null && min < 60) {
-      console.warn(`[aviso] CEMADEN_TOKEN expira em ${min.toFixed(0)} min e não será renovado.`);
-    }
+    console.log(`Usando CEMADEN_TOKEN${descreverValidade(TOKEN_FIXO)}`);
+    console.warn('[aviso] token fixo não é renovado; prefira CEMADEN_EMAIL e CEMADEN_SENHA.');
     return TOKEN_FIXO;
   }
   return null;
+}
+
+/** Validade anunciada pelo token, sem tratá-la como verdade. */
+function descreverValidade(token) {
+  const min = minutosAteExpirar(token);
+  if (min === null) return '';
+  if (min <= 0) return ' (o `exp` já venceu — a PED costuma aceitar mesmo assim)';
+  return ` (o \`exp\` anuncia ${min.toFixed(0)} min)`;
 }
 
 const ATRIBUICAO =

@@ -80,3 +80,16 @@ test('minutosAteExpirar lê o exp do JWT', () => {
 test('token ilegível não quebra', () => {
   assert.equal(minutosAteExpirar('nao-e-jwt'), null);
 });
+
+test('exp no passado é lido, mas é só informação', () => {
+  // A PED já emitiu token com exp vencido que funcionou: o número existe
+  // para o relatório, e nunca para bloquear a chamada.
+  const p = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 300 })).toString('base64url');
+  const min = minutosAteExpirar(`eyJhbGciOiJIUzI1NiJ9.${p}.x`);
+  assert.ok(min < 0, `esperava negativo, veio ${min}`);
+});
+
+test('token sem exp não vira zero nem erro', () => {
+  const p = Buffer.from(JSON.stringify({ iss: 'br.gov.cemaden' })).toString('base64url');
+  assert.equal(minutosAteExpirar(`eyJhbGciOiJIUzI1NiJ9.${p}.x`), null);
+});

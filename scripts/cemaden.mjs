@@ -175,11 +175,11 @@ export async function emLotes(itens, tarefa, limite = 6) {
 /**
  * Obtém um JWT novo a partir de e-mail e senha.
  *
- * O token da PED é de vida curta — medido em produção, chega a valer apenas
- * ~13 minutos, e o claim `exp` anuncia 4 h. De um jeito ou de outro não dá
- * para guardá-lo como secret num cron de 10 minutos. O que fica guardado são
- * as credenciais, e cada execução pede um token novo, que vive só na memória
- * do runner.
+ * O token da PED é de vida curta e o claim `exp` não é confiável: medido em
+ * produção, um token recém-emitido anunciou `exp` no passado e ainda assim foi
+ * aceito. De um jeito ou de outro não dá para guardá-lo como secret num cron
+ * de 10 minutos — o que fica guardado são as credenciais, e cada execução pede
+ * um token novo, que vive só na memória do runner.
  */
 export async function renovarToken(email, senha) {
   const r = await buscar(`${SGAA}/controle-token/tokens`, {
@@ -211,7 +211,12 @@ export async function renovarToken(email, senha) {
   return token;
 }
 
-/** Minutos que faltam para um JWT expirar; `null` se não der para ler. */
+/**
+ * Minutos que o JWT ANUNCIA que ainda valem; `null` se não der para ler.
+ *
+ * Só para relatório. A PED emite tokens com `exp` no passado que funcionam,
+ * então este número nunca deve decidir se uma chamada será feita.
+ */
 export function minutosAteExpirar(token) {
   try {
     const p = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
