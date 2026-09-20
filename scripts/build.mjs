@@ -31,6 +31,7 @@ import {
   arredondar,
   contarMedidas,
   deslocarEGravar,
+  fatiasComDado,
   gradeDeLeituras,
 } from './serie.mjs';
 
@@ -87,10 +88,18 @@ async function viaAberta(fim, anterior) {
   const codigos = estacoes.map((e) => e.cod);
   const valores = new Map(estacoes.filter((e) => e.valor !== null).map((e) => [e.cod, e.valor]));
 
-  // Sem grade anterior a série começaria com uma coluna só, e quem abrisse o
-  // AmaView veria a camada vazia até o dia seguinte. O preenchimento inicial
-  // monta as 24 h de uma vez, a partir das séries horárias públicas.
-  const base = anterior ?? (await preencherInicial(estacoes, fim));
+  // Uma grade sem história deixaria a camada vazia para quem abrisse o
+  // AmaView antes de 24 h de ciclos. O preenchimento inicial monta as 24 h de
+  // uma vez, a partir das séries horárias públicas.
+  //
+  // O gatilho é a cobertura TEMPORAL da grade anterior, não a quantidade de
+  // estações: assim ele dispara quando falta história (grade nova, ou
+  // publicação perdida) e não quando a rede do CEMADEN está degradada.
+  const fatias = anterior ? fatiasComDado(anterior.v) : 0;
+  const precisaPreencher = fatias < SLOTS / 2;
+  if (anterior) console.log(`  Grade anterior cobre ${fatias} de ${SLOTS} fatias`);
+
+  const base = precisaPreencher ? ((await preencherInicial(estacoes, fim)) ?? anterior) : anterior;
 
   const { t0, v } = deslocarEGravar(base, codigos, valores, fim);
   return { estacoes, codigos, t0, v, grandeza: 'acum24h', modo: 'aberto' };

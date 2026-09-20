@@ -156,7 +156,7 @@ test('contarMedidas separa medição de chuva', () => {
 // Preenchimento inicial a partir das séries horárias
 // ---------------------------------------------------------------------------
 
-import { acum24hPorFatia } from './serie.mjs';
+import { acum24hPorFatia, fatiasComDado } from './serie.mjs';
 
 const H = 3_600_000;
 
@@ -217,4 +217,13 @@ test('a ordem de entrada não importa', () => {
   const a = acum24hPorFatia([{ ms: T - H, mm: 3 }, { ms: T - 5 * H, mm: 2 }], T, 1);
   const b = acum24hPorFatia([{ ms: T - 5 * H, mm: 2 }, { ms: T - H, mm: 3 }], T, 1);
   assert.deepEqual(a, b);
+});
+
+test('fatiasComDado mede história, não quantidade de estações', () => {
+  // Grade recém-criada: muitas estações, mas só a última fatia ocupada.
+  const nova = Array.from({ length: 50 }, () => [SEM_DADO, SEM_DADO, 1]);
+  assert.equal(fatiasComDado(nova, 3), 1);
+  // Rede degradada: uma estação só, mas com história completa.
+  const degradada = [[1, 2, 3], ...Array.from({ length: 49 }, () => [SEM_DADO, SEM_DADO, SEM_DADO])];
+  assert.equal(fatiasComDado(degradada, 3), 3);
 });

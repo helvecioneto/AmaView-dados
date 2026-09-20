@@ -142,6 +142,23 @@ export function arredondar(v) {
   return v.map((linha) => linha.map((x) => (x === SEM_DADO ? SEM_DADO : Math.round(x * 10) / 10)));
 }
 
+/**
+ * Quantas FATIAS têm ao menos uma estação reportando.
+ *
+ * É o sinal de que a grade tem história, e não de que a rede está boa: uma
+ * grade recém-criada tem 1 ou 2 fatias ocupadas, enquanto uma preenchida tem
+ * quase todas. Contar células em vez de fatias confundiria "sem história" com
+ * "muitas estações fora do ar", e faria o preenchimento inicial disparar toda
+ * vez que a rede do CEMADEN estivesse degradada.
+ */
+export function fatiasComDado(v, slots = SLOTS) {
+  let n = 0;
+  for (let s = 0; s < slots; s++) {
+    if (v.some((linha) => linha?.[s] !== undefined && linha[s] !== SEM_DADO)) n++;
+  }
+  return n;
+}
+
 /** Quantas células têm medição (para o relatório do workflow). */
 export function contarMedidas(v) {
   let com = 0;
