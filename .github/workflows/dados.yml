@@ -2,8 +2,16 @@ name: Atualizar dados do CEMADEN
 
 on:
   schedule:
-    # A cada 10 minutos, alinhado com o quadro do GOES-19.
-    - cron: '*/10 * * * *'
+    # A cada 15 minutos, em minutos DESLOCADOS dos :00/:15/:30/:45.
+    #
+    # O `*/10` anterior não disparou uma única vez em 1h42 — o GitHub descarta
+    # agendamentos de alta frequência sob carga, e os minutos redondos são os
+    # mais concorridos, porque é onde quase todo mundo agenda.
+    #
+    # 15 min não custa quase nada aqui: com o token, cada ciclo remonta as 24 h
+    # inteiras a partir do dado bruto, então a cadência afeta só o frescor da
+    # última coluna, não a completude da grade.
+    - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
