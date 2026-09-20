@@ -43,7 +43,7 @@ jobs:
           node-version: 24
 
       - name: Testes das funções da grade
-        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/wyoming.test.mjs
 
       - name: Buscar o CEMADEN e montar a grade
         env:
@@ -54,7 +54,14 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/build.mjs
 
-      # Se o passo acima falhar, o job para aqui e NADA é publicado: a versão
+      # As sondagens são independentes da chuva: o Wyoming é um servidor
+      # acadêmico sem SLA, e uma falha lá não pode impedir a publicação da
+      # chuva, que é o produto principal.
+      - name: Buscar as sondagens
+        continue-on-error: true
+        run: node scripts/sondagem.mjs
+
+      # Se o passo do CEMADEN falhar, o job para aqui e NADA é publicado: a versão
       # anterior continua no ar. É a razão de o build nunca escrever por cima
       # de forma parcial.
       - name: Conferir a saída

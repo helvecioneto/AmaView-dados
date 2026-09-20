@@ -26,7 +26,7 @@
  */
 import { mkdir, writeFile, readFile, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   dadosRede,
@@ -52,7 +52,7 @@ import {
 } from './serie.mjs';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SAIDA = join(RAIZ, process.env.SAIDA || 'site');
+const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAIZ, process.env.SAIDA || 'site');
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
 const TOKEN_FIXO = process.env.CEMADEN_TOKEN?.trim() || null;
 const EMAIL = process.env.CEMADEN_EMAIL?.trim() || null;

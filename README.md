@@ -11,9 +11,12 @@ Consumido por [AmaView](https://helvecioneto.github.io/AmaView/).
 
 ## Fonte e atribuição
 
-> **Dados da Rede Observacional do CEMADEN/MCTI** — Centro Nacional de
+> **Chuva:** Dados da Rede Observacional do CEMADEN/MCTI — Centro Nacional de
 > Monitoramento e Alertas de Desastres Naturais,
 > <https://www.gov.br/cemaden/pt-br>
+>
+> **Sondagens:** University of Wyoming, Department of Atmospheric Science,
+> <https://weather.uwyo.edu/upperair/>
 
 Os Termos de Uso da [Plataforma de Entrega de Dados](https://ped.cemaden.gov.br/suporte/termouso)
 declaram o acesso como serviço público gratuito e pedem, em nome da Lei de
@@ -93,6 +96,34 @@ como está.
 Cadastro, na mesma ordem de `serie.json`. Campos curtos porque o arquivo é
 baixado por todo visitante: `c` código, `i` id interno, `n` nome, `u` UF,
 `m` município, `b` código IBGE, `y` latitude, `x` longitude, `t` tipo.
+
+### `sondagem/perfis.json`
+
+Perfis verticais de radiossonda das 14 estações da Amazônia Legal, da
+Universidade de Wyoming. Uma sondagem por estação: a mais recente das últimas
+48 h.
+
+```jsonc
+{
+  "perfis": [{
+    "wmo": 82193,
+    "ms": 1789905600000,        // instante do lançamento (null = sem sondagem)
+    "niveis": [{ "p": 1012.8, "z": 14, "t": 28, "d": 23.5 }, …],
+    "indices": { "PWAT": 42, "MUCAPE": 594.2, "LCLP": 948, … },
+    "erro": null                // texto quando a busca falhou
+  }]
+}
+```
+
+`p` hPa, `z` metros, `t` temperatura °C, `d` ponto de orvalho °C.
+
+O perfil bruto tem centenas de níveis (Belém veio com 4.033); guardamos os
+obrigatórios da meteorologia mais as quebras bruscas de umidade — ~13 a 24 por
+estação, **2,6 KB gzip** para a rede inteira.
+
+`ms: null` com `erro: null` é estação calada, não falha nossa: acontece de
+verdade e com frequência. Manaus passou 55 h sem reportar durante o
+levantamento.
 
 ### `cemaden/manifest.json`
 
