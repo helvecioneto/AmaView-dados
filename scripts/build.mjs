@@ -14,15 +14,30 @@
  *   node scripts/build.mjs
  *
  * Variáveis de ambiente:
- *   CEMADEN_TOKEN  JWT da PED. Sem ele, cai no instantâneo aberto.
+ *   CEMADEN_EMAIL  E-mail da conta na PED.
+ *   CEMADEN_SENHA  Senha da conta na PED. Com os dois, cada ciclo pede um
+ *                  token novo — o JWT da PED vale só 4 h e não pode ser
+ *                  guardado como secret.
+ *   CEMADEN_TOKEN  JWT pronto (execução manual/depuração). Expira em 4 h.
  *   BASE_URL       De onde reler a publicação anterior.
  *   SAIDA          Diretório de saída (padrão: `site`).
+ *
+ * Sem credencial nenhuma, cai no instantâneo aberto — que também funciona.
  */
 import { mkdir, writeFile, readFile, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cadastro, dadosRede, emLotes, horarias48, instantaneoAberto, UFS_AMAZONIA } from './cemaden.mjs';
+import {
+  cadastro,
+  dadosRede,
+  emLotes,
+  horarias48,
+  instantaneoAberto,
+  minutosAteExpirar,
+  renovarToken,
+  UFS_AMAZONIA,
+} from './cemaden.mjs';
 import {
   PASSO_MS,
   SLOTS,
@@ -38,7 +53,35 @@ import {
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SAIDA = join(RAIZ, process.env.SAIDA || 'site');
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
-const TOKEN = process.env.CEMADEN_TOKEN?.trim() || null;
+const TOKEN_FIXO = process.env.CEMADEN_TOKEN?.trim() || null;
+const EMAIL = process.env.CEMADEN_EMAIL?.trim() || null;
+const SENHA = process.env.CEMADEN_SENHA || null;
+
+/**
+ * Token para este ciclo. Credenciais têm prioridade sobre um token fixo,
+ * porque só elas sobrevivem ao próximo ciclo.
+ */
+async function obterToken() {
+  if (EMAIL && SENHA) {
+    const t = await renovarToken(EMAIL, SENHA);
+    const min = minutosAteExpirar(t);
+    console.log(`Token renovado${min === null ? '' : ` (vale ${min.toFixed(0)} min)`}`);
+    return t;
+  }
+  if (TOKEN_FIXO) {
+    const min = minutosAteExpirar(TOKEN_FIXO);
+    if (min !== null && min <= 0) {
+      console.warn(`[aviso] CEMADEN_TOKEN expirou há ${(-min).toFixed(0)} min — usando a fonte aberta.`);
+      console.warn('        Configure CEMADEN_EMAIL e CEMADEN_SENHA para renovar a cada ciclo.');
+      return null;
+    }
+    if (min !== null && min < 60) {
+      console.warn(`[aviso] CEMADEN_TOKEN expira em ${min.toFixed(0)} min e não será renovado.`);
+    }
+    return TOKEN_FIXO;
+  }
+  return null;
+}
 
 const ATRIBUICAO =
   'Dados da Rede Observacional do CEMADEN/MCTI — Centro Nacional de Monitoramento e Alertas de Desastres Naturais (https://www.gov.br/cemaden/)';
@@ -56,7 +99,7 @@ async function publicacaoAnterior(nome) {
 }
 
 /** Caminho oficial: série real de 10 em 10 min a partir do dado bruto. */
-async function viaToken(fim) {
+async function viaToken(TOKEN, fim) {
   console.log('Modo: API oficial PED (com token)');
   const inicio = fim - (SLOTS - 1) * PASSO_MS;
 
@@ -149,7 +192,15 @@ async function main() {
     console.log('Sem grade anterior — primeira execução ou publicação indisponível.');
   }
 
-  const r = TOKEN ? await viaToken(fim) : await viaAberta(fim, anterior);
+  let token = null;
+  try {
+    token = await obterToken();
+  } catch (e) {
+    // Credencial errada não pode derrubar a camada: a fonte aberta atende.
+    console.warn(`[aviso] não consegui um token (${e.message}) — usando a fonte aberta.`);
+  }
+
+  const r = token ? await viaToken(token, fim) : await viaAberta(fim, anterior);
   const v = arredondar(r.v);
   const stats = contarMedidas(v);
 

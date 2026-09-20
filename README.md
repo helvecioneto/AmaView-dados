@@ -136,14 +136,23 @@ execução.
 
 ## Configuração
 
-### Token (opcional, mas recomendado)
+### Credenciais da PED (opcional, mas recomendado)
+
+O JWT da PED **vale 4 horas** (claim `exp` do próprio token). Um cron de 10
+minutos faz 144 ciclos por dia, então guardar o token como secret o veria
+expirar depois de 24 ciclos. O que fica guardado são as **credenciais**, e cada
+execução pede um token novo, que existe só na memória do runner.
 
 1. Cadastre-se em <https://ped.cemaden.gov.br/> → *Cadastrar Usuário*.
-2. Faça login e vá em *Acesso → Token*.
-3. Neste repositório: **Settings → Secrets and variables → Actions → New
-   repository secret**, nome `CEMADEN_TOKEN`.
+2. Neste repositório: **Settings → Secrets and variables → Actions → New
+   repository secret**, dois secrets:
+   - `CEMADEN_EMAIL` — o e-mail da conta
+   - `CEMADEN_SENHA` — a senha da conta
 
-Sem o secret o workflow roda no modo aberto, sem falhar.
+Sem os secrets o workflow roda no modo aberto, sem falhar.
+
+`CEMADEN_TOKEN` ainda é aceito para execução manual e depuração, mas o script
+avisa quando ele está perto de expirar e cai na fonte aberta depois disso.
 
 ### Pages
 

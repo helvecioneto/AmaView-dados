@@ -172,17 +172,52 @@ export async function emLotes(itens, tarefa, limite = 6) {
 // Caminho oficial (com token)
 // ---------------------------------------------------------------------------
 
-/** Renova o JWT a partir de e-mail e senha (opcional: só se o token expirar). */
+/**
+ * Obtém um JWT novo a partir de e-mail e senha.
+ *
+ * O token da PED vale **4 horas** (claim `exp` do próprio JWT), então não dá
+ * para guardá-lo como secret: um cron de 10 minutos o veria expirar depois de
+ * 24 ciclos. O que fica guardado são as credenciais, e cada execução pede um
+ * token novo — que vive só na memória do runner.
+ */
 export async function renovarToken(email, senha) {
   const r = await buscar(`${SGAA}/controle-token/tokens`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password: senha }),
   });
-  const j = await r.json();
-  const token = j?.token ?? j?.Token ?? (Array.isArray(j) ? j[0]?.token : null);
-  if (!token) throw new Error(`Resposta inesperada do /controle-token/tokens: ${JSON.stringify(j).slice(0, 200)}`);
+  const texto = (await r.text()).trim();
+
+  // A resposta pode vir como o próprio JWT em texto puro, como objeto ou como
+  // lista de um item — os webservices da plataforma não são uniformes nisso.
+  const ehJwt = (s) => typeof s === 'string' && /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(s);
+  if (ehJwt(texto)) return texto;
+
+  let j;
+  try {
+    j = JSON.parse(texto);
+  } catch {
+    throw new Error(`Resposta não-JSON do /controle-token/tokens: ${texto.slice(0, 160)}`);
+  }
+  const item = Array.isArray(j) ? j[0] : j;
+  const alerta = item?.Alerta ?? item?.alerta;
+  if (alerta) throw new Error(`CEMADEN recusou as credenciais: ${alerta}`);
+
+  const token = item?.token ?? item?.Token ?? item?.jwt ?? item?.access_token;
+  if (!ehJwt(token)) {
+    throw new Error(`Não achei o token na resposta: ${JSON.stringify(j).slice(0, 160)}`);
+  }
   return token;
+}
+
+/** Minutos que faltam para um JWT expirar; `null` se não der para ler. */
+export function minutosAteExpirar(token) {
+  try {
+    const p = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+    return Number.isFinite(p?.exp) ? (p.exp * 1000 - Date.now()) / 60_000 : null;
+  } catch {
+    return null;
+  }
 }
 
 /** `aaaaMMddHHmm` em UTC, formato de data da PED. */

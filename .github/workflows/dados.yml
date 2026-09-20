@@ -39,7 +39,10 @@ jobs:
 
       - name: Buscar o CEMADEN e montar a grade
         env:
-          CEMADEN_TOKEN: ${{ secrets.CEMADEN_TOKEN }}
+          # O JWT da PED vale 4 h, então o que fica guardado são as
+          # credenciais: cada ciclo pede um token novo, que vive só aqui.
+          CEMADEN_EMAIL: ${{ secrets.CEMADEN_EMAIL }}
+          CEMADEN_SENHA: ${{ secrets.CEMADEN_SENHA }}
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/build.mjs
 
