@@ -106,20 +106,47 @@ function lerLinha(bloco) {
  * `SqlException: Execution Timeout Expired` depois de 30 s; 1 a 2 dias
  * respondem em 0,2–1 s. Para histórico, fatiar mês a mês.
  */
-export async function leituras(cod, inicioMs, fimMs, { tentativas = 2, timeoutMs = 45_000 } = {}) {
+/**
+ * Tempo-limite por requisição e número de repetições.
+ *
+ * O normal medido é 0,2–1 s (com 15 s, 7 de 154 estações lentas caíam fora
+ * numa rodada; 20 s dá folga sem abrir mão do prazo global). Com 45 s e três
+ * tentativas, como na primeira
+ * versão, uma ANA lenta fazia o passo inteiro levar até DUAS HORAS (139 s por
+ * estação × 52 rodadas) — e cada 15 min a mais cancela um ciclo da chuva. O
+ * que protege o ciclo não é insistir, é desistir cedo e herdar a leitura
+ * anterior (ver `rios.mjs`).
+ */
+export const TIMEOUT_MS = 20_000;
+export const TENTATIVAS = 1;
+
+export async function leituras(cod, inicioMs, fimMs, { tentativas = TENTATIVAS, timeoutMs = TIMEOUT_MS, sinal = null } = {}) {
   const url =
     `${BASE}/DadosHidrometeorologicosGerais` +
     `?codEstacao=${encodeURIComponent(cod)}&dataInicio=${dataBR(inicioMs)}&dataFim=${dataBR(fimMs)}`;
 
   let ultimoErro = null;
   for (let t = 0; t <= tentativas; t++) {
+    if (sinal?.aborted) throw new Error(`estação ${cod}: prazo do ciclo esgotado`);
     try {
+      const sinais = [AbortSignal.timeout(timeoutMs)];
+      if (sinal) sinais.push(sinal);
       const r = await fetch(url, {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.any(sinais),
         headers: { 'User-Agent': 'AmaView/1.0 (+https://helvecioneto.github.io/AmaView/)' },
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // 4xx não muda com repetição; 5xx da ANA costuma ser timeout de SQL, que
+      // também não melhora em segundos. Repetir só desperdiça o prazo.
+      if (!r.ok) {
+        ultimoErro = new Error(`HTTP ${r.status}`);
+        break;
+      }
       const xml = await r.text();
+
+      // HTTP 200 com HTML de erro ou envelope SOAP de falha acontece. Sem o
+      // envelope do DataTable a resposta não é dado, e tratá-la como "zero
+      // leituras" faria a estação sumir em silêncio.
+      if (!/<(DataTable|DocumentElement)\b/.test(xml)) throw new Error('resposta sem o envelope DataTable');
 
       // O elemento de linha vem GRAFADO ERRADO no XML da ANA
       // ("DadosHidrometereologicos", com um "e" a mais). É exatamente aqui
@@ -130,7 +157,8 @@ export async function leituras(cod, inicioMs, fimMs, { tentativas = 2, timeoutMs
       return linhas;
     } catch (e) {
       ultimoErro = e;
-      if (t < tentativas) await pausa(1500 * (t + 1));
+      if (sinal?.aborted) break;
+      if (t < tentativas) await pausa(1000);
     }
   }
   throw new Error(`estação ${cod}: ${ultimoErro?.message ?? 'falhou'}`);
@@ -141,7 +169,7 @@ export async function leituras(cod, inicioMs, fimMs, { tentativas = 2, timeoutMs
  * `{ ok, erros }`. Uma estação que falha não derruba a rodada: o ciclo publica
  * o que conseguiu e mantém o valor anterior das outras.
  */
-export async function emLotes(itens, tarefa, { concorrencia = CONCORRENCIA, aoAndar = null } = {}) {
+export async function emLotes(itens, tarefa, { concorrencia = CONCORRENCIA, aoAndar = null, prazo = null } = {}) {
   const ok = [];
   const erros = [];
   let i = 0;
@@ -151,6 +179,12 @@ export async function emLotes(itens, tarefa, { concorrencia = CONCORRENCIA, aoAn
     for (;;) {
       const meu = i++;
       if (meu >= itens.length) return;
+      // Prazo global do ciclo: o que não coube fica para a próxima rodada,
+      // e o ciclo publica o que conseguiu em vez de segurar a chuva.
+      if (prazo !== null && Date.now() > prazo) {
+        erros.push({ item: itens[meu], erro: 'prazo do ciclo esgotado' });
+        continue;
+      }
       try {
         const r = await tarefa(itens[meu]);
         if (r !== undefined && r !== null) ok.push(r);

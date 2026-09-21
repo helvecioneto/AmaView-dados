@@ -35,15 +35,39 @@ export const ARQUIVOS = {
   rios: ['estacoes.json', 'atual.json', 'manifest.json'],
 };
 
-async function baixar(pasta, nome) {
-  const url = `${BASE_URL}/${pasta}/${nome}`;
-  const r = await fetch(url, { signal: AbortSignal.timeout(30_000), cache: 'no-store' });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const texto = await r.text();
-  // Uma resposta vazia ou HTML de erro não é dado: restaurá-la publicaria lixo.
-  if (texto.length < 2 || texto.trimStart().startsWith('<')) throw new Error('resposta não é JSON');
-  JSON.parse(texto);
-  return texto;
+/**
+ * Lê um arquivo do que está no ar.
+ *
+ * O `?t=` na URL fura o cache da CDN do Pages (`max-age=600`): `cache:
+ * 'no-store'` só vale para o cliente, e sem isso um workflow que roda um
+ * minuto depois de outro restaura a publicação ANTERIOR à dele — regressão
+ * de até 10 minutos, com o carimbo velho fazendo o ciclo seguinte trabalhar
+ * de novo à toa.
+ *
+ * Três tentativas: uma falha transitória aqui derruba a publicação inteira
+ * (é a regra: publicar sem uma pasta é pior que não publicar), e derrubar a
+ * chuva por um soluço de rede de 30 s não vale a pena.
+ */
+export async function baixar(pasta, nome, tentativas = 3) {
+  let ultimo = null;
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      const url = `${BASE_URL}/${pasta}/${nome}?t=${Date.now()}`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(30_000), cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const texto = await r.text();
+      // Uma resposta vazia ou HTML de erro não é dado: restaurá-la publicaria lixo.
+      if (texto.length < 2 || texto.trimStart().startsWith('<')) throw new Error('resposta não é JSON');
+      JSON.parse(texto);
+      return texto;
+    } catch (e) {
+      ultimo = e;
+      // 404 não muda em segundos: é a estreia da pasta, e repetir só atrasa.
+      if (/HTTP 404/.test(e.message)) break;
+      if (i < tentativas - 1) await new Promise((r) => setTimeout(r, 3000 * (i + 1)));
+    }
+  }
+  throw ultimo;
 }
 
 async function preservar(pasta) {

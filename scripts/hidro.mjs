@@ -107,7 +107,11 @@ export function variacao(v, horas) {
   const ultimo = ultimoDa(v);
   if (!ultimo) return null;
   const j = ultimo.i - horas;
-  if (j < 0) return null;
+  // A última leitura costuma estar uma hora atrás da ponta da grade (a ANA
+  // publica com ~50 min de atraso), então `j` fica em −1 na variação de 48 h.
+  // A busca tolerante abaixo já cuida de índices negativos; só desistimos se
+  // nem com a folga de 3 h houver amostra.
+  if (j < -3) return null;
   // Tolera um buraco: procura a amostra mais próxima até 3 h antes do alvo.
   for (let k = 0; k <= 3; k++) {
     for (const idx of [j - k, j + k]) {
@@ -284,4 +288,26 @@ export function extremosDe(dias) {
   if (!max) return null;
   const ordenados = [...anos].sort();
   return { max, min, desde: Number(ordenados[0]), ate: Number(ordenados[ordenados.length - 1]), anos: anos.size };
+}
+
+// ---------------------------------------------------------------------------
+// Herança entre ciclos
+// ---------------------------------------------------------------------------
+
+/**
+ * Desloca uma série publicada na grade anterior para a grade de agora.
+ *
+ * `null` quando a publicação anterior é velha demais para alcançar a grade
+ * nova, ou quando não sobra medição nenhuma depois do deslocamento — nesses
+ * casos é melhor a estação sumir que mostrar dado de dias atrás.
+ */
+export function deslocarSerie(serieAnterior, t0Anterior, passoAnteriorMin, fimNovo) {
+  if (!Array.isArray(serieAnterior) || serieAnterior.length !== SLOTS) return null;
+  if (!Number.isFinite(t0Anterior)) return null;
+  const passo = (Number(passoAnteriorMin) || 60) * 60_000;
+  const fimAnterior = t0Anterior + (SLOTS - 1) * passo;
+  const desloc = Math.round((fimNovo - fimAnterior) / PASSO_MS);
+  if (desloc < 0 || desloc >= SLOTS) return null;
+  const serie = [...serieAnterior.slice(desloc), ...new Array(desloc).fill(SEM_DADO)];
+  return ultimoDa(serie) ? serie : null;
 }

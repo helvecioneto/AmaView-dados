@@ -37,6 +37,10 @@ jobs:
   publicar:
     name: Buscar e publicar
     runs-on: ubuntu-latest
+    # Teto absoluto. O ciclo normal leva 1,5–4,5 min; um passo pendurado sem
+    # este limite seguraria o grupo `publicar-pages` e cancelaria os ciclos
+    # seguintes um a um, com a chuva congelada no ar.
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -86,6 +90,7 @@ jobs:
       - name: Buscar as embarcações (AIS)
         id: navios
         continue-on-error: true
+        timeout-minutes: 4
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
           OPENWATERS_TOKEN: ${{ secrets.OPENWATERS_TOKEN }}
@@ -103,6 +108,10 @@ jobs:
       - name: Buscar o nível dos rios (ANA)
         id: rios
         continue-on-error: true
+        # O script tem prazo próprio de 4 min na coleta; isto é o teto do
+        # que sobra (releitura, SACE, escrita). Estourar conta como falha e o
+        # preservar restaura a pasta do ar.
+        timeout-minutes: 6
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/rios.mjs
@@ -118,9 +127,12 @@ jobs:
       # os arquivos deste ciclo). Não pode derrubar a publicação da chuva: na
       # estreia da pasta não há nada no ar para restaurar, e uma falha do AIS
       # custa uma camada, não o portal.
+      # Sem `continue-on-error`: publicar o site sem a pasta apagaria a camada
+      # do ar até o produtor voltar (com a ANA fora, por dias). Falhar o ciclo
+      # é mais barato — a publicação anterior continua no ar. O `baixar()`
+      # já repete três vezes, então só uma queda real do Pages chega aqui.
       - name: Preservar as embarcações
         if: steps.navios.outcome == 'failure'
-        continue-on-error: true
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs navios
@@ -130,7 +142,6 @@ jobs:
       # do ar, senão a camada some do mapa.
       - name: Preservar o nível dos rios
         if: steps.rios.outputs.rodou != 'true'
-        continue-on-error: true
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs rios

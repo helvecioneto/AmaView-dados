@@ -194,6 +194,10 @@ export function mesclarEstatico(anterior, novo, agora = Date.now()) {
   }
 
   if (mudou || base.d === undefined) base.d = agora;
+  // `u` é "ouvida pela última vez", em qualquer canal. `d` só anda quando o
+  // conteúdo muda, então uma ficha idêntica retransmitida por semanas manteria
+  // `d` velho — e a poda de 30 dias apagaria uma embarcação que está no ar.
+  base.u = agora;
   return base;
 }
 
@@ -202,8 +206,10 @@ export function podarCadastro(cadastro, agora = Date.now()) {
   const corte = agora - CADASTRO_TTL_MS;
   const saida = {};
   for (const [mmsi, v] of Object.entries(cadastro ?? {})) {
-    const visto = Number(v?.v ?? v?.d);
-    if (Number.isFinite(visto) && visto >= corte) saida[mmsi] = v;
+    // O mais recente entre posição (`v`), escuta do estático (`u`) e
+    // declaração (`d`): qualquer um deles prova que a embarcação existe.
+    const visto = Math.max(Number(v?.v) || 0, Number(v?.u) || 0, Number(v?.d) || 0);
+    if (visto >= corte) saida[mmsi] = v;
   }
   return saida;
 }

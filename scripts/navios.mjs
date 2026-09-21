@@ -22,7 +22,7 @@
  *   OPENWATERS_TOKEN   Opcional; eleva o teto de área. Funciona sem.
  *   AIS_JANELA_MS      Janela do WebSocket (padrão 90 s).
  */
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buscarPosicoes, colherEstaticos, CAIXAS } from './ais.mjs';
@@ -48,8 +48,10 @@ const JANELA_MS = Number(process.env.AIS_JANELA_MS) || 90_000;
 /** Lê um arquivo da publicação anterior. Ausência não é erro: é o 1º ciclo. */
 async function anterior(nome) {
   try {
-    const r = await fetch(`${BASE_URL}/navios/${nome}`, {
-      signal: AbortSignal.timeout(30_000),
+    // `?t=` fura a CDN do Pages (max-age=600): sem isso, um ciclo pode reler
+    // a publicação de DOIS ciclos atrás e perder uma amostra da trilha.
+    const r = await fetch(`${BASE_URL}/navios/${nome}?t=${Date.now()}`, {
+      signal: AbortSignal.timeout(15_000),
       cache: 'no-store',
     });
     if (!r.ok) return null;
@@ -117,6 +119,10 @@ async function main() {
     if (e.fonte && !FONTES_ACEITAS.includes(e.fonte)) continue;
     const comp = comprimentoDe(e.dim);
     const larg = boca(e.dim);
+    // A regra de privacidade vale ANTES de guardar: uma embarcação de recreio
+    // ouvida só no fluxo (nunca no snapshot de posições) entraria no cadastro
+    // com nome e indicativo, mesmo sendo do tipo que não publicamos.
+    if (classificar(e.tipo, comp, 'ShipStaticData') !== 'completo') continue;
     cadastro[mmsi] = mesclarEstatico(
       cadastro[mmsi],
       {
@@ -218,10 +224,16 @@ async function main() {
   const celulas = mesclarEscuta(antEscuta?.celulas, [...posicoes, ...anonimos.map((a) => ({ lat: a.y, lon: a.x }))], agora);
   console.log(`  escuta: ${Object.keys(celulas).length} células de ${CELULA_GRAU}° nos últimos 7 dias`);
 
-  // 6. Escrita.
+  // 6. Escrita ATÔMICA: tudo num diretório temporário e só depois para
+  //    `site/navios/`. Morrer entre dois arquivos publicaria `atual.json` novo
+  //    com `escuta.json` restaurado do ar e carimbo velho no manifesto.
   const gerado = new Date().toISOString();
-  await mkdir(join(SAIDA, 'navios'), { recursive: true });
+  const temp = join(SAIDA, '.navios-tmp');
+  await rm(temp, { recursive: true, force: true });
+  await mkdir(temp, { recursive: true });
+  const NOMES = ['atual.json', 'cadastro.json', 'escuta.json', 'manifest.json'];
 
+  try {
   await escrever('navios/atual.json', {
     gerado,
     attribution: atribuicao,
@@ -246,6 +258,16 @@ async function main() {
     mensagensFluxo: colhido.mensagens,
     duracaoMs: Date.now() - inicioExec,
   });
+
+  // Conferência antes de publicar.
+  const conf = JSON.parse(await readFile(join(temp, 'atual.json'), 'utf8'));
+  if (!Array.isArray(conf.navios)) throw new Error('atual.json sem `navios`');
+
+  await mkdir(join(SAIDA, 'navios'), { recursive: true });
+  for (const nome of NOMES) await cp(join(temp, nome), join(SAIDA, 'navios', nome));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 
   console.log(`\nOK — ${publicados.length} embarcações · ${Object.keys(cadastro).length} no cadastro · ${Date.now() - inicioExec} ms`);
 
@@ -281,16 +303,23 @@ function etaUtil(eta) {
   return { mes, dia, hora, min };
 }
 
+/** Escreve no diretório temporário; o nome vem com o prefixo `navios/` só para o log. */
 async function escrever(rel, obj) {
   const texto = JSON.stringify(obj);
-  await writeFile(join(SAIDA, rel), texto);
+  await writeFile(join(SAIDA, '.navios-tmp', rel.replace(/^navios\//, '')), texto);
   console.log(`  ${rel}: ${(texto.length / 1024).toFixed(0)} KB`);
 }
 
-main().catch((e) => {
-  console.error(`\nFALHOU: ${e.message}`);
-  // O passo roda com `continue-on-error`: a chuva publica mesmo assim, e o
-  // `preservar.mjs` restaura a pasta `navios/` do ar. Uma falha aqui nunca
-  // pode derrubar a camada principal do portal.
-  process.exitCode = 1;
-});
+main()
+  .catch((e) => {
+    console.error(`\nFALHOU: ${e.message}`);
+    // O passo roda com `continue-on-error`: a chuva publica mesmo assim, e o
+    // `preservar.mjs` restaura a pasta `navios/` do ar. Uma falha aqui nunca
+    // pode derrubar a camada principal do portal.
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // Um WebSocket que não completou o handshake de fechamento segura o event
+    // loop para sempre — e um passo pendurado cancela o ciclo seguinte da chuva.
+    process.exit(process.exitCode ?? 0);
+  });

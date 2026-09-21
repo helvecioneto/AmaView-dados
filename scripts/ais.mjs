@@ -26,15 +26,21 @@ const TOKEN = process.env.OPENWATERS_TOKEN?.trim() || null;
  * As quatro caixas que cobrem a navegação amazônica, em
  * [minLat, minLon, maxLat, maxLon].
  *
- * Somam 45,6 graus² — dentro do teto anônimo de 100. Não é a Amazônia Legal
- * inteira (704 graus²) de propósito: fora destes trechos não há receptor AIS
- * algum, e assinar área vazia só gastaria o limite.
+ * Somam 47,4 graus² — dentro do teto anônimo de 100. Não é a Amazônia Legal
+ * inteira (704 graus²) de propósito: uma varredura em grade de toda a região,
+ * em 21/09/2026, achou 75 embarcações, das quais 73 já caíam nas quatro caixas
+ * originais. Fora delas não há receptor AIS, e assinar área vazia só gastaria
+ * o limite.
  */
 export const CAIXAS = [
   { nome: 'Manaus / Negro / Solimões', bbox: [-4.6, -62.0, -2.0, -58.0] },
   { nome: 'Santarém / Itaituba / Tapajós', bbox: [-4.6, -57.0, -1.6, -53.5] },
   { nome: 'Belém / estuário / Marajó', bbox: [-2.8, -50.5, 0.8, -46.0] },
   { nome: 'Macapá / foz norte', bbox: [-1.2, -52.0, 2.2, -49.5] },
+  // Itaqui e a baía de São Marcos: o grande porto do Maranhão, ainda dentro
+  // da Amazônia Legal. Varredura da região inteira em 21/09/2026 achou só
+  // duas embarcações aqui fora das quatro caixas — mas são as únicas.
+  { nome: 'São Luís / Itaqui', bbox: [-3.2, -45.2, -1.8, -43.9] },
 ];
 
 function cabecalhos() {
@@ -57,7 +63,9 @@ export async function buscarPosicoes() {
 
   for (const { nome, bbox } of CAIXAS) {
     const url = `${BASE}/v1/vessels?bbox=${bbox.join(',')}`;
-    const r = await fetch(url, { headers: cabecalhos(), signal: AbortSignal.timeout(30_000) });
+    // 15 s: o normal é ~1 s, e quatro caixas a 30 s cada segurariam o ciclo
+    // da chuva por dois minutos numa fonte lenta.
+    const r = await fetch(url, { headers: cabecalhos(), signal: AbortSignal.timeout(15_000) });
     if (!r.ok) throw new Error(`/v1/vessels ${nome}: HTTP ${r.status}`);
     const j = await r.json();
     if (!Array.isArray(j?.features)) throw new Error(`/v1/vessels ${nome}: resposta sem \`features\``);
@@ -70,7 +78,8 @@ export async function buscarPosicoes() {
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(p.mmsi)) continue;
       // A mesma embarcação pode aparecer em duas caixas que se tocam.
       const antes = porMmsi.get(p.mmsi);
-      const visto = Date.parse(p.seen ?? '') || 0;
+      // `seen` no futuro (relógio da fonte errado) nunca expiraria da trilha.
+      const visto = Math.min(Date.parse(p.seen ?? '') || 0, Date.now());
       if (antes && antes.visto >= visto) continue;
       porMmsi.set(p.mmsi, {
         mmsi: p.mmsi,

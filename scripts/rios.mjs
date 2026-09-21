@@ -31,6 +31,7 @@ import {
   SLOTS,
   anomaliaCm,
   classePorPercentil,
+  deslocarSerie,
   diaDoAno,
   extremosDe,
   fimDaGrade,
@@ -48,6 +49,16 @@ const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAI
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
 const FORCAR = process.env.FORCAR_RIOS === '1';
 
+/**
+ * Prazo global da coleta.
+ *
+ * O normal medido é 1–4 min para 154 estações. Sem prazo, uma ANA lenta
+ * (timeout em série) levaria o passo a até duas horas — e cada 15 min a mais
+ * cancela um ciclo da chuva no grupo de concorrência do Pages. Esgotado o
+ * prazo, o que não foi buscado herda a publicação anterior (ver abaixo).
+ */
+const PRAZO_MS = Number(process.env.RIOS_PRAZO_MS) || 4 * 60 * 1000;
+
 /** Avisa o workflow se o passo trabalhou ou pulou (ver `chuva.yml`). */
 async function anunciar(rodou) {
   if (!process.env.GITHUB_OUTPUT) return;
@@ -56,7 +67,9 @@ async function anunciar(rodou) {
 
 async function anterior(nome) {
   try {
-    const r = await fetch(`${BASE_URL}/rios/${nome}`, { signal: AbortSignal.timeout(30_000), cache: 'no-store' });
+    // `?t=` fura a CDN do Pages (max-age=600): sem isso um ciclo relê a
+    // publicação de dois ciclos atrás e o carimbo velho o faz trabalhar à toa.
+    const r = await fetch(`${BASE_URL}/rios/${nome}?t=${Date.now()}`, { signal: AbortSignal.timeout(15_000), cache: 'no-store' });
     if (!r.ok) return null;
     const t = await r.text();
     if (t.length < 2 || t.trimStart().startsWith('<')) return null;
@@ -69,7 +82,7 @@ async function anterior(nome) {
 async function main() {
   const inicioExec = Date.now();
 
-  const manifestoAnterior = await anterior('manifest.json');
+  const [manifestoAnterior, atualAnterior] = await Promise.all([anterior('manifest.json'), anterior('atual.json')]);
   if (!FORCAR && !venceu(manifestoAnterior?.gerado)) {
     const idade = Math.round((Date.now() - Date.parse(manifestoAnterior.gerado)) / 60_000);
     console.log(`Rios: publicação tem ${idade} min, ainda vale. Pulando este ciclo.`);
@@ -82,27 +95,31 @@ async function main() {
   console.log(`Rios — ${estacoes.length} estações da ANA na Amazônia Legal`);
 
   const fim = fimDaGrade();
-  // Dois dias cobrem as 48 h da grade com folga para atraso de transmissão.
-  // O `dataFim` do serviço é inclusivo por DIA, então pedir "amanhã" garante
-  // que as leituras de hoje venham inteiras.
-  const inicioBusca = fim - (SLOTS + 8) * PASSO_MS;
+  // A grade cobre 48 h; duas horas de folga atrás bastam para a leitura mais
+  // próxima do primeiro slot. O `dataFim` do serviço é inclusivo por DIA (em
+  // Brasília), então pedir "amanhã" garante que as leituras de hoje venham.
+  const inicioBusca = fim - (SLOTS + 1) * PASSO_MS;
   const fimBusca = Date.now() + 24 * 60 * 60 * 1000;
+
+  const prazo = inicioExec + PRAZO_MS;
+  const cancelar = new AbortController();
+  const relogio = setTimeout(() => cancelar.abort(), Math.max(0, prazo - Date.now()));
 
   const { ok, erros } = await emLotes(
     estacoes,
     async (e) => {
-      const l = await leituras(e.cod, inicioBusca, fimBusca);
+      const l = await leituras(e.cod, inicioBusca, fimBusca, { sinal: cancelar.signal });
+      // Zero linhas numa janela de dois dias não é "rio sem dado": é a ANA
+      // respondendo vazio. Tratar como falha faz a estação herdar a anterior.
+      if (l.length === 0) throw new Error(`estação ${e.cod}: resposta sem leituras`);
       return { estacao: e, leituras: l };
     },
-    { aoAndar: (f, n) => console.log(`  ${f}/${n}…`) },
+    { aoAndar: (f, n) => console.log(`  ${f}/${n}…`), prazo },
   );
-  console.log(`  ${ok.length} estações lidas, ${erros.length} falharam`);
+  clearTimeout(relogio);
+  const esgotou = Date.now() > prazo;
+  console.log(`  ${ok.length} estações lidas, ${erros.length} falharam${esgotou ? ' · PRAZO ESGOTADO' : ''}`);
   if (erros.length) console.log(`  falhas: ${erros.slice(0, 5).map((x) => x.item.nome).join(', ')}${erros.length > 5 ? '…' : ''}`);
-
-  // Uma rodada que só trouxe migalhas não pode substituir a publicação boa.
-  if (ok.length < estacoes.length * 0.5) {
-    throw new Error(`só ${ok.length} de ${estacoes.length} estações responderam — não publicando`);
-  }
 
   const historico = await lerHistorico();
   const sace = await situacoesSace();
@@ -112,11 +129,13 @@ async function main() {
   const linhas = {};
   const fichas = [];
   const contagem = { muitoAbaixo: 0, abaixo: 0, normal: 0, acima: 0, muitoAcima: 0, semRef: 0 };
+  const lidas = new Set();
 
   for (const { estacao, leituras: l } of ok) {
     const grade = gradeHoraria(l, fim);
     const ultimo = ultimoDa(grade.v);
     if (!ultimo) continue;
+    lidas.add(estacao.cod);
 
     const d24 = variacao(grade.v, 24);
     const d48 = variacao(grade.v, 47);
@@ -168,6 +187,18 @@ async function main() {
     });
   }
 
+  // Estação que falhou nesta rodada (ou ficou fora do prazo) HERDA a
+  // publicação anterior, com a série deslocada para a grade nova. Sem isso,
+  // toda falha transitória apagava a estação do mapa por uma hora — e com o
+  // prazo global isso viraria rotina. A ficha herdada carrega `h: true`.
+  const herdadas = herdar(atualAnterior, fim, estacoes, lidas, linhas, fichas, contagem);
+  if (herdadas) console.log(`  ${herdadas} estações herdaram a publicação anterior`);
+
+  // Uma rodada que só trouxe migalhas, mesmo com herança, não substitui a boa.
+  if (fichas.length < estacoes.length * 0.5) {
+    throw new Error(`só ${fichas.length} de ${estacoes.length} estações com leitura — não publicando`);
+  }
+
   console.log(
     `  ${fichas.length} com leitura · abaixo do normal ${contagem.muitoAbaixo + contagem.abaixo}, ` +
       `dentro ${contagem.normal}, acima ${contagem.acima + contagem.muitoAcima}, sem referência ${contagem.semRef}`,
@@ -185,6 +216,7 @@ async function main() {
   await rm(temp, { recursive: true, force: true });
   await mkdir(temp, { recursive: true });
 
+  try {
   const gerado = new Date().toISOString();
   const comum = { gerado, fonte: ATRIBUICAO, portal: 'https://www.snirh.gov.br/hidroweb/' };
 
@@ -213,6 +245,8 @@ async function main() {
     estacoes: estacoes.length,
     comLeitura: fichas.length,
     falhas: erros.length,
+    herdadas,
+    prazoEsgotado: esgotou || undefined,
     contagem,
     historico: historico
       ? { gerado: historico.gerado, periodo: historico.periodo, estacoes: Object.keys(historico.estacoes).length }
@@ -233,7 +267,10 @@ async function main() {
   for (const nome of ['estacoes.json', 'atual.json', 'manifest.json']) {
     await cp(join(temp, nome), join(SAIDA, 'rios', nome));
   }
-  await rm(temp, { recursive: true, force: true });
+  } finally {
+    // Nunca deixar a pasta temporária dentro de `site/`: ela iria para o Pages.
+    await rm(temp, { recursive: true, force: true });
+  }
 
   await anunciar(true);
   console.log(`\nOK — ${fichas.length} estações · ${Date.now() - inicioExec} ms`);
@@ -257,6 +294,33 @@ async function main() {
       { flag: 'a' },
     );
   }
+}
+
+/**
+ * Copia para a publicação nova as estações que esta rodada não conseguiu ler,
+ * deslocando a série de 48 h para a grade de agora. Devolve quantas herdaram.
+ *
+ * A ficha herdada mantém cota, tendência e classe da rodada anterior — que é
+ * a última verdade conhecida — e ganha `h: true` para a interface poder
+ * dizer "leitura anterior". Série que não alcança a grade nova (publicação
+ * velha demais) não é herdada: melhor sumir que mostrar dado de dias atrás.
+ */
+function herdar(anterior, fim, estacoes, lidas, linhas, fichas, contagem) {
+  if (!anterior || !anterior.serie) return 0;
+  const porCod = new Map((anterior.rios ?? []).map((r) => [r.c, r]));
+  let n = 0;
+  for (const e of estacoes) {
+    if (lidas.has(e.cod)) continue;
+    const fichaAnt = porCod.get(e.cod);
+    const serie = deslocarSerie(anterior.serie[e.cod], anterior.t0, anterior.passoMin, fim);
+    if (!serie || !fichaAnt) continue;
+    linhas[e.cod] = serie;
+    fichas.push({ ...fichaAnt, h: true });
+    if (fichaAnt.a) contagem[fichaAnt.a] = (contagem[fichaAnt.a] ?? 0) + 1;
+    else contagem.semRef++;
+    n++;
+  }
+  return n;
 }
 
 export const ATRIBUICAO =
@@ -293,10 +357,16 @@ async function escrever(dir, nome, obj) {
   console.log(`  rios/${nome}: ${(texto.length / 1024).toFixed(0)} KB`);
 }
 
-main().catch(async (e) => {
-  console.error(`\nFALHOU: ${e.message}`);
-  await anunciar(false);
-  // O passo roda com `continue-on-error`: a chuva publica do mesmo jeito e o
-  // `preservar.mjs` restaura a pasta `rios/` do ar.
-  process.exitCode = 1;
-});
+main()
+  .catch(async (e) => {
+    console.error(`\nFALHOU: ${e.message}`);
+    await anunciar(false);
+    // O passo roda com `continue-on-error`: a chuva publica do mesmo jeito e o
+    // `preservar.mjs` restaura a pasta `rios/` do ar.
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // Nada pode segurar o event loop depois do ciclo: um passo pendurado
+    // cancela o ciclo seguinte da chuva.
+    process.exit(process.exitCode ?? 0);
+  });

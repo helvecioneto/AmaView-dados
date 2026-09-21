@@ -29,6 +29,7 @@ jobs:
   publicar:
     name: Buscar e publicar
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -70,14 +71,12 @@ jobs:
       # só precisam ser restauradas. Não é fatal: a camada volta no próximo
       # ciclo da chuva, 15 minutos depois.
       - name: Preservar as embarcações
-        continue-on-error: true
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs navios
 
       # Idem para os rios, reconstruídos pelo ciclo da chuva.
       - name: Preservar o nível dos rios
-        continue-on-error: true
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs rios

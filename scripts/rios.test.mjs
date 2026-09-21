@@ -17,6 +17,7 @@ import {
   aprovada,
   classePorPercentil,
   cotaPlausivel,
+  deslocarSerie,
   diaDoAno,
   distanciaDoy,
   extremosDe,
@@ -306,4 +307,45 @@ test('percentil interpola e aguenta lista de um elemento', () => {
   assert.equal(percentil([0, 10], 0.5), 5);
   assert.equal(percentil([0, 10, 20], 0.5), 10);
   assert.equal(percentil([], 0.5), null);
+});
+
+// ---------------------------------------------------------------------------
+// Herança entre ciclos
+// ---------------------------------------------------------------------------
+
+test('deslocarSerie: uma hora depois, a série anda uma casa e abre um buraco no fim', () => {
+  const fimAnt = fimDaGrade(Date.parse('2026-09-21T12:00:00Z'));
+  const t0Ant = fimAnt - (SLOTS - 1) * PASSO_MS;
+  const serie = Array.from({ length: SLOTS }, (_, i) => 1000 + i);
+  const nova = deslocarSerie(serie, t0Ant, 60, fimAnt + PASSO_MS);
+  assert.equal(nova.length, SLOTS);
+  assert.equal(nova[0], 1001, 'a primeira hora antiga saiu');
+  assert.equal(nova[SLOTS - 2], 1000 + SLOTS - 1, 'a última medida antiga é a penúltima de agora');
+  assert.equal(nova[SLOTS - 1], null, 'a hora nova ainda não foi medida');
+});
+
+test('deslocarSerie: mesma grade, mesma série', () => {
+  const fim = fimDaGrade(Date.parse('2026-09-21T12:00:00Z'));
+  const serie = Array.from({ length: SLOTS }, (_, i) => i);
+  assert.deepEqual(deslocarSerie(serie, fim - (SLOTS - 1) * PASSO_MS, 60, fim), serie);
+});
+
+test('deslocarSerie: publicação velha demais não é herdada', () => {
+  const fim = fimDaGrade(Date.parse('2026-09-21T12:00:00Z'));
+  const serie = Array.from({ length: SLOTS }, () => 1200);
+  // 48 h atrás: nada da série antiga cai na grade nova.
+  assert.equal(deslocarSerie(serie, fim - (2 * SLOTS - 1) * PASSO_MS, 60, fim), null);
+  // Publicação do FUTURO (relógio errado) tampouco.
+  assert.equal(deslocarSerie(serie, fim, 60, fim - PASSO_MS), null);
+});
+
+test('deslocarSerie: recusa série com tamanho errado ou só de buracos', () => {
+  const fim = fimDaGrade(Date.parse('2026-09-21T12:00:00Z'));
+  const t0 = fim - (SLOTS - 1) * PASSO_MS;
+  assert.equal(deslocarSerie([1, 2, 3], t0, 60, fim), null);
+  assert.equal(deslocarSerie(new Array(SLOTS).fill(null), t0, 60, fim), null);
+  assert.equal(deslocarSerie(null, t0, 60, fim), null);
+  // Série cujas únicas medidas ficam nas horas que saem da janela.
+  const soNoComeco = new Array(SLOTS).fill(null); soNoComeco[0] = 1200;
+  assert.equal(deslocarSerie(soNoComeco, t0, 60, fim + PASSO_MS), null);
 });
