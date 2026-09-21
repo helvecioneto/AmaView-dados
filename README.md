@@ -192,8 +192,9 @@ Tapajós; entre eles, o rio é cego.
 
 ### `rios/atual.json`
 
-Cota das 154 estações telemétricas da ANA na Amazônia Legal, com série horária
-de 48 h. A cota vai em **centímetros** (como a ANA publica); a conversão para
+Cota de 290 estações telemétricas da ANA na Amazônia Legal (SGB-CPRM,
+secretarias estaduais, DNIT e Água e Solo; **sem** as de usinas
+hidrelétricas), com série horária de 48 h. A cota vai em **centímetros** (como a ANA publica); a conversão para
 metros é da interface.
 
 ```jsonc
@@ -227,6 +228,12 @@ próprio zero, então cota de estações diferentes não se compara. `a` e `p` s
 
 `ext` são os extremos **desta estação no período medido**, e não o recorde
 histórico da régua: a de Manaus tem série desde 1902.
+
+`h: true` marca uma estação que não respondeu nesta rodada e **herdou** a
+publicação anterior, com a série deslocada para a grade nova. A coleta tem
+prazo global de 5 min (uma ANA lenta chegou a projetar duas horas por
+rodada), e a fila é ordenada pela idade da leitura anterior — quem ficou de
+fora vai para a frente na rodada seguinte.
 
 ### `cemaden/manifest.json`
 
