@@ -18,6 +18,9 @@ Consumido por [AmaView](https://helvecioneto.github.io/AmaView/).
 > **Sondagens:** University of Wyoming, Department of Atmospheric Science,
 > <https://weather.uwyo.edu/upperair/>
 >
+> **Nível dos rios:** Agência Nacional de Águas e Saneamento Básico (ANA) —
+> rede telemétrica do SNIRH, <https://www.snirh.gov.br/hidroweb/>
+>
 > **Embarcações (AIS):** Open Waters AIS (<https://openwaters.io/ais/>),
 > agregando AISHub (<https://www.aishub.net>) e aisstream.io.
 > O crédito é **por fonte** e nunca concatenado — ver
@@ -187,6 +190,44 @@ recepção"** — a leitura errada mais provável desta camada. O AIS terrestre 
 alcança perto do receptor, e na Amazônia há receptor em Belém, Manaus e no
 Tapajós; entre eles, o rio é cego.
 
+### `rios/atual.json`
+
+Cota das 154 estações telemétricas da ANA na Amazônia Legal, com série horária
+de 48 h. A cota vai em **centímetros** (como a ANA publica); a conversão para
+metros é da interface.
+
+```jsonc
+{
+  "gerado": "2026-09-21T08:22:32Z",
+  "t0": 1758…, "passoMin": 60, "slots": 48,
+  "rios": [
+    {
+      "c": "14990000",       // código da estação
+      "cm": 2063,            // cota da última leitura
+      "ms": 1758…,
+      "q": null,             // vazão, m³/s
+      "d24": -19, "d48": -41,
+      "t": "descendo",
+      "a": "normal",         // classe da escala divergente
+      "p": 29,               // POSIÇÃO PERCENTÍLICA entre os anos medidos
+      "an": -192,            // diferença para a mediana desta época, cm
+      "ref": { "p50": 2255, "p25": 2010, "p75": 2480, "anos": 13 },
+      "ext": { "mn": 1213, "mnd": "2024-11-02", "mx": 3002, "mxd": "2021-06-17", "desde": 2014 }
+    }
+  ],
+  // Uma linha por estação, SEMPRE com `slots` valores; null onde não houve medição.
+  "serie": { "14990000": [2082, 2081, null, 2079] }
+}
+```
+
+`p` é o que a interface usa para colorir, e não `cm`: cada régua tem o seu
+próprio zero, então cota de estações diferentes não se compara. `a` e `p` são
+`null` nas 49 estações com menos de 8 anos medidos — ausência de referência não
+é normalidade.
+
+`ext` são os extremos **desta estação no período medido**, e não o recorde
+histórico da régua: a de Manaus tem série desde 1902.
+
 ### `cemaden/manifest.json`
 
 Resumo do ciclo (instante, grandeza, cobertura, contagens). Pequeno — serve
@@ -200,7 +241,7 @@ Dois workflows, com cadências diferentes porque as fontes são diferentes:
 
 | Workflow | Cadência | O que faz | Por quê |
 |---|---|---|---|
-| `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS)** | o CEMADEN publica de 10 em 10 min |
+| `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS) + rios (ANA)** | o CEMADEN publica de 10 em 10 min |
 | `sondagem.yml` | 4×/dia | radiossonda | o balão sobe 2×/dia e o dado aparece ~7 h depois |
 
 As embarcações rodam **dentro** do ciclo da chuva, e não num workflow próprio.
@@ -209,6 +250,12 @@ quando uma terceira entra, a pendente é **cancelada** — em silêncio, com sta
 `cancelled` e não `failure`. Um terceiro workflow na mesma cadência comeria
 ciclos da chuva sem ninguém perceber. O passo do AIS roda com
 `continue-on-error`: se a fonte estiver fora, a chuva publica do mesmo jeito.
+
+O passo dos **rios** roda só de hora em hora, e não a cada ciclo: o nível de um
+rio amazônico muda de 5 a 30 cm por DIA, e 154 estações a cada 15 min seriam
+~15 mil requisições diárias a um serviço público para um dado que não mudou. O
+próprio script confere o carimbo da publicação anterior e sai em silêncio
+quando ainda não venceu, avisando o workflow pelo output `rodou`.
 
 Buscar as sondagens a cada 15 min eram **~8.000 requisições diárias** a um
 servidor acadêmico sem SLA para um dado que muda duas vezes. Agora são ~340.
