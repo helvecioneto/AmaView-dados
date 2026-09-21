@@ -100,8 +100,12 @@ baixado por todo visitante: `c` código, `i` id interno, `n` nome, `u` UF,
 ### `sondagem/perfis.json`
 
 Perfis verticais de radiossonda das 14 estações da Amazônia Legal, da
-Universidade de Wyoming. Uma sondagem por estação: a mais recente das últimas
-48 h.
+Universidade de Wyoming. **Até três sondagens por estação** dentro das últimas
+48 h, da mais recente para a mais antiga.
+
+Três, e não uma: a rede lança 2× por dia e o loop do AmaView cobre até 24 h.
+Com só a mais recente, metade da animação ficava sem nenhuma sondagem no mapa
+— inclusive lançamentos que estavam dentro da janela exibida.
 
 ```jsonc
 {
@@ -124,6 +128,11 @@ estação, **2,6 KB gzip** para a rede inteira.
 `ms: null` com `erro: null` é estação calada, não falha nossa: acontece de
 verdade e com frequência. Manaus passou 55 h sem reportar durante o
 levantamento.
+
+O `t` de cada ponto da trilha é **relativo a `ms`, e negativo no começo**: o
+balão sobe uns 45 min antes da hora cheia para que a amostra da troposfera
+média caia nela. Quem consumir precisa tratar o lançamento — e não `ms` — como
+o instante em que a sondagem passa a existir.
 
 ### `cemaden/manifest.json`
 
