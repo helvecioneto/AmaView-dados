@@ -2,12 +2,12 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timer, últimas execuções, frescor do dado)
-#   amaview instalar     clona/atualiza, instala as unidades e liga o timer
+#   amaview              situação (timers, últimas execuções, frescor do dado)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers
 #   amaview token        grava o token (pede na tela, sem eco)
-#   amaview disparar     dispara um ciclo agora
+#   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
-#   amaview parar        desliga o timer
+#   amaview parar        desliga os timers
 #   amaview remover      desinstala tudo (menos o token)
 #
 # O agendamento do GitHub Actions não é confiável — medido: 135 min de
@@ -16,13 +16,26 @@ set -uo pipefail
 
 REPO_URL="https://github.com/helvecioneto/AmaView-dados"
 DESTINO="/opt/amaview"
-UNIDADES="amaview-chuva"
+# Uma unidade por workflow. A sondagem entrou depois de passar 12 h sem
+# atualizar: dependia só do `schedule` do GitHub, que em 21/09/2026 entregou
+# 1 de 2 horários com ~4 h de atraso.
+UNIDADES="amaview-chuva amaview-sondagem"
 TOKEN="/etc/amaview/token"
 
 verde() { printf '\033[32m%s\033[0m\n' "$*"; }
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
 amarelo() { printf '\033[33m%s\033[0m\n' "$*"; }
 titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+timers() { for u in $UNIDADES; do printf '%s.timer ' "$u"; done; }
+filtro_journal() { for u in $UNIDADES; do printf -- '-u %s ' "$u"; done; }
+
+# `restart`, e não só `--now`: um timer já ativo não relê a unidade editada.
+ligar_timers() {
+  for t in $(timers); do
+    sudo systemctl enable "$t" >/dev/null 2>&1 && sudo systemctl restart "$t" && verde "  $t ligado"
+  done
+}
 
 instalar() {
   titulo "Instalando"
@@ -33,7 +46,9 @@ instalar() {
     sudo git clone -q "$REPO_URL" "$DESTINO" && echo "  repositório clonado"
   fi
   sudo chmod +x "$DESTINO/agendador/disparar.py"
-  sudo cp "$DESTINO/agendador/$UNIDADES.service" "$DESTINO/agendador/$UNIDADES.timer" /etc/systemd/system/
+  for u in $UNIDADES; do
+    sudo cp "$DESTINO/agendador/$u.service" "$DESTINO/agendador/$u.timer" /etc/systemd/system/
+  done
   sudo systemctl daemon-reload
   echo "  unidades instaladas"
 
@@ -45,7 +60,7 @@ instalar() {
     amarelo "  token ausente — rode: amaview token"
     return 0
   fi
-  sudo systemctl enable --now "$UNIDADES.timer" >/dev/null 2>&1 && verde "  timer ligado"
+  ligar_timers
 }
 
 gravar_token() {
@@ -69,7 +84,7 @@ gravar_token() {
   echo
   echo "  Testando…"
   if sudo "$DESTINO/agendador/disparar.py" chuva.yml; then
-    sudo systemctl enable --now "$UNIDADES.timer" >/dev/null 2>&1 && verde "  timer ligado"
+    ligar_timers
   else
     vermelho "  o token não foi aceito — confira a permissão e rode 'amaview token' de novo"
     return 1
@@ -81,13 +96,15 @@ frescor() {
 import json, urllib.request
 from datetime import datetime, timezone
 base = "https://helvecioneto.github.io/AmaView-dados"
-for nome, cam in (("chuva", "cemaden"), ("sondagem", "sondagem")):
+# Limites por produto, em minutos. A sondagem tem horas de idade por natureza:
+# roda 4×/dia, e o maior intervalo entre horários é de 9 h.
+for nome, cam, ok, velho in (("chuva", "cemaden", 45, 720), ("sondagem", "sondagem", 660, 1440)):
     try:
         with urllib.request.urlopen(f"{base}/{cam}/manifest.json", timeout=15) as r:
             m = json.load(r)
         idade = (datetime.now(timezone.utc) - datetime.fromisoformat(m["gerado"].replace("Z", "+00:00")))
         mins = idade.total_seconds() / 60
-        marca = "ok" if mins < 45 else ("ATRASADO" if mins < 720 else "VELHO")
+        marca = "ok" if mins < ok else ("ATRASADO" if mins < velho else "VELHO")
         print(f"  {nome:9} {mins:6.0f} min atrás   {marca}")
     except Exception as e:
         print(f"  {nome:9} falhou: {e}")
@@ -95,12 +112,11 @@ PY
 }
 
 situacao() {
-  titulo "Timer"
-  if systemctl is-enabled "$UNIDADES.timer" >/dev/null 2>&1; then
-    systemctl list-timers "$UNIDADES.timer" --no-pager 2>/dev/null | sed -n '1,2p' | sed 's/^/  /'
-  else
-    amarelo "  desligado — rode: amaview instalar"
-  fi
+  titulo "Timers"
+  systemctl list-timers $(timers) --no-pager 2>/dev/null | sed -n '/^NEXT/,/^$/p' | sed '/^$/d; s/^/  /'
+  for t in $(timers); do
+    systemctl is-enabled "$t" >/dev/null 2>&1 || amarelo "  $t desligado — rode: amaview instalar"
+  done
 
   titulo "Token"
   if sudo test -s "$TOKEN" 2>/dev/null; then
@@ -110,7 +126,7 @@ situacao() {
   fi
 
   titulo "Últimas execuções"
-  journalctl -u "$UNIDADES" -n 5 --no-pager -o short 2>/dev/null | sed 's/^/  /' || echo "  (sem log ainda)"
+  journalctl $(filtro_journal) -n 8 --no-pager -o short 2>/dev/null | sed 's/^/  /' || echo "  (sem log ainda)"
 
   titulo "Dado publicado"
   frescor
@@ -121,11 +137,13 @@ case "${1:-status}" in
   instalar | install) instalar ;;
   token) gravar_token ;;
   disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
-  logs) journalctl -u "$UNIDADES" -n "${2:-30}" --no-pager ;;
-  parar | stop) sudo systemctl disable --now "$UNIDADES.timer" && verde "timer desligado" ;;
+  logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
+  parar | stop) sudo systemctl disable --now $(timers) && verde "timers desligados" ;;
   remover)
-    sudo systemctl disable --now "$UNIDADES.timer" 2>/dev/null
-    sudo rm -f "/etc/systemd/system/$UNIDADES.service" "/etc/systemd/system/$UNIDADES.timer"
+    sudo systemctl disable --now $(timers) 2>/dev/null
+    for u in $UNIDADES; do
+      sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
+    done
     sudo systemctl daemon-reload
     verde "removido (o token em $TOKEN foi mantido)"
     ;;

@@ -1,9 +1,9 @@
 /**
  * Ciclo de ingestão das sondagens.
  *
- * Roda junto com o da chuva (`build.mjs`), no mesmo workflow. Busca no Wyoming
- * a sondagem mais recente de cada estação dentro da janela do loop e publica
- * um JSON por estação com o perfil reduzido e os índices.
+ * Roda no workflow próprio (`sondagem.yml`), 4×/dia. Busca no Wyoming as
+ * sondagens mais recentes de cada estação dentro da janela do loop e escreve
+ * `site/sondagem/`, que o ciclo da chuva recebe pelo cache do Actions e publica.
  *
  * Falha de uma estação NÃO derruba o ciclo: o servidor é acadêmico e sem SLA,
  * e já deu timeout durante o levantamento. A estação entra no resultado com

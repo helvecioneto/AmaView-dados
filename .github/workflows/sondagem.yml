@@ -9,6 +9,11 @@ name: Sondagem — radiossonda
 #
 # Dois horários por sondagem: o primeiro pega o caso normal, o segundo cobre
 # atraso na publicação. Minutos deslocados, pelo mesmo motivo do outro workflow.
+#
+# Quem dispara de verdade é o agendador externo (`agendador/amaview-sondagem.timer`,
+# nos mesmos horários). O `schedule` aqui é só a rede de segurança: em
+# 21/09/2026, dependendo só dele, a sondagem passou 12 h sem atualizar — de
+# dois horários vencidos, o GitHub entregou um, com ~4 h de atraso.
 on:
   schedule:
     - cron: '22 7,10,19,22 * * *'
@@ -16,23 +21,29 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Mesmo grupo do workflow da chuva: os dois publicam o site inteiro, e não
-# podem se sobrepor.
+# Este workflow NÃO publica no Pages: ele busca e entrega o resultado ao ciclo
+# da chuva pelo cache do Actions, e a chuva publica em até 15 min.
+#
+# Antes ele publicava, no grupo `publicar-pages` compartilhado com a chuva, e
+# isso tinha dois defeitos:
+# - o grupo guarda uma execução rodando e UMA pendente; a sondagem pendente
+#   atrás da chuva era cancelada em silêncio quando chegava o ciclo seguinte;
+# - a busca no Wyoming leva de 6 a 12 min (724 s medidos), e segurava o
+#   grupo esse tempo todo, atrasando a chuva, que é o produto principal.
+# Fora do grupo, nenhum dos dois acontece. O custo — até 15 min a mais para ir
+# ao ar — não pesa para um dado que chega ~7 h depois do lançamento.
 concurrency:
-  group: publicar-pages
+  group: sondagem
   cancel-in-progress: false
 
 jobs:
-  publicar:
-    name: Buscar e publicar
+  buscar:
+    name: Buscar e entregar à chuva
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    # 724 s medidos numa busca normal, contra 15 min de teto antes. Fora do
+    # grupo do Pages, a folga não atrasa mais ninguém.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -60,52 +71,15 @@ jobs:
             console.log(`${comDado} de ${j.perfis.length} perfis com dado`);
           '
 
-      # Este ciclo não reconstrói a chuva, que é o produto principal: publicar
-      # sem ela a apagaria do ar por até 15 minutos.
-      - name: Preservar a chuva
-        env:
-          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
-        run: node scripts/preservar.mjs cemaden
-
-      # As embarcações são reconstruídas pelo ciclo da chuva, então aqui elas
-      # só precisam ser restauradas. Não é fatal: a camada volta no próximo
-      # ciclo da chuva, 15 minutos depois.
-      - name: Preservar as embarcações
-        env:
-          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
-        run: node scripts/preservar.mjs navios
-
-      # Idem para os rios, reconstruídos pelo ciclo da chuva.
-      - name: Preservar o nível dos rios
-        env:
-          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
-        run: node scripts/preservar.mjs rios
-
-      # O radar também é reconstruído pelo ciclo da chuva, mas volta por outro
-      # caminho: do depósito que a chuva guarda no cache do Actions, e não do
-      # Pages. São ~85 MB de PNG, e o Pages tem teto de banda de 100 GB/mês.
-      # Aqui só se RESTAURA — quem guarda e faz a faxina é a chuva; o que esta
-      # execução escrever no depósito morre com o runner.
-      - name: Restaurar o depósito dos radares
-        uses: actions/cache/restore@v5
-        continue-on-error: true
+      # A entrega: o ciclo da chuva restaura a entrada MAIS NOVA com este
+      # prefixo antes de publicar (`restore-keys`). Só chega aqui o que passou
+      # na conferência acima — um ciclo que falhou não entrega nada, e a chuva
+      # segue publicando a sondagem anterior.
+      #
+      # A chave é única por execução porque uma entrada de cache é imutável.
+      # Quem apaga as antigas é a chuva, que tem `actions: write`.
+      - name: Entregar ao ciclo da chuva
+        uses: actions/cache/save@v5
         with:
-          path: radar-cache
-          key: radar-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: radar-v1-
-
-      # Sem o cache (despejado), o `--preservar` baixa do Pages — raro, e aí a
-      # banda não pesa. Fatal como os vizinhos: publicar sem a pasta apagaria
-      # o radar do ar até o próximo ciclo da chuva. Na estreia da pasta (nada
-      # no ar) passa sem erro.
-      - name: Preservar os radares
-        env:
-          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
-        run: node scripts/radar.mjs --preservar
-
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          path: site/sondagem
+          key: sondagem-v1-${{ github.run_id }}-${{ github.run_attempt }}

@@ -23,15 +23,16 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  # Só para a faxina dos depósitos antigos do radar (`gh cache delete`). O
-  # cache em si não usa o GITHUB_TOKEN, e nada aqui dispara outro workflow.
+  # Só para a faxina das entradas antigas do cache — o depósito do radar e as
+  # entregas das sondagens (`gh cache delete`). O cache em si não usa o
+  # GITHUB_TOKEN, e nada aqui dispara outro workflow.
   actions: write
 
-# Grupo COMPARTILHADO com o workflow das sondagens.
+# Este é o ÚNICO workflow que publica no Pages. Cada publicação substitui o
+# site inteiro, então duas ao mesmo tempo se apagariam: o grupo as enfileira.
 #
-# Os dois publicam no mesmo site do Pages, e cada publicação substitui o site
-# inteiro. Se rodassem ao mesmo tempo, um leria o estado do ar enquanto o outro
-# ainda não tinha publicado o dele, e o segundo a terminar apagaria o primeiro.
+# A sondagem já esteve neste grupo e saiu (ver `sondagem.yml`): ela busca, e
+# este ciclo publica o que ela entrega pelo cache do Actions.
 concurrency:
   group: publicar-pages
   cancel-in-progress: false
@@ -84,7 +85,7 @@ jobs:
       #
       # O grupo `publicar-pages` guarda no máximo uma execução rodando e uma
       # pendente: quando uma terceira entra, a PENDENTE é cancelada — em
-      # silêncio, com status `cancelled` e não `failure`. Um terceiro workflow
+      # silêncio, com status `cancelled` e não `failure`. Outro workflow
       # na mesma cadência comeria ciclos da chuva sem ninguém perceber.
       #
       # `continue-on-error`: a chuva é o produto principal. Se o AIS estiver
@@ -100,7 +101,7 @@ jobs:
         run: node scripts/navios.mjs
 
       # Os rios rodam DENTRO deste ciclo, como as embarcações, e pelo mesmo
-      # motivo: um terceiro workflow no grupo `publicar-pages` cancelaria a
+      # motivo: outro workflow no grupo `publicar-pages` cancelaria a
       # execução pendente em silêncio.
       #
       # Mas só de HORA EM HORA, e não a cada 15 min: o nível de um rio
@@ -141,7 +142,7 @@ jobs:
           restore-keys: radar-v1-
 
       # Os radares rodam DENTRO deste ciclo, pelo mesmo motivo das embarcações
-      # e dos rios: um terceiro workflow no grupo `publicar-pages` cancelaria
+      # e dos rios: outro workflow no grupo `publicar-pages` cancelaria
       # a execução pendente em silêncio.
       #
       # `continue-on-error`: a chuva é o produto principal. Com o SIPAM fora,
@@ -158,8 +159,24 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/radar.mjs
 
-      # Este ciclo não reconstrói as sondagens, e publicar sem elas as apagaria
-      # do ar até o outro workflow rodar — o que pode levar horas.
+      # As sondagens chegam pelo cache do Actions: o `sondagem.yml` busca no
+      # Wyoming 4×/dia e salva `site/sondagem` com a chave `sondagem-v1-<run>`.
+      # A chave pedida aqui nunca existe, então vale o `restore-keys`, que pega
+      # a entrada MAIS NOVA — a última busca que passou na conferência.
+      #
+      # Sem entrega no cache (despejada, ou a estreia), o preservar abaixo
+      # relê do Pages: são três JSON pequenos, sem peso na banda.
+      - name: Receber as sondagens
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        with:
+          path: site/sondagem
+          key: sondagem-v1-${{ github.run_id }}
+          restore-keys: sondagem-v1-
+
+      # Só restaura do ar o que o passo acima não trouxe (`preservar.mjs`
+      # mantém o que já está em `site/`). Publicar sem a pasta apagaria as
+      # sondagens do ar até a próxima busca — o que pode levar horas.
       - name: Preservar as sondagens
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
@@ -234,10 +251,13 @@ jobs:
       # a despejar por conta própria, sem critério nosso. Ficam as duas mais
       # novas: a deste ciclo e a anterior, de reserva.
       #
+      # As entregas das sondagens são pequenas, mas se acumulam do mesmo jeito
+      # (4 por dia); ficam também as duas mais novas.
+      #
       # Depois do deploy, para não atrasar a publicação; `always()` porque o
       # depósito deste ciclo foi salvo antes, publique ele ou não. Falhar aqui
       # não é grave — a faxina do ciclo seguinte recolhe o que sobrou.
-      - name: Apagar depósitos antigos dos radares
+      - name: Apagar entradas antigas do cache
         if: always()
         continue-on-error: true
         timeout-minutes: 2
@@ -245,7 +265,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh cache list --key radar-v1- --sort created_at --order desc --limit 100 --json id --jq '.[2:][].id' |
-            while read -r id; do
-              gh cache delete "$id"
-            done
+          for prefixo in radar-v1- sondagem-v1-; do
+            gh cache list --key "$prefixo" --sort created_at --order desc --limit 100 --json id --jq '.[2:][].id' |
+              while read -r id; do
+                gh cache delete "$id"
+              done
+          done

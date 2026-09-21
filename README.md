@@ -312,11 +312,21 @@ Dois workflows, com cadências diferentes porque as fontes são diferentes:
 | `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS) + rios (ANA) + radares (SIPAM)** | o CEMADEN publica de 10 em 10 min |
 | `sondagem.yml` | 4×/dia | radiossonda | o balão sobe 2×/dia e o dado aparece ~7 h depois |
 
+Só a **chuva publica** no Pages. A sondagem busca no Wyoming e **entrega pelo
+cache do Actions** (`site/sondagem`, chave `sondagem-v1-<run>`); o ciclo da
+chuva restaura a entrega mais nova antes de publicar, e a relê do Pages se não
+houver nenhuma. O dado vai ao ar até 15 min depois da busca.
+
+A sondagem publicava por conta própria, no mesmo grupo `publicar-pages`, e saiu
+dele por dois motivos: pendente atrás da chuva, ela era cancelada em silêncio
+quando chegava o ciclo seguinte; e a busca leva de 6 a 12 min, que ela passava
+segurando o grupo e atrasando a chuva.
+
 As embarcações rodam **dentro** do ciclo da chuva, e não num workflow próprio.
 O grupo `publicar-pages` guarda no máximo uma execução rodando e uma pendente:
 quando uma terceira entra, a pendente é **cancelada** — em silêncio, com status
-`cancelled` e não `failure`. Um terceiro workflow na mesma cadência comeria
-ciclos da chuva sem ninguém perceber. O passo do AIS roda com
+`cancelled` e não `failure`. Outro workflow na mesma cadência comeria ciclos da
+chuva sem ninguém perceber. O passo do AIS roda com
 `continue-on-error`: se a fonte estiver fora, a chuva publica do mesmo jeito.
 
 O passo dos **rios** roda só de hora em hora, e não a cada ciclo: o nível de um
@@ -436,7 +446,11 @@ Não há conserto dentro do GitHub:
   gratuita: gastar isso para dormir é o mesmo desperdício que evitamos ao
   parar de bater no servidor do Wyoming de 15 em 15 minutos.
 
-O conserto é chamar o `workflow_dispatch` **de fora**:
+O conserto é chamar o `workflow_dispatch` **de fora** — para os dois workflows.
+A sondagem aprendeu isso da pior forma: em 21/09/2026, dependendo só do
+`schedule`, passou 12 h sem atualizar (de dois horários vencidos, o GitHub
+entregou um, com ~4 h de atraso). O agendador em [`agendador/`](agendador/)
+dispara a chuva a cada 15 min e a sondagem nos seus quatro horários:
 
 ```
 POST https://api.github.com/repos/helvecioneto/AmaView-dados/actions/workflows/chuva.yml/dispatches

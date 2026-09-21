@@ -1,0 +1,20 @@
+[Unit]
+Description=Ciclo das sondagens 4 vezes por dia
+Documentation=https://github.com/helvecioneto/AmaView-dados
+
+[Timer]
+# Os mesmos horários do `schedule` do sondagem.yml. O balão sobe às 00Z e às
+# 12Z e o Wyoming publica umas 7 h depois: 07:22 e 19:22 pegam o caso normal,
+# 10:22 e 22:22 cobrem atraso na publicação.
+#
+# UTC explícito: a hora do lançamento é UTC, e a máquina não precisa estar
+# em UTC para isto continuar certo.
+OnCalendar=*-*-* 07,10,19,22:22:00 UTC
+# Recupera o disparo perdido depois de reinício ou queda de rede.
+Persistent=true
+RandomizedDelaySec=60
+AccuracySec=10s
+Unit=amaview-sondagem.service
+
+[Install]
+WantedBy=timers.target

@@ -5,11 +5,11 @@
  * some. Com dois workflows independentes — um para a chuva, outro para as
  * sondagens — cada publicação apagaria os dados do outro.
  *
- * Então, antes de publicar, cada workflow restaura as pastas alheias a partir
- * do que já está no ar.
+ * Então, antes de publicar, o ciclo da chuva — o único que publica — restaura
+ * a partir do que já está no ar as pastas que não reconstruiu.
  *
- *   node scripts/preservar.mjs sondagem      # rodado pelo workflow da chuva
- *   node scripts/preservar.mjs cemaden       # rodado pelo da sondagem
+ *   node scripts/preservar.mjs sondagem      # a sondagem chega pelo cache; isto é a reserva
+ *   node scripts/preservar.mjs navios rios   # quando o passo da camada pulou ou falhou
  *
  * Se não conseguir restaurar, FALHA. Publicar um site sem metade dos dados é
  * pior que não publicar: o AmaView passaria a mostrar a camada vazia até o
@@ -82,11 +82,12 @@ async function preservar(pasta) {
   let falhas = 0;
   for (const nome of lista) {
     // `site/` nasce vazio a cada execução: um arquivo já presente foi ESTE
-    // ciclo que construiu. Restaurar por cima dele publicaria o dado velho no
-    // lugar do novo — que é exatamente o contrário do propósito deste script.
+    // ciclo que construiu (ou recebeu do cache, como as sondagens). Restaurar
+    // por cima dele publicaria o dado velho no lugar do novo — que é
+    // exatamente o contrário do propósito deste script.
     const destino = join(SAIDA, pasta, nome);
     if (existsSync(destino)) {
-      console.log(`  ${pasta}/${nome}: construído neste ciclo, mantido`);
+      console.log(`  ${pasta}/${nome}: já presente neste ciclo, mantido`);
       continue;
     }
     try {
