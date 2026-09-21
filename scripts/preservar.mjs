@@ -16,6 +16,10 @@
  * outro workflow rodar, o que no caso das sondagens pode levar horas.
  *
  * `PRIMEIRA_PUBLICACAO=1` libera a ausência, para o ciclo que estreia a pasta.
+ *
+ * A pasta `radar/` NÃO passa por aqui. São milhares de PNG (~85 MB para
+ * 48 h), e relê-los do Pages a cada ciclo estouraria o limite de banda do
+ * Pages; ela volta do cache do Actions por `node scripts/radar.mjs --preservar`.
  */
 import { mkdir, writeFile, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -27,7 +31,7 @@ const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAI
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
 const PRIMEIRA = process.env.PRIMEIRA_PUBLICACAO === '1';
 
-/** O que cada pasta publica. Manter em sincronia com build.mjs, sondagem.mjs, navios.mjs e rios.mjs. */
+/** O que cada pasta publica. Manter em sincronia com build.mjs, sondagem.mjs, navios.mjs e rios.mjs (o radar tem o seu, em radar.mjs). */
 export const ARQUIVOS = {
   cemaden: ['estacoes.json', 'serie.json', 'manifest.json'],
   sondagem: ['estacoes.json', 'perfis.json', 'manifest.json'],

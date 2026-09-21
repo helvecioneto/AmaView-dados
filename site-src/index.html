@@ -6,7 +6,7 @@
     <title>AmaView · Dados</title>
     <meta
       name="description"
-      content="Cache aberto de dados da Amazônia Legal — chuva do CEMADEN, radiossonda, embarcações por AIS e nível dos rios da ANA."
+      content="Cache aberto de dados da Amazônia Legal — chuva do CEMADEN, radar meteorológico do SIPAM, radiossonda, embarcações por AIS e nível dos rios da ANA."
     />
     <style>
       :root {
@@ -126,7 +126,7 @@
       <h1>AmaView · Dados</h1>
       <p class="sub">
         Cache aberto de dados da Amazônia Legal, republicados em formato pronto para o navegador:
-        chuva do CEMADEN, radiossonda, embarcações por AIS e nível dos rios da ANA.
+        chuva do CEMADEN, radar meteorológico do SIPAM, radiossonda, embarcações por AIS e nível dos rios da ANA.
       </p>
 
       <div class="nota" id="estado">carregando o estado das últimas atualizações…</div>
@@ -151,6 +151,31 @@
       <div class="card">
         <h3><a href="cemaden/manifest.json">cemaden/manifest.json</a></h3>
         <p>Resumo do último ciclo: instante, grandeza, cobertura e contagens. Arquivo pequeno, bom para sondar.</p>
+      </div>
+
+      <h2>Radar meteorológico · SIPAM</h2>
+      <p class="sub">
+        Espelho das últimas 48 h dos 11 radares do SIPAM: refletividade (<code>dbz</code>) e taxa de chuva
+        (<code>rate</code>, mm/h). Ciclo a cada 15 min.
+      </p>
+
+      <div class="card">
+        <h3><a href="radar/manifest.json">radar/manifest.json</a></h3>
+        <p>
+          Por radar e produto, os instantes <code>t</code> das varreduras publicadas, em <strong>segundos</strong> UTC
+          e com os segundos do nome do arquivo. Tudo o que está em <code>t</code> existe aqui. Traz também a extensão
+          de cada radar (<code>extent</code>, bordas externas do PNG em EPSG:4326), o tamanho do PNG e
+          <code>herdado</code>, quando a listagem daquele radar falhou e a lista é a do ciclo anterior.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>radar/{id}/{produto}/AAAA_MM_DD_HH_MM_SS.png</h3>
+        <p>
+          Os PNG do SIPAM, <strong>byte a byte</strong> e com o mesmo nome (UTC), reconstruído a partir de
+          <code>t</code>. Estão aqui, e não só lá, porque o SIPAM não manda CORS: um PNG sem ele suja o canvas do mapa
+          e impede exportar o vídeo.
+        </p>
       </div>
 
       <h2>Nível dos rios · ANA</h2>
@@ -225,14 +250,15 @@
         navegador. Cada conjunto tem a sua própria cadência, anunciada no <code>gerado</code> do manifesto.
       </p>
       <p>
-        Todos os quatro são publicados pelo <strong>mesmo</strong> deploy do Pages, porque cada publicação substitui
-        o site inteiro. Um conjunto que falha num ciclo é restaurado do ar em vez de sumir.
+        Todos os cinco são publicados pelo <strong>mesmo</strong> deploy do Pages, porque cada publicação substitui
+        o site inteiro. Um conjunto que falha num ciclo é restaurado em vez de sumir.
       </p>
 
       <footer>
         <p>
           <strong>Fontes.</strong> Chuva: Rede Observacional do CEMADEN/MCTI,
-          <a href="https://www.gov.br/cemaden/pt-br">gov.br/cemaden</a>. Nível dos rios: Agência Nacional de Águas e
+          <a href="https://www.gov.br/cemaden/pt-br">gov.br/cemaden</a>. Radar meteorológico: SIPAM — Sistema de
+          Proteção da Amazônia (Censipam), <a href="https://siger.sipam.gov.br/radar/">siger.sipam.gov.br</a>. Nível dos rios: Agência Nacional de Águas e
           Saneamento Básico, <a href="https://www.snirh.gov.br/hidroweb/">SNIRH/HidroWeb</a>. Radiossonda:
           University of Wyoming, <a href="https://weather.uwyo.edu/upperair/">Dept. of Atmospheric Science</a>.
           Embarcações: <a href="https://openwaters.io/ais/">Open Waters AIS</a>, agregando AISHub e aisstream.io —
@@ -255,6 +281,16 @@
           pasta: 'cemaden',
           rotulo: 'Chuva',
           resumo: (m) => `${m.estacoes} estações · ${m.comChuva} com chuva · modo ${m.modo}`,
+        },
+        {
+          pasta: 'radar',
+          rotulo: 'Radar',
+          resumo: (m) => {
+            const imagens = (r) => Object.values(r.produtos).reduce((s, p) => s + p.t.length, 0);
+            const com = m.radares.filter((r) => imagens(r) > 0).length;
+            const total = m.radares.reduce((s, r) => s + imagens(r), 0);
+            return `${com} de ${m.radares.length} radares com varredura · ${total} imagens em ${m.janelaHoras} h`;
+          },
         },
         {
           pasta: 'rios',

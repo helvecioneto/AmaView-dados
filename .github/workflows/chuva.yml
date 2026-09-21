@@ -23,6 +23,9 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  # Só para a faxina dos depósitos antigos do radar (`gh cache delete`). O
+  # cache em si não usa o GITHUB_TOKEN, e nada aqui dispara outro workflow.
+  actions: write
 
 # Grupo COMPARTILHADO com o workflow das sondagens.
 #
@@ -51,7 +54,7 @@ jobs:
           node-version: 24
 
       - name: Testes
-        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs scripts/rios.test.mjs
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs scripts/rios.test.mjs scripts/radar.test.mjs
 
       - name: Buscar o CEMADEN e montar a grade
         env:
@@ -116,6 +119,45 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/rios.mjs
 
+      # O estado do radar entre ciclos vem do CACHE DO ACTIONS, e não do Pages
+      # como nas outras camadas.
+      #
+      # São ~4.700 PNG e ~85 MB para 48 h (medido em 21/09/2026). Reler isso do
+      # Pages a cada ciclo seriam ~8 GB por dia, 240 GB por mês — mais que o
+      # dobro do limite brando de banda do Pages (100 GB/mês), gasto só por
+      # este workflow, antes do primeiro visitante. O cache do Actions não
+      # entra nessa conta.
+      #
+      # A chave é única por execução porque uma entrada de cache é imutável:
+      # uma chave já salva não aceita conteúdo novo. O `restore-keys` pega a
+      # mais recente. Cache ausente (estreia, ou despejado) não é erro: o
+      # script baixa do Pages só o que falta.
+      - name: Restaurar o depósito dos radares
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        with:
+          path: radar-cache
+          key: radar-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: radar-v1-
+
+      # Os radares rodam DENTRO deste ciclo, pelo mesmo motivo das embarcações
+      # e dos rios: um terceiro workflow no grupo `publicar-pages` cancelaria
+      # a execução pendente em silêncio.
+      #
+      # `continue-on-error`: a chuva é o produto principal. Com o SIPAM fora,
+      # o ciclo publica a chuva do mesmo jeito e o `--preservar` abaixo põe
+      # no ar o depósito do ciclo anterior.
+      - name: Buscar os radares (SIPAM)
+        id: radar
+        continue-on-error: true
+        # O script tem prazo próprio de 4 min para listar e baixar; isto é o
+        # teto do que sobra (poda, cópia de ~85 MB para site/, resumo).
+        # Estourar conta como falha e o preservar publica o depósito.
+        timeout-minutes: 7
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/radar.mjs
+
       # Este ciclo não reconstrói as sondagens, e publicar sem elas as apagaria
       # do ar até o outro workflow rodar — o que pode levar horas.
       - name: Preservar as sondagens
@@ -146,9 +188,64 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs rios
 
+      # Qualquer desfecho que não seja sucesso — falha, SIPAM fora, prazo do
+      # passo estourado — e a pasta precisa voltar, senão a camada some do
+      # mapa. Vem do depósito restaurado do cache (zero banda do Pages) ou,
+      # com o cache perdido, do Pages. Não é o `preservar.mjs`: esse relê a
+      # pasta inteira do ar, e aqui são milhares de PNG.
+      # Sem `continue-on-error`, pela regra dos vizinhos: publicar sem a pasta
+      # apagaria o radar do ar; falhar mantém a publicação anterior.
+      - name: Preservar os radares
+        if: steps.radar.outcome != 'success'
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/radar.mjs --preservar
+
+      # Guarda o depósito ANTES de publicar: se o deploy falhar, o trabalho de
+      # baixar do SIPAM não se perde.
+      #
+      # `always()` para guardar também quando um passo posterior ao radar
+      # falhou (as sondagens, por exemplo) — o depósito continua bom. Mas só
+      # quando há o que guardar, e as duas condições evitam salvar lixo:
+      # - `site/radar/manifest.json`: o ciclo (ou o preservar) terminou. Sem
+      #   ele o passo morreu no meio, ou nem rodou;
+      # - `radar-cache/manifest.json`: o depósito está completo. Sem ele o
+      #   próximo ciclo trataria o depósito como perdido do mesmo jeito.
+      # Os PNG são gravados com nome provisório e renomeados, então um
+      # depósito salvo nunca tem arquivo pela metade.
+      - name: Guardar o depósito dos radares
+        if: always() && hashFiles('site/radar/manifest.json') != '' && hashFiles('radar-cache/manifest.json') != ''
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: radar-cache
+          key: radar-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+
+      # Faxina dos depósitos antigos. Cada ciclo salva uma entrada nova de
+      # ~85 MB (a chave é única por execução): 96 por dia passariam dos 10 GB
+      # de cache do repositório em pouco mais de um dia, e o GitHub começaria
+      # a despejar por conta própria, sem critério nosso. Ficam as duas mais
+      # novas: a deste ciclo e a anterior, de reserva.
+      #
+      # Depois do deploy, para não atrasar a publicação; `always()` porque o
+      # depósito deste ciclo foi salvo antes, publique ele ou não. Falhar aqui
+      # não é grave — a faxina do ciclo seguinte recolhe o que sobrou.
+      - name: Apagar depósitos antigos dos radares
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh cache list --key radar-v1- --sort created_at --order desc --limit 100 --json id --jq '.[2:][].id' |
+            while read -r id; do
+              gh cache delete "$id"
+            done

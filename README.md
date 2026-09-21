@@ -21,6 +21,9 @@ Consumido por [AmaView](https://helvecioneto.github.io/AmaView/).
 > **Nível dos rios:** Agência Nacional de Águas e Saneamento Básico (ANA) —
 > rede telemétrica do SNIRH, <https://www.snirh.gov.br/hidroweb/>
 >
+> **Radar meteorológico:** SIPAM — Sistema de Proteção da Amazônia (Censipam),
+> <https://siger.sipam.gov.br/radar/>
+>
 > **Embarcações (AIS):** Open Waters AIS (<https://openwaters.io/ais/>),
 > agregando AISHub (<https://www.aishub.net>) e aisstream.io.
 > O crédito é **por fonte** e nunca concatenado — ver
@@ -43,8 +46,10 @@ Três problemas, resolvidos de uma vez:
 
 1. **CORS.** Nenhuma das fontes do CEMADEN pode ser lida direto do navegador:
    `resources.cemaden.gov.br` não manda cabeçalho de CORS e
-   `sws.cemaden.gov.br` só libera o próprio portal. O GitHub Pages serve com
-   `Access-Control-Allow-Origin: *`.
+   `sws.cemaden.gov.br` só libera o próprio portal. O SIPAM também não manda:
+   o navegador não lê a listagem dos radares, e um PNG carregado sem CORS
+   "suja" o canvas do mapa e quebra a exportação de vídeo. O GitHub Pages
+   serve com `Access-Control-Allow-Origin: *`.
 2. **Segredo.** O token da API não pode viver num front estático — ficaria
    legível no bundle. Aqui ele é um *secret* do Actions e nunca sai do runner.
 3. **Limite de uso.** A PED permite 12 requisições/minuto por usuário. Como
@@ -235,6 +240,62 @@ prazo global de 5 min (uma ANA lenta chegou a projetar duas horas por
 rodada), e a fila é ordenada pela idade da leitura anterior — quem ficou de
 fora vai para a frente na rodada seguinte.
 
+### `radar/manifest.json` e os PNG
+
+Espelho das últimas 48 h dos 11 radares meteorológicos do SIPAM, em dois
+produtos: refletividade (`dbz`) e taxa de chuva (`rate`, mm/h). O `vil` fica de
+fora. Os PNG são **os mesmos bytes** do SIPAM, com o mesmo nome, sem conversão:
+
+```
+radar/{id}/{produto}/AAAA_MM_DD_HH_MM_SS.png      # UTC, ex.: radar/sbmn/dbz/2026_09_21_12_12_00.png
+```
+
+```jsonc
+{
+  "gerado": "2026-09-21T12:30:00.000Z",
+  "fonte": "SIPAM — Sistema de Proteção da Amazônia (Censipam)",
+  "fonteUrl": "https://siger.sipam.gov.br/radar/",
+  "janelaHoras": 48,
+  "produtos": ["dbz", "rate"],
+  "radares": [
+    {
+      "id": "sbmn",
+      "nome": "Manaus",
+      "extent": [-62.1674, -5.32489, -57.8154, -0.97289],  // bordas EXTERNAS do PNG, EPSG:4326
+      "extentFonte": "wfs",      // "wfs" (lida neste ciclo) | "tabela" (reserva)
+      "px": [954, 954],          // PNG mais recente; null se não há arquivo
+      "produtos": {
+        "dbz":  { "t": [1789991280, 1789992720], "herdado": false, "erro": null },
+        "rate": { "t": [1789991280, 1789992720], "herdado": false, "erro": null }
+      }
+    }
+  ]
+}
+```
+
+`t` é o instante de cada varredura em **segundos** epoch UTC, tirado do nome
+do arquivo — com os segundos: Belém grava `2026_09_21_12_10_06.png`. O nome se
+reconstrói de `t`, e **tudo o que está em `t` existe** nesta publicação. Em
+ordem crescente, sem repetição; radares em ordem alfabética de id.
+
+`herdado: true` quer dizer que a listagem daquele radar e produto falhou neste
+ciclo e a lista veio do ciclo anterior, filtrada pela janela; `erro` diz por
+quê. `extent` vem da WFS de cobertura do SIPAM a cada ciclo, com uma tabela de
+reserva no código para quando ela não responder.
+
+A janela é de 48 h **mais 30 min**: o loop do AmaView termina na última imagem
+do satélite e casa cada quadro com a varredura mais próxima, até 12 min de
+distância. Sem a folga, o começo de um loop de 48 h procuraria uma varredura
+que acabou de sair.
+
+Medido em 21/09/2026: **4.714 PNG e 84 MB** nas 48 h (de 4 a 107 KB cada,
+média de 18 KB); manifesto de 53 KB, **5 KB com gzip**. Cadência de 10 min em
+Belém, São Luís, Santarém e Tabatinga; 12 min em Cruzeiro do Sul e Manaus
+(que pula o `:00` de cada hora); ~10–11 min com deriva em Boa Vista, Porto
+Velho e São Gabriel. A varredura aparece de 10 a 21 min depois. Macapá
+(`sbmq`) e Tefé (`sbtf`) estavam sem nenhum arquivo: aparecem no manifesto com
+as listas vazias.
+
 ### `cemaden/manifest.json`
 
 Resumo do ciclo (instante, grandeza, cobertura, contagens). Pequeno — serve
@@ -248,7 +309,7 @@ Dois workflows, com cadências diferentes porque as fontes são diferentes:
 
 | Workflow | Cadência | O que faz | Por quê |
 |---|---|---|---|
-| `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS) + rios (ANA)** | o CEMADEN publica de 10 em 10 min |
+| `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS) + rios (ANA) + radares (SIPAM)** | o CEMADEN publica de 10 em 10 min |
 | `sondagem.yml` | 4×/dia | radiossonda | o balão sobe 2×/dia e o dado aparece ~7 h depois |
 
 As embarcações rodam **dentro** do ciclo da chuva, e não num workflow próprio.
@@ -264,12 +325,41 @@ rio amazônico muda de 5 a 30 cm por DIA, e 154 estações a cada 15 min seriam
 próprio script confere o carimbo da publicação anterior e sai em silêncio
 quando ainda não venceu, avisando o workflow pelo output `rodou`.
 
+O passo dos **radares** também roda dentro do ciclo da chuva, mas é a única
+camada cujo estado entre ciclos **não** vem do Pages. São ~4.700 PNG e ~85 MB
+para 48 h; reler isso do Pages a cada 15 min seriam ~8 GB por dia, **240 GB
+por mês — mais que o dobro do limite brando de banda do Pages** (100 GB/mês),
+gasto só pelo próprio workflow, antes do primeiro visitante. Então o depósito
+dos PNG vai no **cache do Actions** (`radar-cache/`, fora de `site/`):
+
+- cada ciclo restaura a entrada mais recente (`radar-v1-*`), lista os 22
+  diretórios do SIPAM (~12 KB cada com gzip), baixa só o que chegou (~25 PNG
+  por ciclo, uns 5 s), poda o que saiu da janela e copia para `site/radar/`;
+- a entrada nova é salva **antes** do deploy, com chave única por execução
+  (entrada de cache é imutável). Uma faxina no fim apaga as antigas e deixa as
+  duas mais novas — sem ela, 96 entradas de ~85 MB por dia passariam dos 10 GB
+  de cache do repositório em pouco mais de um dia, e o GitHub despejaria por
+  conta própria;
+- cache perdido (despejado, ou a estreia) não é erro: o que está no manifesto
+  no ar vem do Pages — raro, então a banda não pesa —, e o resto do SIPAM;
+- os downloads do SIPAM vão do **mais novo para o mais antigo**, no máximo 4
+  por vez, com prazo de 4 min: o que não couber fica para o ciclo seguinte, e
+  na estreia a janela se preenche para trás em poucos ciclos;
+- listagem que falha mantém o que já havia no depósito para aquele radar
+  (`herdado`). Se **todas** falharem, o passo falha sem tocar no depósito, e o
+  `radar.mjs --preservar` publica o do ciclo anterior.
+
+O workflow das sondagens também restaura esse cache (só restaura; quem salva
+é a chuva) e roda o mesmo `--preservar`, porque publica o site inteiro.
+
 Buscar as sondagens a cada 15 min eram **~8.000 requisições diárias** a um
 servidor acadêmico sem SLA para um dado que muda duas vezes. Agora são ~340.
 
 Os dois publicam no MESMO site do Pages, e cada publicação substitui o site
 inteiro — então cada um restaura a pasta do outro (`preservar.mjs`) antes de
 publicar, e ambos usam o mesmo grupo de concorrência para nunca rodarem juntos.
+A pasta `radar/` volta do cache do Actions (`radar.mjs --preservar`), e só do
+Pages quando o cache se perdeu.
 Se a restauração falhar, o workflow falha: publicar sem metade dos dados é pior
 que não publicar.
 
@@ -390,11 +480,24 @@ anterior é relida. Só é preciso mudar se o repositório for renomeado.
 ## Desenvolvimento
 
 ```sh
-node --test scripts/serie.test.mjs   # funções da grade
+node --test scripts/*.test.mjs       # todos os testes
 node scripts/build.mjs               # um ciclo, escreve em site/
 ```
 
 `scripts/serie.mjs` é puro e testado; `scripts/cemaden.mjs` isola a rede.
+
+Radares, com janela curta para não baixar 85 MB (o depósito fica em
+`radar-cache/`, que está no `.gitignore`):
+
+```sh
+RADAR_JANELA_H=6 node scripts/radar.mjs    # ~620 PNG, ~10 MB, ~20 s na primeira vez
+RADAR_JANELA_H=6 node scripts/radar.mjs    # de novo: reaproveita tudo, baixa só o que chegou
+node scripts/radar.mjs --preservar         # garante site/radar/ sem falar com o SIPAM
+```
+
+`RADAR_DEPOSITO`, `RADAR_MARGEM_MIN`, `RADAR_PRAZO_MIN`, `SIPAM_URL` e
+`SIPAM_WFS` estão descritas no topo de `scripts/radar.mjs`;
+`scripts/radares.mjs` é o módulo puro, testado em `radar.test.mjs`.
 
 ---
 
