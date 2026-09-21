@@ -1,1083 +1,2325 @@
 {
- "gerado": "2026-09-21T02:34:00.173Z",
+ "gerado": "2026-09-21T11:26:31.934Z",
  "estacoes": [
   {
    "cod": "15320002",
    "nome": "ABUNÃ",
    "lat": -9.7053,
    "lon": -65.3667,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66460000",
    "nome": "ACIMA DO CÓRREGO GRANDE",
    "lat": -16.6081,
    "lon": -55.2064,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18390000",
    "nome": "ALMEIRIM",
    "lat": -1.5328,
    "lon": -52.5769,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18850000",
    "nome": "ALTAMIRA",
    "lat": -3.2147,
    "lon": -52.2122,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "32620000",
    "nome": "ALTO BONITO",
    "lat": -1.8006,
    "lon": -46.3161,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "34020000",
    "nome": "ALTO PARNAÍBA",
    "lat": -9.1131,
    "lon": -45.9261,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "27320000",
    "nome": "ARAGUACEMA (CHACARA ARAGUAIA)",
    "lat": -8.8033,
    "lon": -49.555,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "28850000",
    "nome": "ARAGUATINS",
    "lat": -5.6514,
    "lon": -48.1325,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15430000",
    "nome": "ARIQUEMES",
    "lat": -9.9256,
    "lon": -63.0714,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13962000",
    "nome": "ARUMÃ - JUSANTE",
    "lat": -4.7286,
    "lon": -62.1453,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33290000",
    "nome": "BACABAL",
    "lat": -4.2194,
    "lon": -44.7653,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "31700000",
    "nome": "BADAJÓS",
    "lat": -2.5128,
    "lon": -47.7681,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "34130000",
    "nome": "BALSAS",
    "lat": -7.5344,
    "lon": -46.0358,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14480002",
    "nome": "BARCELOS",
    "lat": -0.9658,
    "lon": -62.9311,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33250000",
    "nome": "BARRA DO CORDA",
    "lat": -5.5006,
    "lon": -45.2436,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17430000",
    "nome": "BARRA DO SÃO MANUEL",
    "lat": -7.3397,
    "lon": -58.1553,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26800000",
    "nome": "BARREIRA DA CRUZ",
    "lat": -10.5647,
    "lon": -49.9342,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26710000",
    "nome": "BARREIRA DO PEQUI",
    "lat": -12.0986,
    "lon": -49.9481,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14850000",
    "nome": "BASE ALALAÚ",
    "lat": -0.8586,
    "lon": -60.52,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16205000",
    "nome": "BASE SIDERAMA - JUSANTE",
    "lat": -1.6833,
    "lon": -58.5333,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13990000",
    "nome": "BERURI",
    "lat": -3.8989,
    "lon": -61.3742,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18500000",
    "nome": "BOA ESPERANÇA",
    "lat": -6.7453,
    "lon": -51.7736,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18460000",
    "nome": "BOA SORTE",
    "lat": -6.7358,
    "lon": -51.9953,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14620000",
    "nome": "BOA VISTA",
    "lat": 2.8267,
    "lon": -60.6561,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15248010",
    "nome": "BOCA DO POMPEU - JUSANTE",
    "lat": -10.9175,
    "lon": -65.0433,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17710000",
    "nome": "BUBURÉ",
    "lat": -4.6156,
    "lon": -56.325,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15124009",
    "nome": "CABIXI",
    "lat": -13.5125,
    "lon": -60.53,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66070004",
    "nome": "CÁCERES (DNPVN)",
    "lat": -16.0761,
    "lon": -57.7022,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16100000",
    "nome": "CACHOEIRA MORENA",
    "lat": -2.1061,
    "lon": -59.3442,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "32550000",
    "nome": "CAFEZAL",
    "lat": -2.7717,
    "lon": -46.8028,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18650000",
    "nome": "CAJUEIRO",
    "lat": -5.65,
    "lon": -54.5208,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30072150",
    "nome": "CALÇOENE",
    "lat": 2.4942,
    "lon": -50.9533,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33680000",
    "nome": "CANTANHEDE",
    "lat": -3.6278,
    "lon": -44.3792,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30080000",
    "nome": "CAPIVARA",
    "lat": 0.9861,
    "lon": -51.7064,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13568000",
    "nome": "CAPIXABA (Colocação São José)",
    "lat": -10.3886,
    "lon": -67.9353,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "31645000",
    "nome": "CAPTAÇÃO D''ÁGUA DA COSANPA",
    "lat": -1.455,
    "lon": -48.4017,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14710000",
    "nome": "CARACARAÍ",
    "lat": 1.8214,
    "lon": -61.1236,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13150003",
    "nome": "COARI",
    "lat": -4.0856,
    "lon": -63.0833,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33480000",
    "nome": "COLINAS",
    "lat": -6.0208,
    "lon": -44.2486,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22100000",
    "nome": "COLONHA",
    "lat": -12.3922,
    "lon": -48.7117,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13540000",
    "nome": "COLÔNIA DOLORES (XAPURI)",
    "lat": -10.5606,
    "lon": -68.7047,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "27500000",
    "nome": "CONCEIÇÃO DO ARAGUAIA",
    "lat": -8.2694,
    "lon": -49.2594,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33630000",
    "nome": "COROATÁ",
    "lat": -4.1258,
    "lon": -44.1297,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14110000",
    "nome": "CUCUÍ",
    "lat": 1.2153,
    "lon": -66.8525,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66260006",
    "nome": "CUIABÁ-BEIRA RIO",
    "lat": -15.6189,
    "lon": -56.0997,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14330000",
    "nome": "CURICURIARI",
    "lat": -0.2006,
    "lon": -66.8022,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "23700000",
    "nome": "DESCARRETO",
    "lat": -5.7894,
    "lon": -47.4689,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13572000",
    "nome": "ESPALHA (Seringal Belo Horizonte)",
    "lat": -10.005,
    "lon": -68.5294,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16500000",
    "nome": "ESTIRÃO DA ANGÉLICA",
    "lat": -1.1006,
    "lon": -57.0569,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30050000",
    "nome": "ESTIRÃO DO CRICOU",
    "lat": 3.7217,
    "lon": -51.9308,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "29100000",
    "nome": "FAZENDA ALEGRIA",
    "lat": -5.4867,
    "lon": -49.2214,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14740000",
    "nome": "FAZENDA ANAUÁ",
    "lat": 1.1292,
    "lon": -60.2236,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14540000",
    "nome": "FAZENDA BANDEIRA BRANCA",
    "lat": 4.6306,
    "lon": -60.4706,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14495000",
    "nome": "FAZENDA CAJUPIRANGA",
    "lat": 3.4381,
    "lon": -61.0367,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18880000",
    "nome": "FAZENDA CIPAÚBA",
    "lat": -3.7314,
    "lon": -51.5675,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26711000",
    "nome": "FAZENDA COBRAPE",
    "lat": -11.4644,
    "lon": -50.0078,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26713000",
    "nome": "FAZENDA DOIS RIOS",
    "lat": -10.8014,
    "lon": -49.9539,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15552600",
    "nome": "FAZENDA FLOR DO CAMPO",
    "lat": -11.7489,
    "lon": -60.8678,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18420000",
    "nome": "FAZENDA ITAGUAÇU",
    "lat": -13.1408,
    "lon": -54.4453,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22250000",
    "nome": "FAZENDA LOBEIRA",
    "lat": -11.5328,
    "lon": -48.2886,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "31680000",
    "nome": "FAZENDA MARINGA",
    "lat": -3.1372,
    "lon": -48.0847,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "34040500",
    "nome": "FAZENDA PARACATI II",
    "lat": -8.2708,
    "lon": -45.6683,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14558000",
    "nome": "FAZENDA PARAÍSO",
    "lat": 3.3178,
    "lon": -60.3447,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14515000",
    "nome": "FAZENDA PASSARÃO",
    "lat": 3.2078,
    "lon": -60.5711,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18480000",
    "nome": "FAZENDA RIO DOURADO",
    "lat": -8.3269,
    "lon": -51.4603,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "32540000",
    "nome": "FAZENDA RURAL ZEBU",
    "lat": -3.3197,
    "lon": -46.8456,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14680001",
    "nome": "FÉ E ESPERANÇA",
    "lat": 2.8708,
    "lon": -61.4406,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17130000",
    "nome": "FOZ DO JURUENA",
    "lat": -7.7311,
    "lon": -58.2808,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18421000",
    "nome": "FOZ RONURO",
    "lat": -12.3692,
    "lon": -54.1383,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16430000",
    "nome": "GARGANTA",
    "lat": -0.9978,
    "lon": -57.0431,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "23250000",
    "nome": "GOIATINS",
    "lat": -7.7078,
    "lon": -47.3117,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33321000",
    "nome": "GRAJAU II",
    "lat": -5.8222,
    "lon": -46.1422,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15250000",
    "nome": "GUAJARÁ-MIRIM",
    "lat": -10.7925,
    "lon": -65.3478,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16030000",
    "nome": "ITACOATIARA",
    "lat": -3.1539,
    "lon": -58.4114,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17730000",
    "nome": "ITAITUBA",
    "lat": -4.2756,
    "lon": -55.9822,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33690100",
    "nome": "ITAPECURU-MIRIM",
    "lat": -3.3922,
    "lon": -44.3619,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "29200000",
    "nome": "ITUPIRANGA",
    "lat": -5.1281,
    "lon": -49.3242,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17680000",
    "nome": "JAMANXIM",
    "lat": -5.4556,
    "lon": -55.87,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15565000",
    "nome": "JARU",
    "lat": -10.4458,
    "lon": -62.4656,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22680000",
    "nome": "JATOBÁ (FAZENDA BOA NOVA)",
    "lat": -9.9953,
    "lon": -47.4725,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15560000",
    "nome": "JI-PARANÁ",
    "lat": -10.8736,
    "lon": -61.9356,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "19152500",
    "nome": "LARANJAL DO JARI",
    "lat": -0.8569,
    "lon": -52.525,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18600000",
    "nome": "LARANJEIRAS",
    "lat": -5.6967,
    "lon": -54.2456,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "19500000",
    "nome": "MACAPÁ",
    "lat": 0.0219,
    "lon": -51.0503,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14100000",
    "nome": "MANACAPURU",
    "lat": -3.3106,
    "lon": -60.6094,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14990000",
    "nome": "MANAUS",
    "lat": -3.1383,
    "lon": -60.0272,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18590000",
    "nome": "MANOEL JORGE  (TERRA PRETA)",
    "lat": -6.1872,
    "lon": -54.0836,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13180000",
    "nome": "MANOEL URBANO",
    "lat": -8.8886,
    "lon": -69.275,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "29050000",
    "nome": "MARABÁ",
    "lat": -5.3386,
    "lon": -49.1244,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14489000",
    "nome": "MARACÁ",
    "lat": 3.3528,
    "lon": -61.4222,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33420000",
    "nome": "MIRADOR",
    "lat": -6.3708,
    "lon": -44.3603,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14500000",
    "nome": "MOCIDADE",
    "lat": 3.4644,
    "lon": -60.9097,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15326000",
    "nome": "MORADA NOVA - JUSANTE",
    "lat": -9.7847,
    "lon": -65.5275,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14840000",
    "nome": "MOURA",
    "lat": -1.4567,
    "lon": -61.6347,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14690000",
    "nome": "MUCAJAÍ",
    "lat": 2.4714,
    "lon": -60.9178,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17050001",
    "nome": "ÓBIDOS",
    "lat": -1.9192,
    "lon": -55.5131,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16900000",
    "nome": "ORIXIMINÁ",
    "lat": -1.7764,
    "lon": -55.8622,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "19985000",
    "nome": "PACAJÁS",
    "lat": -3.8511,
    "lon": -50.6397,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "29070100",
    "nome": "PARAUAPEBAS",
    "lat": -6.0914,
    "lon": -49.9044,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18409000",
    "nome": "PASSAGEM DA BR-309",
    "lat": -14.6111,
    "lon": -53.9986,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18700000",
    "nome": "PEDRA DO Ó",
    "lat": -4.5278,
    "lon": -54.0125,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15150000",
    "nome": "PEDRAS NEGRAS",
    "lat": -12.8514,
    "lon": -62.8992,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33281000",
    "nome": "PEDREIRAS II",
    "lat": -4.57,
    "lon": -44.6106,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22050001",
    "nome": "PEIXE",
    "lat": -12.0231,
    "lon": -48.5328,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15558000",
    "nome": "PIMENTA BUENO",
    "lat": -11.6836,
    "lon": -61.1922,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15130000",
    "nome": "PIMENTEIRAS",
    "lat": -13.4858,
    "lon": -61.05,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15324000",
    "nome": "PLÁCIDO DE CASTRO",
    "lat": -10.3378,
    "lon": -67.1831,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30055000",
    "nome": "PONTE CASSIPORE",
    "lat": 2.9567,
    "lon": -51.4219,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14527000",
    "nome": "PONTE DO TACUTU",
    "lat": 3.5675,
    "lon": -59.8883,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66120000",
    "nome": "PORTO CONCEIÇÃO",
    "lat": -17.1433,
    "lon": -57.3594,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18950003",
    "nome": "PORTO DE MOZ",
    "lat": -1.7531,
    "lon": -52.24,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22220000",
    "nome": "PORTO JERÔNIMO - FAZ. PIRACICABA",
    "lat": -11.7586,
    "lon": -47.8367,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "22900000",
    "nome": "PORTO REAL",
    "lat": -9.3069,
    "lon": -47.9292,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15400000",
    "nome": "PORTO VELHO",
    "lat": -8.7483,
    "lon": -63.9169,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18415000",
    "nome": "POUSADA MATRINXA",
    "lat": -13.5692,
    "lon": -53.0761,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66710000",
    "nome": "POUSADA TAIAMÃ  (Ex-Porto Jofre)",
    "lat": -17.3656,
    "lon": -56.7747,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15200000",
    "nome": "PRINCIPE DA BEIRA",
    "lat": -12.4267,
    "lon": -64.4253,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26730000",
    "nome": "PROJETO RIO FORMOSO",
    "lat": -11.8392,
    "lon": -49.7711,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15490000",
    "nome": "PROSPERIDADE (EX. FOZ DO JAMARI)",
    "lat": -8.4522,
    "lon": -63.5178,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18422000",
    "nome": "RIACHO DE DEUS",
    "lat": -11.1272,
    "lon": -54.4767,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13600002",
    "nome": "RIO BRANCO",
    "lat": -9.975,
    "lon": -67.8008,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18435000",
    "nome": "RIO COMANDANTE FONTOURA",
    "lat": -10.5547,
    "lon": -52.1833,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "27110000",
    "nome": "RIO DO COCO",
    "lat": -9.5003,
    "lon": -49.9831,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26150000",
    "nome": "RIO PINDAÍBA",
    "lat": -14.5997,
    "lon": -51.7197,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13578000",
    "nome": "RIO ROLA (Ramal do Barro Alto)",
    "lat": -10.0567,
    "lon": -67.9639,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18428000",
    "nome": "SANTA CRUZ DO SUIA",
    "lat": -12.6219,
    "lon": -52.0589,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15550000",
    "nome": "SANTA ISABEL",
    "lat": -8.7986,
    "lon": -63.7106,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14790000",
    "nome": "SANTA MARIA DO BOIAÇU",
    "lat": -0.5053,
    "lon": -61.7864,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17900000",
    "nome": "SANTARÉM",
    "lat": -2.4136,
    "lon": -54.7378,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66270000",
    "nome": "SANTO ANTÔNIO DO LEVERGER",
    "lat": -15.8697,
    "lon": -56.0761,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "34170000",
    "nome": "SÃO FÉLIX DE BALSAS",
    "lat": -7.0819,
    "lon": -44.8139,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26350000",
    "nome": "SÃO FÉLIX DO ARAGUAIA",
    "lat": -11.6181,
    "lon": -50.6625,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "66650000",
    "nome": "SÃO JOSÉ DO PIQUIRI",
    "lat": -17.2917,
    "lon": -56.3872,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "33286000",
    "nome": "SÃO LUIZ GONZAGA",
    "lat": -4.37,
    "lon": -44.6758,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13310000",
    "nome": "SENA MADUREIRA",
    "lat": -9.0678,
    "lon": -68.6531,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13410000",
    "nome": "SERINGAL DA CARIDADE",
    "lat": -9.0439,
    "lon": -68.5772,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13300000",
    "nome": "SERINGAL SÃO JOSÉ",
    "lat": -9.3744,
    "lon": -68.7239,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30300000",
    "nome": "SERRA DO NAVIO",
    "lat": 0.9006,
    "lon": -52.0156,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14420000",
    "nome": "SERRINHA",
    "lat": -0.4819,
    "lon": -64.8289,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "15559000",
    "nome": "SÍTIO BELA VISTA",
    "lat": -11.6525,
    "lon": -61.215,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18938001",
    "nome": "SOUZEL",
    "lat": -2.6219,
    "lon": -51.9544,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "10100000",
    "nome": "TABATINGA",
    "lat": -4.2347,
    "lon": -69.9447,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16661000",
    "nome": "TABULEIRO - REBIO TROMBETAS",
    "lat": -1.3706,
    "lon": -56.8519,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14280001",
    "nome": "TARAQUÁ",
    "lat": 0.1303,
    "lon": -68.5386,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "30075000",
    "nome": "TARTARUGAL GRANDE",
    "lat": 1.3978,
    "lon": -50.925,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "24500000",
    "nome": "TESOURO",
    "lat": -16.0778,
    "lon": -53.5481,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "17420000",
    "nome": "TRÊS MARIAS",
    "lat": -7.6147,
    "lon": -57.9503,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "23100000",
    "nome": "TUPIRATINS",
    "lat": -8.3917,
    "lon": -48.1114,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "14530000",
    "nome": "VILA SURUMU",
    "lat": 4.1961,
    "lon": -60.7939,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "16800000",
    "nome": "VISTA ALEGRE CONJUNTO 1",
    "lat": -1.1014,
    "lon": -56.04,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "18936000",
    "nome": "VITÓRIA DO XINGU",
    "lat": -2.8819,
    "lon": -52.0114,
-   "vazao": false
+   "vazao": false,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "28300000",
    "nome": "XAMBIOÁ",
    "lat": -6.4097,
    "lon": -48.5422,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "13550000",
    "nome": "XAPURI",
    "lat": -10.6511,
    "lon": -68.5075,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
   },
   {
    "cod": "26100000",
    "nome": "XAVANTINA",
    "lat": -14.6725,
    "lon": -52.355,
-   "vazao": true
+   "vazao": true,
+   "op": "SGB-CPRM"
+  },
+  {
+   "cod": "15630000",
+   "nome": "HUMAITÁ",
+   "lat": -7.5028,
+   "lon": -63.0183,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12850000",
+   "nome": "ACANAUI",
+   "lat": -1.8211,
+   "lon": -66.6092,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "13439000",
+   "nome": "ALDEIA DOS PATOS",
+   "lat": -10.9261,
+   "lon": -69.9233,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17381000",
+   "nome": "ALTA FLORESTA - RIO TELES PIRES",
+   "lat": -9.6392,
+   "lon": -56.0144,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "28280000",
+   "nome": "ARAGUANÃ",
+   "lat": -6.56557,
+   "lon": -48.63553,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27550000",
+   "nome": "ARAPOEMA",
+   "lat": -7.6144,
+   "lon": -49.0453,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66073000",
+   "nome": "ARAPUTANGA",
+   "lat": -15.4669,
+   "lon": -58.3564,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "21758000",
+   "nome": "AURORA DO TOCANTINS",
+   "lat": -12.6464,
+   "lon": -46.6572,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66223701",
+   "nome": "BALNEÁRIO SOBERBO - RIO COXIPÓ-AÇU",
+   "lat": -15.195,
+   "lon": -56.0003,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "66302500",
+   "nome": "BARÃO DE MELGAÇO - BAIA",
+   "lat": -16.3375,
+   "lon": -55.8947,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22420000",
+   "nome": "BARRA CÓRREGO BREJO COMPRIDO",
+   "lat": -10.18,
+   "lon": -48.3544,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "21891000",
+   "nome": "BARRA DE PALMA",
+   "lat": -12.6033,
+   "lon": -47.8614,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66008500",
+   "nome": "BARRA DO BUGRES - RIO BUGRES",
+   "lat": -14.9867,
+   "lon": -57.1158,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "27530000",
+   "nome": "BERNARDO SAYÃO",
+   "lat": -7.8758,
+   "lon": -48.8775,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66140100",
+   "nome": "BOM JARDIM",
+   "lat": -14.5767,
+   "lon": -55.8425,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "15627400",
+   "nome": "CALAMA",
+   "lat": -8.0806,
+   "lon": -62.8781,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "17091546",
+   "nome": "CAMPO NOVO PARECIS - RIO VERDE",
+   "lat": -13.7072,
+   "lon": -57.9958,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "25625000",
+   "nome": "COCALINHO - RIO ARAGUAIA",
+   "lat": -14.3978,
+   "lon": -50.9947,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26012750",
+   "nome": "COCALINHO - RIO CRISTALINO",
+   "lat": -14.085,
+   "lon": -51.2939,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "12100000",
+   "nome": "COLOCAÇÃO CAXIAS NOVO",
+   "lat": -4.6661,
+   "lon": -68.1483,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "17091190",
+   "nome": "COMODORO - RIO JUÍNA",
+   "lat": -13.7942,
+   "lon": -59.4556,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "66258003",
+   "nome": "COXIPÓ DO OURO",
+   "lat": -15.4481,
+   "lon": -55.9858,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "13885000",
+   "nome": "CRISTO",
+   "lat": -7.4644,
+   "lon": -64.2433,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12500000",
+   "nome": "CRUZEIRO DO SUL",
+   "lat": -7.6333,
+   "lon": -72.6603,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "66375690",
+   "nome": "DOM AQUINO",
+   "lat": -15.8322,
+   "lon": -54.9578,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26721000",
+   "nome": "DORILÂNDIA",
+   "lat": -12.2125,
+   "lon": -49.6628,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "15627300",
+   "nome": "ESPÍRITO SANTO",
+   "lat": -8.1925,
+   "lon": -63.1333,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "10500000",
+   "nome": "ESTIRÃO DO REPOUSO",
+   "lat": -4.3408,
+   "lon": -70.9056,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "17098500",
+   "nome": "FAZENDA CACHOEIRA GRANDE",
+   "lat": -14.2169,
+   "lon": -56.0358,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17277000",
+   "nome": "FAZENDA CERON",
+   "lat": -12.3101,
+   "lon": -55.5677,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17099500",
+   "nome": "FAZENDA MASSAPÉ",
+   "lat": -13.5032,
+   "lon": -56.6183,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26310000",
+   "nome": "FAZENDA RANCHO ALTO",
+   "lat": -12.3317,
+   "lon": -51.3331,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26130000",
+   "nome": "FAZENDA RIO CORRENTES",
+   "lat": -15.0892,
+   "lon": -52.0492,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17091450",
+   "nome": "FAZENDA RODIAL",
+   "lat": -13.5454,
+   "lon": -58.6376,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "66056000",
+   "nome": "FAZENDA SANTA RITA DO SEPOTUBA",
+   "lat": -15.2307,
+   "lon": -57.6982,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26070000",
+   "nome": "FAZENDA SÃO JOÃO",
+   "lat": -12.9185,
+   "lon": -51.33,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26034600",
+   "nome": "FAZENDA SUSPIRO III / Rio Cumbuco - P. do Leste",
+   "lat": -15.2231,
+   "lon": -53.9667,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "15860000",
+   "nome": "FAZENDA VISTA ALEGRE",
+   "lat": -4.8972,
+   "lon": -60.0253,
+   "vazao": false,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "13650000",
+   "nome": "FLORIANO PEIXOTO",
+   "lat": -9.0667,
+   "lon": -67.3969,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12351000",
+   "nome": "FONTE BOA",
+   "lat": -2.4914,
+   "lon": -66.0617,
+   "vazao": false,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "26792000",
+   "nome": "FOZ RIO DUERÉ",
+   "lat": -11.0067,
+   "lon": -49.7703,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26799000",
+   "nome": "FOZ RIO FORMOSO",
+   "lat": -10.5833,
+   "lon": -49.9297,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26796000",
+   "nome": "FOZ RIO XAVANTE",
+   "lat": -11.40129,
+   "lon": -49.656,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "18415300",
+   "nome": "GAÚCHA DO NORTE - RIO CULUENE",
+   "lat": -13.3947,
+   "lon": -53.0419,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22160000",
+   "nome": "GURUPI",
+   "lat": -11.8517,
+   "lon": -48.8458,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66071399",
+   "nome": "INDIAVAÍ",
+   "lat": -15.4836,
+   "lon": -58.5983,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "12520000",
+   "nome": "IPIXUNA",
+   "lat": -7.0556,
+   "lon": -71.6892,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "66429105",
+   "nome": "JARUDORE",
+   "lat": -16.2133,
+   "lon": -54.3008,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17120200",
+   "nome": "JUARA - RIO ARINOS",
+   "lat": -11.2239,
+   "lon": -57.6019,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26795140",
+   "nome": "JUSANTE PONTE RIO PIUM",
+   "lat": -10.3903,
+   "lon": -49.8167,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26751000",
+   "nome": "JUSANTE PROJETO RIO FORMOSO",
+   "lat": -11.655,
+   "lon": -49.6228,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "13870000",
+   "nome": "LÁBREA",
+   "lat": -7.2581,
+   "lon": -64.7975,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "10910000",
+   "nome": "LADÁRIO - JUSANTE",
+   "lat": -4.5836,
+   "lon": -70.2644,
+   "vazao": false,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "26795110",
+   "nome": "MONTANTE PONTE RIO PIUM",
+   "lat": -10.4739,
+   "lon": -49.4931,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28150040",
+   "nome": "MURICILÂNDIA",
+   "lat": -7.145,
+   "lon": -48.6136,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "10200000",
+   "nome": "PALMEIRAS DO JAVARI",
+   "lat": -5.1389,
+   "lon": -72.8136,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "66110010",
+   "nome": "POCONÉ - RIO BENTO GOMES",
+   "lat": -16.3372,
+   "lon": -56.56,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "66340500",
+   "nome": "POCONÉ - RIO CUIABÁ",
+   "lat": -16.5136,
+   "lon": -56.3756,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22735056",
+   "nome": "PONTE ALTA",
+   "lat": -10.7406,
+   "lon": -47.5361,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "17092960",
+   "nome": "PONTE ANTIGA BR-364",
+   "lat": -12.7997,
+   "lon": -58.3983,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "12590000",
+   "nome": "PONTE DE TARAUACÁ",
+   "lat": -8.1519,
+   "lon": -70.7456,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12510500",
+   "nome": "PONTE DO RIO LIBERDADE",
+   "lat": -7.7994,
+   "lon": -72.0211,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "26795120",
+   "nome": "PONTE DO RIO PIUM",
+   "lat": -10.5033,
+   "lon": -49.5947,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27600010",
+   "nome": "PONTE RIO BARREIRAS",
+   "lat": -8.2831,
+   "lon": -49.1406,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26790001",
+   "nome": "PONTE RIO DUERÉ",
+   "lat": -11.3231,
+   "lon": -49.2592,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28200000",
+   "nome": "PONTE RIO LONTRA",
+   "lat": -7.2075,
+   "lon": -48.2958,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26795800",
+   "nome": "PONTE RIO XAVANTE",
+   "lat": -11.68955,
+   "lon": -49.49164,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "13610001",
+   "nome": "PORTO ACRE",
+   "lat": -9.5819,
+   "lon": -67.5281,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "26500000",
+   "nome": "PORTO ALEGRE DO NORTE",
+   "lat": -10.8733,
+   "lon": -51.6292,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22189995",
+   "nome": "PORTO ALEGRE DO TOCANTINS",
+   "lat": -11.6108,
+   "lon": -47.0456,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66072005",
+   "nome": "PORTO ESPERIDIÃO",
+   "lat": -15.8508,
+   "lon": -58.4583,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "15490600",
+   "nome": "PORTO VELHO",
+   "lat": -8.5844,
+   "lon": -63.7331,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "26720001",
+   "nome": "PRAIA ALTA",
+   "lat": -12.4178,
+   "lon": -49.5892,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "18426200",
+   "nome": "QUERÊNCIA - RIO SUIÁ MIÇÚ",
+   "lat": -13.1569,
+   "lon": -52.1497,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "66064500",
+   "nome": "RESERVA DO CABAÇAL",
+   "lat": -15.1297,
+   "lon": -58.3772,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22351500",
+   "nome": "RIBEIRÃO TAQUARUÇU GRANDE - PALMAS",
+   "lat": -10.2881,
+   "lon": -48.2797,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26709200",
+   "nome": "RIO ÁGUA FRIA - DORILÂNDIA",
+   "lat": -12.1964,
+   "lon": -50.0344,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22741000",
+   "nome": "RIO BALSAS",
+   "lat": -9.9919,
+   "lon": -47.8197,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27400000",
+   "nome": "RIO BANANAL - GOIANORTE",
+   "lat": -8.7481,
+   "lon": -48.9081,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27300900",
+   "nome": "RIO CAIAPÓ - FAZ GRUPO AGROPAULO",
+   "lat": -9.1261,
+   "lon": -49.7431,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28318000",
+   "nome": "RIO CORDA - RIACHINHO",
+   "lat": -6.5178,
+   "lon": -48.1514,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28321000",
+   "nome": "RIO CORDA - XAMBIOÁ",
+   "lat": -6.3567,
+   "lon": -48.3519,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66259650",
+   "nome": "RIO COXIPÓ - AABB",
+   "lat": -15.6175,
+   "lon": -56.0511,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22170000",
+   "nome": "RIO CRIXÁS",
+   "lat": -11.1306,
+   "lon": -48.8003,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22241000",
+   "nome": "RIO DO PEIXE - ALMAS",
+   "lat": -11.6667,
+   "lon": -47.4392,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26798000",
+   "nome": "RIO FORMOSO",
+   "lat": -11.3756,
+   "lon": -49.6833,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26798100",
+   "nome": "RIO FORMOSO LOROTI",
+   "lat": -11.2033,
+   "lon": -49.7572,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28179970",
+   "nome": "RIO LONTRA MONTANTE DE ARAGUAINA",
+   "lat": -7.2708,
+   "lon": -48.1606,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22186000",
+   "nome": "RIO MANUEL ALVES - DIANÓPOLIS",
+   "lat": -11.8253,
+   "lon": -47.1864,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "23219600",
+   "nome": "RIO MANUEL ALVES GRANDE - CAMPOS LINDOS",
+   "lat": -7.9528,
+   "lon": -46.8097,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "23150010",
+   "nome": "RIO MANUEL ALVES PEQUENO - ITACAJÁ",
+   "lat": -8.3917,
+   "lon": -47.7661,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22670000",
+   "nome": "RIO NOVO",
+   "lat": -10.5486,
+   "lon": -46.7589,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22850100",
+   "nome": "RIO PERDIDA",
+   "lat": -9.3397,
+   "lon": -47.8722,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27380750",
+   "nome": "RIO PIRANHAS - ARAGUACEMA",
+   "lat": -8.81,
+   "lon": -49.4239,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "27380120",
+   "nome": "RIO PIRANHAS - DOIS IRMÃOS",
+   "lat": -9.1517,
+   "lon": -49.3931,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28840009",
+   "nome": "RIO PIRANHAS - SÃO BENTO DO TOCANTINS",
+   "lat": -6.0442,
+   "lon": -48.1983,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22511000",
+   "nome": "RIO PROVIDÊNCIA",
+   "lat": -9.5292,
+   "lon": -48.6069,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26840000",
+   "nome": "RIO RIOZINHO",
+   "lat": -10.325,
+   "lon": -49.6011,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "28844995",
+   "nome": "RIO SÃO MARTINHO",
+   "lat": -5.78905,
+   "lon": -48.17809,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "22751000",
+   "nome": "RIO SONO - APARECIDA DO RIO NEGRO",
+   "lat": -9.8092,
+   "lon": -47.885,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "23800495",
+   "nome": "RIO TOCANTINS - SÃO SEBASTIÃO DO TO",
+   "lat": -5.2544,
+   "lon": -48.1983,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26795700",
+   "nome": "RIO URUBU - FAZENDA FORTALEZA",
+   "lat": -10.8636,
+   "lon": -49.6756,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26795100",
+   "nome": "RIO URUBU - FAZENDA SÃO BENTO",
+   "lat": -10.7825,
+   "lon": -49.4253,
+   "vazao": true,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26708600",
+   "nome": "RIO VERDE - JAVAÉS",
+   "lat": -12.3975,
+   "lon": -50.1444,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "26708000",
+   "nome": "RIO VERDE - RIOZINHO",
+   "lat": -12.6894,
+   "lon": -50.2969,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "15910000",
+   "nome": "SANTARÉM SUCUNDURI",
+   "lat": -6.7956,
+   "lon": -59.0422,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12700000",
+   "nome": "SANTOS DUMONT",
+   "lat": -6.4403,
+   "lon": -68.2461,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "15490200",
+   "nome": "SÃO CARLOS",
+   "lat": -8.4258,
+   "lon": -63.4836,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "11400000",
+   "nome": "SÃO PAULO DE OLIVENÇA",
+   "lat": -3.4569,
+   "lon": -68.9119,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "66380000",
+   "nome": "SÃO PEDRO DA CIPA",
+   "lat": -15.9981,
+   "lon": -54.9217,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "22140000",
+   "nome": "SÃO VALÉRIO",
+   "lat": -11.64,
+   "lon": -48.3911,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "17091508",
+   "nome": "SAPEZAL - RIO PAPAGAIO",
+   "lat": -13.5783,
+   "lon": -58.4069,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "13100000",
+   "nome": "SERINGAL MOREIRA",
+   "lat": -5.1092,
+   "lon": -63.9847,
+   "vazao": false,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "24710000",
+   "nome": "SÍTIO ADRIANA",
+   "lat": -16.1031,
+   "lon": -52.4833,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "17271100",
+   "nome": "SORRISO",
+   "lat": -12.535,
+   "lon": -55.7072,
+   "vazao": true,
+   "op": "SEMA"
+  },
+  {
+   "cod": "21768950",
+   "nome": "TAGUATINGA - RIBEIRÃO DO ABREU",
+   "lat": -12.4125,
+   "lon": -46.4069,
+   "vazao": false,
+   "op": "SEMARH"
+  },
+  {
+   "cod": "66022080",
+   "nome": "TANGARÁ - SEPOTUBA",
+   "lat": -14.5089,
+   "lon": -57.6128,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "12900001",
+   "nome": "TEFÉ - MISSÕES",
+   "lat": -3.3758,
+   "lon": -64.6547,
+   "vazao": false,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "12370000",
+   "nome": "THAUMATURGO",
+   "lat": -8.9458,
+   "lon": -72.7847,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "13710001",
+   "nome": "VALPARAÍSO - MONTANTE",
+   "lat": -8.6533,
+   "lon": -67.375,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "15120002",
+   "nome": "VILA BELA ST.TRINDADE",
+   "lat": -15.0261,
+   "lon": -59.9567,
+   "vazao": false,
+   "op": "SEMA"
+  },
+  {
+   "cod": "12845000",
+   "nome": "VILA BITTENCOURT",
+   "lat": -1.3947,
+   "lon": -69.4283,
+   "vazao": true,
+   "op": "ÁGUA E SOLO"
+  },
+  {
+   "cod": "29130000",
+   "nome": "CABANA DO SOL",
+   "lat": -5.3558,
+   "lon": -49.1639,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29745150",
+   "nome": "CAMETÁ",
+   "lat": -2.2467,
+   "lon": -49.4961,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29209000",
+   "nome": "COMUNIDADE TAURI",
+   "lat": -5.0136,
+   "lon": -49.3322,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15700050",
+   "nome": "CURUÇÁ",
+   "lat": -6.0353,
+   "lon": -61.6922,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29745020",
+   "nome": "ITUQUARA",
+   "lat": -3.0331,
+   "lon": -49.6461,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15850060",
+   "nome": "MACACO  PREGO",
+   "lat": -5.4508,
+   "lon": -60.7272,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15627360",
+   "nome": "MOANENSE",
+   "lat": -6.9958,
+   "lon": -62.8183,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29745050",
+   "nome": "MOCAJUBA",
+   "lat": -2.5775,
+   "lon": -49.51,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29744900",
+   "nome": "NOVA JUTAÍ",
+   "lat": -3.4189,
+   "lon": -49.5911,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15850050",
+   "nome": "NOVO ARIPUANÃ",
+   "lat": -5.0803,
+   "lon": -60.3233,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15627320",
+   "nome": "SÃO RAFAEL",
+   "lat": -6.5136,
+   "lon": -62.3264,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "15960060",
+   "nome": "URUCURITUBA",
+   "lat": -3.5489,
+   "lon": -58.9269,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29745100",
+   "nome": "VILA DO CARMO",
+   "lat": -2.4497,
+   "lon": -49.4417,
+   "vazao": false,
+   "op": "DNIT"
+  },
+  {
+   "cod": "29359000",
+   "nome": "VOLTA REDONDA",
+   "lat": -4.8953,
+   "lon": -49.4081,
+   "vazao": false,
+   "op": "DNIT"
   }
  ]
 }
