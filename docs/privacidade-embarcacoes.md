@@ -89,12 +89,31 @@ desatualizados.
 
 Duas coisas que dependem de uma decisão humana:
 
-1. **Token pessoal da openwaters** — gratuito, um clique, nunca expira. Eleva o
-   limite de área de 100 para 400 graus² e passa a contar por token em vez de
-   por endereço IP (o runner do GitHub Actions tem IP compartilhado).
-   Gere em <https://openwatersio.github.io/aiscast/token.html> e grave como
-   secret `OPENWATERS_TOKEN` neste repositório. **O pipeline já lê a variável e
-   funciona sem ela.**
+1. ~~**Token pessoal da openwaters**~~ — **feito em 21/09/2026.** Está no secret
+   `OPENWATERS_TOKEN` deste repositório, com nível `personal`: 400 graus² de
+   área (contra 100 do anônimo), 50 mensagens por segundo e limites contados
+   por token em vez de por endereço IP — o que importa porque o runner do
+   GitHub Actions tem IP compartilhado.
+
+   Não há formulário nem conta: o token sai de um POST em `/v1/keys` com uma
+   chave pública Ed25519, e não expira (`exp: 0`).
+
+   ```sh
+   node -e '
+     const { generateKeyPairSync } = require("node:crypto");
+     const { publicKey } = generateKeyPairSync("ed25519");
+     const der = publicKey.export({ type: "spki", format: "der" });
+     const pubkey = der.subarray(der.length - 32).toString("base64url");
+     fetch("https://ais.openwaters.io/v1/keys", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ pubkey }),
+     }).then((r) => r.json()).then((j) => console.log(j.token));
+   '
+   ```
+
+   Para revogar, escreva para hello@openwaters.io. Gerar outro token é só
+   repetir o comando — eles não são vinculados a nenhuma identidade.
 
 2. **E-mail para hello@openwaters.io** — o `docs/limits.md` deles pede esse
    contato em caso de dúvida de tier. Rascunho:

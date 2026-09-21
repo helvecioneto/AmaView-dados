@@ -8,9 +8,15 @@
  * responde `Access-Control-Allow-Origin: *` e o WebSocket aceita `subscribe`
  * sem token, anunciando `role: anonymous` e o teto de 100 graus² de área.
  *
- * `OPENWATERS_TOKEN` é opcional e eleva o teto para 400 graus² (token pessoal,
- * gratuito, de um clique, em openwatersio.github.io/aiscast/token.html). O
- * ciclo funciona sem ele — é só uma folga maior.
+ * `OPENWATERS_TOKEN` é opcional e eleva o nível de anônimo para **pessoal**:
+ * área de 100 para 400 graus², 20 para 50 mensagens por segundo, e — o que de
+ * fato importa aqui — os limites passam a contar **por token** em vez de por
+ * endereço IP. O runner do GitHub Actions tem IP compartilhado com muita
+ * gente, então sem token as conexões disputam a mesma cota com estranhos.
+ *
+ * O token é gerado por API, sem conta e sem formulário: basta um par Ed25519 e
+ * um POST em `/v1/keys` com a chave pública em base64url. Ele não expira
+ * (`exp: 0`). O ciclo funciona sem ele.
  */
 
 const BASE = process.env.AIS_BASE || 'https://ais.openwaters.io';
@@ -117,7 +123,14 @@ export async function colherEstaticos({ msMax = 90_000, msOcioso = 20_000 } = {}
   await new Promise((resolve) => {
     let ws;
     try {
-      ws = new WebSocket(`${BASE}/v1/stream`);
+      // O token vai no cabeçalho `Authorization`, e não no frame de
+      // subscrição: mandá-lo dentro do JSON derruba a conexão (medido).
+      //
+      // `headers` é uma extensão do WebSocket do Node (undici) que o padrão
+      // do navegador não tem — e não precisa ter, porque este arquivo só roda
+      // no runner. Confirmado: com o cabeçalho, o `welcome` anuncia
+      // `role=personal` e `area=400`; sem ele, `anonymous` e `area=100`.
+      ws = new WebSocket(`${BASE}/v1/stream`, TOKEN ? { headers: { Authorization: `Bearer ${TOKEN}` } } : undefined);
     } catch (e) {
       erro = e.message;
       resolve();
@@ -141,9 +154,7 @@ export async function colherEstaticos({ msMax = 90_000, msOcioso = 20_000 } = {}
     }, 2000);
 
     ws.onopen = () => {
-      const frame = { type: 'subscribe', bbox: CAIXAS.map((c) => c.bbox), snapshot: true };
-      if (TOKEN) frame.token = TOKEN;
-      ws.send(JSON.stringify(frame));
+      ws.send(JSON.stringify({ type: 'subscribe', bbox: CAIXAS.map((c) => c.bbox), snapshot: true }));
     };
     ws.onerror = (e) => {
       erro = e?.message ?? 'falha no WebSocket';
