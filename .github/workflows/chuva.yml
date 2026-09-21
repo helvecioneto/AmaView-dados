@@ -108,10 +108,10 @@ jobs:
       - name: Buscar o nível dos rios (ANA)
         id: rios
         continue-on-error: true
-        # O script tem prazo próprio de 4 min na coleta; isto é o teto do
+        # O script tem prazo próprio de 5 min na coleta; isto é o teto do
         # que sobra (releitura, SACE, escrita). Estourar conta como falha e o
         # preservar restaura a pasta do ar.
-        timeout-minutes: 6
+        timeout-minutes: 7
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/rios.mjs

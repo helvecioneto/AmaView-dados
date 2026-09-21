@@ -52,12 +52,13 @@ const FORCAR = process.env.FORCAR_RIOS === '1';
 /**
  * Prazo global da coleta.
  *
- * O normal medido é 1–4 min para 154 estações. Sem prazo, uma ANA lenta
+ * Medido: 2–4 min para 154 estações; com 290, a ANA responde a ~2,5 s por
+ * requisição e 4 min cortavam ~45. Sem prazo, uma ANA lenta
  * (timeout em série) levaria o passo a até duas horas — e cada 15 min a mais
  * cancela um ciclo da chuva no grupo de concorrência do Pages. Esgotado o
  * prazo, o que não foi buscado herda a publicação anterior (ver abaixo).
  */
-const PRAZO_MS = Number(process.env.RIOS_PRAZO_MS) || 4 * 60 * 1000;
+const PRAZO_MS = Number(process.env.RIOS_PRAZO_MS) || 5 * 60 * 1000;
 
 /** Avisa o workflow se o passo trabalhou ou pulou (ver `chuva.yml`). */
 async function anunciar(rodou) {
@@ -105,8 +106,16 @@ async function main() {
   const cancelar = new AbortController();
   const relogio = setTimeout(() => cancelar.abort(), Math.max(0, prazo - Date.now()));
 
+  // Ordem da fila: PRIMEIRO quem não está na publicação anterior ou está mais
+  // desatualizado nela. Com o prazo global, a lista em ordem fixa cortava
+  // sempre as mesmas estações do fim — que nunca seriam lidas. Assim, o que
+  // ficou de fora numa rodada vai para a frente na seguinte, e a cobertura
+  // converge em poucos ciclos.
+  const idadeAnterior = new Map((atualAnterior?.rios ?? []).map((r) => [r.c, Number(r.ms) || 0]));
+  const fila = [...estacoes].sort((a, b) => (idadeAnterior.get(a.cod) ?? 0) - (idadeAnterior.get(b.cod) ?? 0));
+
   const { ok, erros } = await emLotes(
-    estacoes,
+    fila,
     async (e) => {
       const l = await leituras(e.cod, inicioBusca, fimBusca, { sinal: cancelar.signal });
       // Zero linhas numa janela de dois dias não é "rio sem dado": é a ANA
@@ -216,9 +225,9 @@ async function main() {
   await rm(temp, { recursive: true, force: true });
   await mkdir(temp, { recursive: true });
 
-  try {
   const gerado = new Date().toISOString();
   const comum = { gerado, fonte: ATRIBUICAO, portal: 'https://www.snirh.gov.br/hidroweb/' };
+  try {
 
   await escrever(temp, 'estacoes.json', {
     ...comum,
