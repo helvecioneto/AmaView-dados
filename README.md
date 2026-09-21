@@ -143,8 +143,24 @@ para sondar se vale a pena rebaixar a série.
 
 ## Como funciona
 
+Dois workflows, com cadências diferentes porque as fontes são diferentes:
+
+| Workflow | Cadência | Por quê |
+|---|---|---|
+| `chuva.yml` | a cada 15 min | o CEMADEN publica de 10 em 10 min |
+| `sondagem.yml` | 4×/dia | o balão sobe 2×/dia e o dado aparece ~7 h depois |
+
+Buscar as sondagens a cada 15 min eram **~8.000 requisições diárias** a um
+servidor acadêmico sem SLA para um dado que muda duas vezes. Agora são ~340.
+
+Os dois publicam no MESMO site do Pages, e cada publicação substitui o site
+inteiro — então cada um restaura a pasta do outro (`preservar.mjs`) antes de
+publicar, e ambos usam o mesmo grupo de concorrência para nunca rodarem juntos.
+Se a restauração falhar, o workflow falha: publicar sem metade dos dados é pior
+que não publicar.
+
 ```
-cron */10
+cron
    └─ node scripts/build.mjs
         ├─ lê a publicação ANTERIOR pela URL pública (é o estado entre ciclos)
         ├─ com token  → PED /pcds-cadastro + /pcds/dados_rede, 1 par por UF

@@ -1,0 +1,74 @@
+name: Sondagem — radiossonda
+
+# Quatro vezes por dia, e não a cada 15 minutos.
+#
+# O balão sobe 2× por dia (00Z e 12Z), e a sondagem fica disponível no Wyoming
+# umas 7 h depois — medido: a das 12Z apareceu às 19:00 UTC. Buscar de 15 em 15
+# minutos eram ~8.000 requisições diárias a um servidor acadêmico sem SLA para
+# um dado que muda duas vezes. Aqui são ~340.
+#
+# Dois horários por sondagem: o primeiro pega o caso normal, o segundo cobre
+# atraso na publicação. Minutos deslocados, pelo mesmo motivo do outro workflow.
+on:
+  schedule:
+    - cron: '22 7,10,19,22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Mesmo grupo do workflow da chuva: os dois publicam o site inteiro, e não
+# podem se sobrepor.
+concurrency:
+  group: publicar-pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    name: Buscar e publicar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Testes
+        run: node --test scripts/wyoming.test.mjs
+
+      - name: Buscar as sondagens
+        run: node scripts/sondagem.mjs
+
+      - name: Conferir os perfis
+        run: |
+          set -e
+          for f in site/sondagem/estacoes.json site/sondagem/perfis.json site/sondagem/manifest.json; do
+            test -s "$f" || { echo "::error::$f vazio ou ausente"; exit 1; }
+          done
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("site/sondagem/perfis.json", "utf8"));
+            if (!Array.isArray(j.perfis) || j.perfis.length === 0) throw new Error("sem perfis");
+            const comDado = j.perfis.filter((p) => p.ms && p.niveis.length).length;
+            // A rede falha de verdade, mas zero estações significa que quebramos algo.
+            if (comDado === 0) throw new Error("nenhuma estação com sondagem — formato mudou?");
+            console.log(`${comDado} de ${j.perfis.length} perfis com dado`);
+          '
+
+      # Este ciclo não reconstrói a chuva, que é o produto principal: publicar
+      # sem ela a apagaria do ar por até 15 minutos.
+      - name: Preservar a chuva
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs cemaden
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

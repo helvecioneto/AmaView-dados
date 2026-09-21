@@ -1,0 +1,81 @@
+name: Chuva — CEMADEN
+
+# A cada 15 minutos, em minutos DESLOCADOS dos :00/:15/:30/:45.
+#
+# O `*/10` original não disparou uma única vez em 1h42: o GitHub descarta
+# agendamentos de alta frequência sob carga, e os minutos redondos são os mais
+# concorridos, porque é onde quase todo mundo agenda.
+on:
+  schedule:
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Grupo COMPARTILHADO com o workflow das sondagens.
+#
+# Os dois publicam no mesmo site do Pages, e cada publicação substitui o site
+# inteiro. Se rodassem ao mesmo tempo, um leria o estado do ar enquanto o outro
+# ainda não tinha publicado o dele, e o segundo a terminar apagaria o primeiro.
+concurrency:
+  group: publicar-pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    name: Buscar e publicar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Testes
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs
+
+      - name: Buscar o CEMADEN e montar a grade
+        env:
+          # O JWT da PED é de vida curta e o `exp` não é confiável, então o que
+          # fica guardado são as credenciais: cada ciclo pede um token novo.
+          CEMADEN_EMAIL: ${{ secrets.CEMADEN_EMAIL }}
+          CEMADEN_SENHA: ${{ secrets.CEMADEN_SENHA }}
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/build.mjs
+
+      # Se o passo acima falhar, o job para aqui e NADA é publicado: a versão
+      # anterior continua no ar.
+      - name: Conferir a grade
+        run: |
+          set -e
+          for f in site/cemaden/estacoes.json site/cemaden/serie.json site/cemaden/manifest.json; do
+            test -s "$f" || { echo "::error::$f vazio ou ausente"; exit 1; }
+          done
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("site/cemaden/serie.json", "utf8"));
+            if (!Array.isArray(j.v) || j.v.length === 0) throw new Error("grade vazia");
+            if (j.v.some((l) => l.length !== j.slots)) throw new Error("linha com tamanho errado");
+            console.log(`grade validada: ${j.v.length} x ${j.slots}`);
+          '
+
+      # Este ciclo não reconstrói as sondagens, e publicar sem elas as apagaria
+      # do ar até o outro workflow rodar — o que pode levar horas.
+      - name: Preservar as sondagens
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs sondagem
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
