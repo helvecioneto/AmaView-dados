@@ -215,6 +215,53 @@ Sem os secrets o workflow roda no modo aberto, sem falhar.
 `CEMADEN_TOKEN` ainda é aceito para execução manual e depuração, mas o script
 avisa quando ele está perto de expirar e cai na fonte aberta depois disso.
 
+### Cadência de verdade (opcional)
+
+**O agendamento do GitHub Actions não é confiável.** Medido neste repositório:
+pedindo um ciclo a cada 15 minutos, o intervalo real entre disparos foi de
+**135 minutos em média** (mediana 153). Um pedido anterior de 10 minutos não
+disparou uma única vez em 1h42. Isso é comportamento conhecido — o GitHub
+descarta agendamentos sob carga, sem aviso e sem repor.
+
+Não há conserto dentro do GitHub:
+
+- **mais linhas de `cron`** ajudam na margem (já são duas), mas continuam
+  sujeitas ao mesmo descarte;
+- um **workflow que dorme** e se redispara funcionaria, mas queimaria ~22
+  horas de runner por dia só esperando. É infraestrutura compartilhada e
+  gratuita: gastar isso para dormir é o mesmo desperdício que evitamos ao
+  parar de bater no servidor do Wyoming de 15 em 15 minutos.
+
+O conserto é chamar o `workflow_dispatch` **de fora**:
+
+```
+POST https://api.github.com/repos/helvecioneto/AmaView-dados/actions/workflows/chuva.yml/dispatches
+Authorization: Bearer <TOKEN>
+Accept: application/vnd.github+json
+Content-Type: application/json
+
+{"ref":"main"}
+```
+
+Resposta `204` significa aceito. Testado: o ciclo começa em segundos.
+
+Para montar isso:
+
+1. Crie um **fine-grained PAT** em <https://github.com/settings/tokens?type=beta>
+   com acesso só a este repositório e a permissão **Actions: Read and write**.
+   Nada além disso — esse token só serve para apertar este botão.
+2. Cadastre a chamada num agendador gratuito que rode a cada 15 min
+   (<https://cron-job.org>, um Cron Trigger do Cloudflare Workers, ou qualquer
+   máquina sua com `cron`).
+3. Guarde o token no agendador, nunca no repositório.
+
+Com isso o `schedule` vira só a rede de segurança: se o agendador externo
+cair, os disparos irregulares do GitHub ainda mantêm o dado vivo.
+
+O AmaView avisa sozinho quando o dado envelhece (faixa no painel e ponto
+amarelo no trilho, acima de 45 min), então uma falha do agendador aparece em
+vez de passar batida.
+
 ### Pages
 
 **Settings → Pages → Source: GitHub Actions.**

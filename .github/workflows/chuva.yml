@@ -1,13 +1,20 @@
 name: Chuva — CEMADEN
 
-# A cada 15 minutos, em minutos DESLOCADOS dos :00/:15/:30/:45.
+# DUAS listas de horários, em minutos deslocados dos :00/:15/:30/:45.
 #
-# O `*/10` original não disparou uma única vez em 1h42: o GitHub descarta
-# agendamentos de alta frequência sob carga, e os minutos redondos são os mais
-# concorridos, porque é onde quase todo mundo agenda.
+# O agendamento do GitHub não é confiável e não há como torná-lo confiável
+# aqui dentro. Medido neste repositório: pedindo 15 minutos, o intervalo real
+# entre disparos foi de **135 minutos em média** (mediana 153, máximo 153) —
+# nove vezes pior que o pedido. O `*/10` original não disparou nenhuma vez em
+# 1h42.
+#
+# As duas listas dobram as tentativas por hora, o que é barato e ajuda na
+# margem. Não resolve: quem quiser cadência de verdade precisa chamar o
+# `workflow_dispatch` de fora do GitHub (ver o README).
 on:
   schedule:
     - cron: '3,18,33,48 * * * *'
+    - cron: '9,24,39,54 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
