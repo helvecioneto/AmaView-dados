@@ -6,7 +6,7 @@
     <title>AmaView · Dados</title>
     <meta
       name="description"
-      content="Cache aberto dos dados da Rede Observacional do CEMADEN para a Amazônia Legal, atualizado a cada 10 minutos."
+      content="Cache aberto de dados da Amazônia Legal — chuva do CEMADEN, radiossonda, embarcações por AIS e nível dos rios da ANA."
     />
     <style>
       :root {
@@ -125,12 +125,14 @@
     <main>
       <h1>AmaView · Dados</h1>
       <p class="sub">
-        Cache aberto da Rede Observacional do CEMADEN para a Amazônia Legal, atualizado a cada 10 minutos.
+        Cache aberto de dados da Amazônia Legal, republicados em formato pronto para o navegador:
+        chuva do CEMADEN, radiossonda, embarcações por AIS e nível dos rios da ANA.
       </p>
 
-      <div class="nota" id="estado">carregando o estado da última atualização…</div>
+      <div class="nota" id="estado">carregando o estado das últimas atualizações…</div>
 
-      <h2>Arquivos</h2>
+      <h2>Chuva · CEMADEN</h2>
+      <p class="sub">Pluviômetros automáticos da Amazônia Legal. Ciclo a cada 15 min.</p>
 
       <div class="card">
         <h3><a href="cemaden/serie.json">cemaden/serie.json</a></h3>
@@ -151,36 +153,147 @@
         <p>Resumo do último ciclo: instante, grandeza, cobertura e contagens. Arquivo pequeno, bom para sondar.</p>
       </div>
 
+      <h2>Nível dos rios · ANA</h2>
+      <p class="sub">
+        Cota e vazão de 154 estações telemétricas. Ciclo a cada 1 h — o nível de um rio amazônico muda de 5 a 30 cm
+        por dia, e buscar mais vezes seria gastar um serviço público à toa.
+      </p>
+
+      <div class="card">
+        <h3><a href="rios/atual.json">rios/atual.json</a></h3>
+        <p>
+          Última leitura de cada estação em <strong>centímetros</strong>, com série horária de 48 h
+          (<code>t0</code> + <code>passoMin</code> + 48 valores, <code>null</code> onde não houve medição).
+          O campo <code>p</code> é a <strong>posição percentílica</strong> da cota de hoje entre os anos medidos
+          para a mesma época — é ele que colore o mapa, e não <code>cm</code>: cada régua tem o seu próprio zero,
+          então cota de estações diferentes não se compara. <code>p</code> e <code>a</code> vêm
+          <code>null</code> onde há menos de 8 anos medidos.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3><a href="rios/estacoes.json">rios/estacoes.json</a></h3>
+        <p>Cadastro: código, nome, coordenadas e se a estação também mede vazão. Recortado pelo polígono do IBGE da Amazônia Legal.</p>
+      </div>
+
+      <div class="card">
+        <h3><a href="rios/manifest.json">rios/manifest.json</a></h3>
+        <p>Resumo do ciclo, com a contagem de estações abaixo, dentro e acima do normal para a época.</p>
+      </div>
+
+      <h2>Embarcações · AIS</h2>
+      <p class="sub">Navios, balsas e barcos ouvidos por AIS. Ciclo a cada 15 min.</p>
+
+      <div class="card">
+        <h3><a href="navios/atual.json">navios/atual.json</a></h3>
+        <p>
+          Posição de agora e trilha de 24 h por embarcação, com <strong>instante absoluto</strong> em cada amostra.
+          <code>attribution</code> é um objeto com um crédito <strong>por fonte</strong>: as licenças não se fundem,
+          e cada embarcação carrega em <code>f</code> a fonte de onde veio.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3><a href="navios/cadastro.json">navios/cadastro.json</a></h3>
+        <p>Ficha estática acumulada por MMSI: nome, IMO, indicativo, tipo, dimensões, calado, destino declarado e ETA.</p>
+      </div>
+
+      <div class="card">
+        <h3><a href="navios/escuta.json">navios/escuta.json</a></h3>
+        <p>
+          Células de 0,25° onde houve recepção nos últimos 7 dias. É o que permite distinguir
+          <strong>rio vazio</strong> de <strong>sem recepção</strong> — a leitura errada mais provável desses dados.
+        </p>
+      </div>
+
+      <h2>Radiossonda</h2>
+      <p class="sub">Perfis verticais da atmosfera. Ciclo 4×/dia.</p>
+
+      <div class="card">
+        <h3><a href="sondagem/perfis.json">sondagem/perfis.json</a></h3>
+        <p>Perfis das últimas 48 h por estação, com a trilha do balão.</p>
+      </div>
+
+      <div class="card">
+        <h3><a href="sondagem/estacoes.json">sondagem/estacoes.json</a></h3>
+        <p>Cadastro das estações de radiossondagem da região.</p>
+      </div>
+
       <h2>Uso</h2>
       <p>
         Servidos pelo GitHub Pages com <code>Access-Control-Allow-Origin: *</code>, então podem ser lidos direto do
-        navegador. O cache é de 10 minutos, igual à cadência de atualização.
+        navegador. Cada conjunto tem a sua própria cadência, anunciada no <code>gerado</code> do manifesto.
+      </p>
+      <p>
+        Todos os quatro são publicados pelo <strong>mesmo</strong> deploy do Pages, porque cada publicação substitui
+        o site inteiro. Um conjunto que falha num ciclo é restaurado do ar em vez de sumir.
       </p>
 
       <footer>
         <p>
-          <strong>Fonte:</strong> Dados da Rede Observacional do CEMADEN/MCTI — Centro Nacional de Monitoramento e
-          Alertas de Desastres Naturais, <a href="https://www.gov.br/cemaden/pt-br">gov.br/cemaden</a>. Este
-          repositório apenas recacheia e reformata; os dados continuam sendo do CEMADEN.
+          <strong>Fontes.</strong> Chuva: Rede Observacional do CEMADEN/MCTI,
+          <a href="https://www.gov.br/cemaden/pt-br">gov.br/cemaden</a>. Nível dos rios: Agência Nacional de Águas e
+          Saneamento Básico, <a href="https://www.snirh.gov.br/hidroweb/">SNIRH/HidroWeb</a>. Radiossonda:
+          University of Wyoming, <a href="https://weather.uwyo.edu/upperair/">Dept. of Atmospheric Science</a>.
+          Embarcações: <a href="https://openwaters.io/ais/">Open Waters AIS</a>, agregando AISHub e aisstream.io —
+          o crédito é por fonte e vem no próprio arquivo.
+        </p>
+        <p>
+          Este repositório apenas recacheia e reformata: os dados continuam sendo de quem os produz, e quem consumir
+          daqui deve citar a fonte original. O código é MIT; os dados, não.
         </p>
         <p>Consumido por <a href="https://helvecioneto.github.io/AmaView/">AmaView</a>.</p>
       </footer>
     </main>
 
     <script>
-      const fmt = (ms) =>
-        new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'UTC' }) + ' UTC';
-      fetch('cemaden/manifest.json', { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
-        .then((m) => {
-          const min = Math.round((Date.now() - Date.parse(m.gerado)) / 60000);
-          document.getElementById('estado').textContent =
-            `${m.estacoes} estações · janela até ${fmt(m.fim)} · ${m.comChuva} com chuva · ` +
-            `atualizado há ${min} min · modo ${m.modo} (${m.grandeza})`;
-        })
-        .catch(() => {
-          document.getElementById('estado').textContent = 'manifest.json ainda não publicado.';
-        });
+      const fmt = (min) => (min < 90 ? `há ${min} min` : `há ${Math.round(min / 60)} h`);
+      const idade = (g) => Math.max(0, Math.round((Date.now() - Date.parse(g)) / 60000));
+
+      const conjuntos = [
+        {
+          pasta: 'cemaden',
+          rotulo: 'Chuva',
+          resumo: (m) => `${m.estacoes} estações · ${m.comChuva} com chuva · modo ${m.modo}`,
+        },
+        {
+          pasta: 'rios',
+          rotulo: 'Rios',
+          resumo: (m) => {
+            const c = m.contagem || {};
+            const abaixo = (c.muitoAbaixo || 0) + (c.abaixo || 0);
+            const acima = (c.acima || 0) + (c.muitoAcima || 0);
+            return `${m.comLeitura} de ${m.estacoes} com leitura · ${abaixo} abaixo do normal, ${acima} acima`;
+          },
+        },
+        {
+          pasta: 'navios',
+          rotulo: 'Embarcações',
+          resumo: (m) => `${m.completas} embarcações · ${m.comDestino} com destino declarado`,
+        },
+        {
+          pasta: 'sondagem',
+          rotulo: 'Radiossonda',
+          resumo: (m) => `${m.comSondagem} de ${m.estacoes} estações · ${m.perfis} perfis`,
+        },
+      ];
+
+      Promise.all(
+        conjuntos.map((c) =>
+          fetch(`${c.pasta}/manifest.json`, { cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+            .then((m) => `${c.rotulo}: ${c.resumo(m)} · atualizado ${fmt(idade(m.gerado))}`)
+            .catch(() => `${c.rotulo}: ainda não publicado`),
+        ),
+      ).then((linhas) => {
+        const el = document.getElementById('estado');
+        el.textContent = '';
+        for (const l of linhas) {
+          const div = document.createElement('div');
+          div.textContent = l;
+          el.appendChild(div);
+        }
+      });
     </script>
   </body>
 </html>
