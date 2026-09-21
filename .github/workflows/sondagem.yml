@@ -75,6 +75,13 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs navios
 
+      # Idem para os rios, reconstruídos pelo ciclo da chuva.
+      - name: Preservar o nível dos rios
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs rios
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

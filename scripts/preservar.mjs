@@ -27,11 +27,12 @@ const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAI
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
 const PRIMEIRA = process.env.PRIMEIRA_PUBLICACAO === '1';
 
-/** O que cada pasta publica. Manter em sincronia com build.mjs, sondagem.mjs e navios.mjs. */
+/** O que cada pasta publica. Manter em sincronia com build.mjs, sondagem.mjs, navios.mjs e rios.mjs. */
 export const ARQUIVOS = {
   cemaden: ['estacoes.json', 'serie.json', 'manifest.json'],
   sondagem: ['estacoes.json', 'perfis.json', 'manifest.json'],
   navios: ['atual.json', 'cadastro.json', 'escuta.json', 'manifest.json'],
+  rios: ['estacoes.json', 'atual.json', 'manifest.json'],
 };
 
 async function baixar(pasta, nome) {

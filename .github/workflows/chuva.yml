@@ -47,7 +47,7 @@ jobs:
           node-version: 24
 
       - name: Testes
-        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs scripts/rios.test.mjs
 
       - name: Buscar o CEMADEN e montar a grade
         env:
@@ -91,6 +91,22 @@ jobs:
           OPENWATERS_TOKEN: ${{ secrets.OPENWATERS_TOKEN }}
         run: node scripts/navios.mjs
 
+      # Os rios rodam DENTRO deste ciclo, como as embarcações, e pelo mesmo
+      # motivo: um terceiro workflow no grupo `publicar-pages` cancelaria a
+      # execução pendente em silêncio.
+      #
+      # Mas só de HORA EM HORA, e não a cada 15 min: o nível de um rio
+      # amazônico muda de 5 a 30 cm por DIA, e buscar 154 estações a cada
+      # ciclo seriam ~15 mil requisições diárias a um serviço público para um
+      # dado que não mudou. O próprio script confere o carimbo da publicação
+      # anterior e sai em silêncio quando ainda não venceu.
+      - name: Buscar o nível dos rios (ANA)
+        id: rios
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/rios.mjs
+
       # Este ciclo não reconstrói as sondagens, e publicar sem elas as apagaria
       # do ar até o outro workflow rodar — o que pode levar horas.
       - name: Preservar as sondagens
@@ -108,6 +124,16 @@ jobs:
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs navios
+
+      # `rodou=false` quer dizer que o passo PULOU (ainda não venceu a hora),
+      # que é diferente de ter falhado — nos dois casos a pasta precisa voltar
+      # do ar, senão a camada some do mapa.
+      - name: Preservar o nível dos rios
+        if: steps.rios.outputs.rodou != 'true'
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs rios
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
