@@ -23,30 +23,34 @@ melhor para este trabalho:
   saída de cada execução;
 - `RandomizedDelaySec` desloca do minuto cheio, que é quando todo mundo agenda.
 
-## Instalação
+## Uso
+
+Tudo pelo `amaview`, que fica em `~` e em `/usr/local/bin`:
+
+| Comando | O que faz |
+|---|---|
+| `amaview` | situação: timer, token, últimas execuções e frescor do dado |
+| `amaview instalar` | clona/atualiza, instala as unidades e liga o timer |
+| `amaview token` | grava o token (pede na tela, sem eco) |
+| `amaview disparar` | dispara um ciclo agora |
+| `amaview logs [n]` | últimas execuções |
+| `amaview parar` | desliga o timer |
+| `amaview remover` | desinstala (mantém o token) |
+
+### Primeira vez
 
 ```sh
-sudo mkdir -p /opt/amaview /etc/amaview
-sudo git clone https://github.com/helvecioneto/AmaView-dados /opt/amaview \
-  || sudo git -C /opt/amaview pull
-
-# O token: crie um fine-grained PAT em
-# https://github.com/settings/tokens?type=beta
-# com acesso SÓ a este repositório e permissão "Actions: Read and write".
-sudo install -m 600 /dev/null /etc/amaview/token
-sudo nano /etc/amaview/token        # cole o token, uma linha, sem aspas
-
-sudo cp /opt/amaview/agendador/amaview-chuva.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now amaview-chuva.timer
+~/amaview instalar
+~/amaview token      # cola o PAT; ele testa e liga o timer sozinho
 ```
 
-## Conferir
+O PAT vem de <https://github.com/settings/tokens?type=beta>, com acesso só a
+este repositório e permissão **Actions: Read and write**.
+
+### Atualizar
 
 ```sh
-systemctl list-timers amaview-chuva.timer     # próximo disparo
-journalctl -u amaview-chuva -n 20 --no-pager  # últimas execuções
-sudo /opt/amaview/agendador/disparar.py chuva.yml   # disparo manual
+amaview instalar     # git pull + reinstala as unidades e o próprio script
 ```
 
 ## Segurança
@@ -60,10 +64,3 @@ sudo /opt/amaview/agendador/disparar.py chuva.yml   # disparo manual
 - Se vazar, revogue em <https://github.com/settings/tokens?type=beta>. O pior
   que alguém faz com ele é disparar ciclos de dados públicos.
 
-## Atualizar
-
-```sh
-sudo git -C /opt/amaview pull
-sudo cp /opt/amaview/agendador/amaview-chuva.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl restart amaview-chuva.timer
-```

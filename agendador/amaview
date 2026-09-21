@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# Painel do agendador do AmaView numa linha só.
+#
+#   amaview              situação (timer, últimas execuções, frescor do dado)
+#   amaview instalar     clona/atualiza, instala as unidades e liga o timer
+#   amaview token        grava o token (pede na tela, sem eco)
+#   amaview disparar     dispara um ciclo agora
+#   amaview logs [n]     últimas execuções
+#   amaview parar        desliga o timer
+#   amaview remover      desinstala tudo (menos o token)
+#
+# O agendamento do GitHub Actions não é confiável — medido: 135 min de
+# intervalo médio quando o pedido era 15. Esta máquina é o relógio de verdade.
+set -uo pipefail
+
+REPO_URL="https://github.com/helvecioneto/AmaView-dados"
+DESTINO="/opt/amaview"
+UNIDADES="amaview-chuva"
+TOKEN="/etc/amaview/token"
+
+verde() { printf '\033[32m%s\033[0m\n' "$*"; }
+vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
+amarelo() { printf '\033[33m%s\033[0m\n' "$*"; }
+titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+instalar() {
+  titulo "Instalando"
+  sudo mkdir -p "$DESTINO" /etc/amaview
+  if [ -d "$DESTINO/.git" ]; then
+    sudo git -C "$DESTINO" pull -q && echo "  repositório atualizado"
+  else
+    sudo git clone -q "$REPO_URL" "$DESTINO" && echo "  repositório clonado"
+  fi
+  sudo chmod +x "$DESTINO/agendador/disparar.py"
+  sudo cp "$DESTINO/agendador/$UNIDADES.service" "$DESTINO/agendador/$UNIDADES.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  echo "  unidades instaladas"
+
+  # Mantém este próprio script em dia junto com o resto.
+  sudo install -m 755 "$DESTINO/agendador/amaview" /usr/local/bin/amaview 2>/dev/null \
+    && echo "  'amaview' disponível em /usr/local/bin"
+
+  if [ ! -s "$TOKEN" ]; then
+    amarelo "  token ausente — rode: amaview token"
+    return 0
+  fi
+  sudo systemctl enable --now "$UNIDADES.timer" >/dev/null 2>&1 && verde "  timer ligado"
+}
+
+gravar_token() {
+  titulo "Token"
+  echo "  Crie um fine-grained PAT em:"
+  echo "    https://github.com/settings/tokens?type=beta"
+  echo "  Acesso só a AmaView-dados · permissão 'Actions: Read and write'."
+  echo
+  # -s para não ecoar: o token não entra na tela nem no histórico, e como vai
+  # por stdin também não aparece na lista de processos.
+  read -rsp "  Cole o token (não aparece na tela): " t
+  echo
+  t="$(printf '%s' "$t" | tr -d '[:space:]')"
+  if [ -z "$t" ]; then vermelho "  nada colado; nada gravado"; return 1; fi
+
+  sudo install -m 600 /dev/null "$TOKEN"
+  printf '%s\n' "$t" | sudo tee "$TOKEN" >/dev/null
+  unset t
+  verde "  gravado em $TOKEN (modo 600, só root lê)"
+
+  echo
+  echo "  Testando…"
+  if sudo "$DESTINO/agendador/disparar.py" chuva.yml; then
+    sudo systemctl enable --now "$UNIDADES.timer" >/dev/null 2>&1 && verde "  timer ligado"
+  else
+    vermelho "  o token não foi aceito — confira a permissão e rode 'amaview token' de novo"
+    return 1
+  fi
+}
+
+frescor() {
+  python3 - <<'PY' 2>/dev/null || echo "  não consegui ler o dado publicado"
+import json, urllib.request
+from datetime import datetime, timezone
+base = "https://helvecioneto.github.io/AmaView-dados"
+for nome, cam in (("chuva", "cemaden"), ("sondagem", "sondagem")):
+    try:
+        with urllib.request.urlopen(f"{base}/{cam}/manifest.json", timeout=15) as r:
+            m = json.load(r)
+        idade = (datetime.now(timezone.utc) - datetime.fromisoformat(m["gerado"].replace("Z", "+00:00")))
+        mins = idade.total_seconds() / 60
+        marca = "ok" if mins < 45 else ("ATRASADO" if mins < 720 else "VELHO")
+        print(f"  {nome:9} {mins:6.0f} min atrás   {marca}")
+    except Exception as e:
+        print(f"  {nome:9} falhou: {e}")
+PY
+}
+
+situacao() {
+  titulo "Timer"
+  if systemctl is-enabled "$UNIDADES.timer" >/dev/null 2>&1; then
+    systemctl list-timers "$UNIDADES.timer" --no-pager 2>/dev/null | sed -n '1,2p' | sed 's/^/  /'
+  else
+    amarelo "  desligado — rode: amaview instalar"
+  fi
+
+  titulo "Token"
+  if sudo test -s "$TOKEN" 2>/dev/null; then
+    verde "  presente ($(sudo stat -c %a "$TOKEN"))"
+  else
+    amarelo "  ausente — rode: amaview token"
+  fi
+
+  titulo "Últimas execuções"
+  journalctl -u "$UNIDADES" -n 5 --no-pager -o short 2>/dev/null | sed 's/^/  /' || echo "  (sem log ainda)"
+
+  titulo "Dado publicado"
+  frescor
+  echo
+}
+
+case "${1:-status}" in
+  instalar | install) instalar ;;
+  token) gravar_token ;;
+  disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
+  logs) journalctl -u "$UNIDADES" -n "${2:-30}" --no-pager ;;
+  parar | stop) sudo systemctl disable --now "$UNIDADES.timer" && verde "timer desligado" ;;
+  remover)
+    sudo systemctl disable --now "$UNIDADES.timer" 2>/dev/null
+    sudo rm -f "/etc/systemd/system/$UNIDADES.service" "/etc/systemd/system/$UNIDADES.timer"
+    sudo systemctl daemon-reload
+    verde "removido (o token em $TOKEN foi mantido)"
+    ;;
+  status | '') situacao ;;
+  *)
+    sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+esac
