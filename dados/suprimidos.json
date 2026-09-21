@@ -1,0 +1,4 @@
+{
+  "_leia": "MMSI que NÃO devem ser publicados, a pedido de quem é responsável pela embarcação. Ver docs/privacidade-embarcacoes.md. Acrescente o número em `mmsi` e abra um PR (ou peça a quem mantém o repositório).",
+  "mmsi": []
+}

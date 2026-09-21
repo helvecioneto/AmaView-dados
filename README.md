@@ -17,6 +17,11 @@ Consumido por [AmaView](https://helvecioneto.github.io/AmaView/).
 >
 > **Sondagens:** University of Wyoming, Department of Atmospheric Science,
 > <https://weather.uwyo.edu/upperair/>
+>
+> **Embarcações (AIS):** Open Waters AIS (<https://openwaters.io/ais/>),
+> agregando AISHub (<https://www.aishub.net>) e aisstream.io.
+> O crédito é **por fonte** e nunca concatenado — ver
+> [`docs/privacidade-embarcacoes.md`](docs/privacidade-embarcacoes.md).
 
 Os Termos de Uso da [Plataforma de Entrega de Dados](https://ped.cemaden.gov.br/suporte/termouso)
 declaram o acesso como serviço público gratuito e pedem, em nome da Lei de
@@ -134,6 +139,54 @@ balão sobe uns 45 min antes da hora cheia para que a amostra da troposfera
 média caia nela. Quem consumir precisa tratar o lançamento — e não `ms` — como
 o instante em que a sondagem passa a existir.
 
+### `navios/atual.json`
+
+Posições do ciclo e a trilha de 24 h de cada embarcação. A trilha usa
+**instante absoluto**, não índice de grade: a janela desliza a cada ciclo, e
+uma trilha indexada por posição andaria para trás sozinha a cada publicação.
+
+```jsonc
+{
+  "gerado": "2026-09-21T02:15:00Z",
+  // Um crédito POR FONTE. Licenças não se fundem — nunca concatenar.
+  "attribution": { "aishub": "Open Waters AIS (…). AISHub (…)", "aisstream": "…" },
+  "trilhaHoras": 24,
+  "navios": [
+    {
+      "m": 710000596,          // MMSI
+      "y": -3.1478, "x": -59.9284,
+      "s": 9.4,                // velocidade sobre o fundo, nós
+      "c": 87.3,               // rumo sobre o fundo, graus
+      "h": 85,                 // proa, graus (costuma faltar)
+      "n": 0,                  // situação de navegação do AIS
+      "v": 1758420000000,      // quando foi ouvida
+      "f": "aishub",           // fonte — decide o crédito desta embarcação
+      "t": [[1758410000000, -3.14, -59.92, 9.2]],  // [instante, lat, lon, nós]
+      "sumiu": false           // true = sem posição nova, fora de alcance
+    }
+  ],
+  // Frota pequena de transponder voluntário: ponto e mais nada.
+  "anonimos": [{ "y": -1.45, "x": -48.5, "c": 210, "s": 3.1, "t": 0 }]
+}
+```
+
+### `navios/cadastro.json`
+
+O estático acumulado, por MMSI: nome, IMO, indicativo, tipo, dimensões, calado,
+destino e ETA. Cresce a cada ciclo — cada embarcação retransmite esses campos a
+cada ~6 min, e o ciclo colhe o que passar pela janela. `d` é quando o bloco foi
+declarado (a interface mostra "declarado há 3 dias" quando o dado envelhece) e
+`v` quando a embarcação foi ouvida pela última vez. MMSI sem ser ouvido há 30
+dias sai do cadastro.
+
+### `navios/escuta.json`
+
+Células de 0,25° onde houve recepção nos últimos 7 dias, com o instante da
+última. É o que permite ao mapa distinguir **"rio vazio"** de **"sem
+recepção"** — a leitura errada mais provável desta camada. O AIS terrestre só
+alcança perto do receptor, e na Amazônia há receptor em Belém, Manaus e no
+Tapajós; entre eles, o rio é cego.
+
 ### `cemaden/manifest.json`
 
 Resumo do ciclo (instante, grandeza, cobertura, contagens). Pequeno — serve
@@ -145,10 +198,17 @@ para sondar se vale a pena rebaixar a série.
 
 Dois workflows, com cadências diferentes porque as fontes são diferentes:
 
-| Workflow | Cadência | Por quê |
-|---|---|---|
-| `chuva.yml` | a cada 15 min | o CEMADEN publica de 10 em 10 min |
-| `sondagem.yml` | 4×/dia | o balão sobe 2×/dia e o dado aparece ~7 h depois |
+| Workflow | Cadência | O que faz | Por quê |
+|---|---|---|---|
+| `chuva.yml` | a cada 15 min | CEMADEN **+ embarcações (AIS)** | o CEMADEN publica de 10 em 10 min |
+| `sondagem.yml` | 4×/dia | radiossonda | o balão sobe 2×/dia e o dado aparece ~7 h depois |
+
+As embarcações rodam **dentro** do ciclo da chuva, e não num workflow próprio.
+O grupo `publicar-pages` guarda no máximo uma execução rodando e uma pendente:
+quando uma terceira entra, a pendente é **cancelada** — em silêncio, com status
+`cancelled` e não `failure`. Um terceiro workflow na mesma cadência comeria
+ciclos da chuva sem ninguém perceber. O passo do AIS roda com
+`continue-on-error`: se a fonte estiver fora, a chuva publica do mesmo jeito.
 
 Buscar as sondagens a cada 15 min eram **~8.000 requisições diárias** a um
 servidor acadêmico sem SLA para um dado que muda duas vezes. Agora são ~340.

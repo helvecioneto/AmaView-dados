@@ -66,6 +66,15 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs cemaden
 
+      # As embarcações são reconstruídas pelo ciclo da chuva, então aqui elas
+      # só precisam ser restauradas. Não é fatal: a camada volta no próximo
+      # ciclo da chuva, 15 minutos depois.
+      - name: Preservar as embarcações
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs navios
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

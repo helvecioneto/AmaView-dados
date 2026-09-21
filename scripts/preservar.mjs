@@ -27,10 +27,11 @@ const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAI
 const BASE_URL = process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados';
 const PRIMEIRA = process.env.PRIMEIRA_PUBLICACAO === '1';
 
-/** O que cada pasta publica. Manter em sincronia com build.mjs e sondagem.mjs. */
+/** O que cada pasta publica. Manter em sincronia com build.mjs, sondagem.mjs e navios.mjs. */
 export const ARQUIVOS = {
   cemaden: ['estacoes.json', 'serie.json', 'manifest.json'],
   sondagem: ['estacoes.json', 'perfis.json', 'manifest.json'],
+  navios: ['atual.json', 'cadastro.json', 'escuta.json', 'manifest.json'],
 };
 
 async function baixar(pasta, nome) {
@@ -51,9 +52,17 @@ async function preservar(pasta) {
 
   let falhas = 0;
   for (const nome of lista) {
+    // `site/` nasce vazio a cada execução: um arquivo já presente foi ESTE
+    // ciclo que construiu. Restaurar por cima dele publicaria o dado velho no
+    // lugar do novo — que é exatamente o contrário do propósito deste script.
+    const destino = join(SAIDA, pasta, nome);
+    if (existsSync(destino)) {
+      console.log(`  ${pasta}/${nome}: construído neste ciclo, mantido`);
+      continue;
+    }
     try {
       const texto = await baixar(pasta, nome);
-      await writeFile(join(SAIDA, pasta, nome), texto);
+      await writeFile(destino, texto);
       console.log(`  ${pasta}/${nome}: ${(texto.length / 1024).toFixed(0)} KB restaurado`);
     } catch (e) {
       falhas++;

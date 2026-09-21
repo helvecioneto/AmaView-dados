@@ -47,7 +47,7 @@ jobs:
           node-version: 24
 
       - name: Testes
-        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs
+        run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs
 
       - name: Buscar o CEMADEN e montar a grade
         env:
@@ -73,12 +73,41 @@ jobs:
             console.log(`grade validada: ${j.v.length} x ${j.slots}`);
           '
 
+      # As embarcações rodam DENTRO deste ciclo, e não num workflow próprio.
+      #
+      # O grupo `publicar-pages` guarda no máximo uma execução rodando e uma
+      # pendente: quando uma terceira entra, a PENDENTE é cancelada — em
+      # silêncio, com status `cancelled` e não `failure`. Um terceiro workflow
+      # na mesma cadência comeria ciclos da chuva sem ninguém perceber.
+      #
+      # `continue-on-error`: a chuva é o produto principal. Se o AIS estiver
+      # fora do ar, o ciclo publica a chuva do mesmo jeito e a camada de
+      # barcos fica com o dado do ciclo anterior.
+      - name: Buscar as embarcações (AIS)
+        id: navios
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+          OPENWATERS_TOKEN: ${{ secrets.OPENWATERS_TOKEN }}
+        run: node scripts/navios.mjs
+
       # Este ciclo não reconstrói as sondagens, e publicar sem elas as apagaria
       # do ar até o outro workflow rodar — o que pode levar horas.
       - name: Preservar as sondagens
         env:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/preservar.mjs sondagem
+
+      # Só restaura o que o passo acima NÃO construiu (`preservar.mjs` mantém
+      # os arquivos deste ciclo). Não pode derrubar a publicação da chuva: na
+      # estreia da pasta não há nada no ar para restaurar, e uma falha do AIS
+      # custa uma camada, não o portal.
+      - name: Preservar as embarcações
+        if: steps.navios.outcome == 'failure'
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: node scripts/preservar.mjs navios
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
