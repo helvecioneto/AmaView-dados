@@ -1,0 +1,16 @@
+[Unit]
+Description=Ciclo da chuva a cada 15 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados
+
+[Timer]
+OnCalendar=*:0/15
+# Recupera o disparo perdido depois de reinício ou queda de rede — é
+# justamente o que o agendamento do GitHub não faz.
+Persistent=true
+# Evita bater no minuto cheio, que é quando todo mundo agenda.
+RandomizedDelaySec=45
+AccuracySec=10s
+Unit=amaview-chuva.service
+
+[Install]
+WantedBy=timers.target

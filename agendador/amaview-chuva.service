@@ -1,0 +1,17 @@
+[Unit]
+Description=Dispara o ciclo da chuva no AmaView-dados
+Documentation=https://github.com/helvecioneto/AmaView-dados
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/amaview/agendador/disparar.py chuva.yml
+
+# O token é root-only; o serviço não precisa de mais nada além de rede.
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/amaview
