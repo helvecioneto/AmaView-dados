@@ -69,10 +69,11 @@ só a parte visível da imagem. No zoom 6, por exemplo, a tela mostra 0,8% do
 quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
 
 - **Sem recompressão.** O corte é feito nos coeficientes do JPEG (`tjTransform`
-  da TurboJPEG, o mesmo do `jpegtran -crop`): o miolo de cada bloco é idêntico
-  pixel a pixel ao arquivo da NOAA; só a borda de 1 px varia (a suavização da
-  cor olha o vizinho). Os 135 blocos de um quadro de 7200 px saem numa chamada
-  (~0,2 s) e somam 1% a mais que o original.
+  da TurboJPEG, o mesmo do `jpegtran -crop`): os pixels são os do arquivo da
+  NOAA. Os 135 blocos de um quadro de 7200 px saem numa chamada (~0,2 s).
+- **Sobra de 16 px** do vizinho em cada lado do bloco (múltiplo do MCU, então
+  ainda sem perda). O AmaView desenha só o miolo de 512 px; a suavização ao
+  ampliar lê a sobra e não aparecem emendas. Custa ~13% a mais de bytes.
 - **Pré-corte.** Os quadros novos dos 22 produtos são cortados assim que o STAR
   os publica — os horários seguem a grade de 10 min, então não é preciso baixar
   a listagem (1,1 MB por produto) —, e o resto das últimas 48 h é preenchido do

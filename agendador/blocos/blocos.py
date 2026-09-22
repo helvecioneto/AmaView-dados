@@ -8,9 +8,12 @@ O AmaView mostra o setor NSA do NOAA/STAR em até 7200 px (7,3 MB por quadro,
 navegador baixa e decodifica só os da área visível.
 
 - **Sem recompressão.** O corte é feito nos coeficientes do JPEG
-  (`tjTransform`, o mesmo do `jpegtran -crop`): o miolo de cada bloco é
-  idêntico pixel a pixel ao arquivo da NOAA. Só a borda de 1 px varia um pouco
-  (a suavização da cor olha o vizinho). Continua "só reunir e exibir".
+  (`tjTransform`, o mesmo do `jpegtran -crop`): os pixels são os do arquivo da
+  NOAA. Continua "só reunir e exibir".
+- **Sobra de 16 px.** Cada bloco leva 16 px do vizinho de cada lado (onde há
+  vizinho). O navegador desenha só o miolo de 512 px, e a suavização ao ampliar
+  lê a sobra — sem emendas visíveis entre blocos; e a cor da borda, que a
+  decodificação suaviza olhando o vizinho, sai igual à do arquivo inteiro.
 - **Pré-corte.** A cada ciclo, os quadros novos dos 22 produtos são cortados
   assim que o STAR os publica (horários previstos na grade de 10 min, sem
   baixar a listagem de 1,1 MB), e o resto das últimas 48 h é preenchido do mais
@@ -57,6 +60,8 @@ PRODUTOS = (
 )
 LARGURAS = (3600, 7200)
 BLOCO = 512
+# Múltiplo do MCU (16 px no 4:2:0 do STAR): o corte continua sem perda.
+SOBRA = 16
 JANELA = timedelta(hours=49)
 # Pré-corte ligado por padrão; BLOCOS_AQUECER=0 deixa só o sob demanda.
 AQUECER = os.environ.get("BLOCOS_AQUECER", "1") != "0"
@@ -77,6 +82,14 @@ def altura(largura: int) -> int:
 def grade(largura: int) -> tuple[int, int]:
     """(linhas, colunas) de blocos de 512 px; os da borda direita e de baixo são menores."""
     return math.ceil(altura(largura) / BLOCO), math.ceil(largura / BLOCO)
+
+
+def regiao(largura: int, linha: int, coluna: int) -> tuple[int, int, int, int]:
+    """(x, y, w, h) do bloco no quadro: o miolo de 512 px mais a sobra, cortada na borda da imagem."""
+    alt = altura(largura)
+    x0, y0 = max(0, coluna * BLOCO - SOBRA), max(0, linha * BLOCO - SOBRA)
+    x1, y1 = min(largura, (coluna + 1) * BLOCO + SOBRA), min(alt, (linha + 1) * BLOCO + SOBRA)
+    return x0, y0, x1 - x0, y1 - y0
 
 
 def instante(carimbo: str) -> datetime:
@@ -250,11 +263,7 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido") -> 
             if dimensoes(jpeg) != (largura, altura(largura)):
                 raise ValueError(f"tamanho inesperado em {produto} {carimbo} {largura}: {dimensoes(jpeg)}")
             linhas, colunas = grade(largura)
-            regioes = []
-            for r in range(linhas):
-                for c in range(colunas):
-                    x, y = c * BLOCO, r * BLOCO
-                    regioes.append((x, y, min(BLOCO, largura - x), min(BLOCO, altura(largura) - y)))
+            regioes = [regiao(largura, r, c) for r in range(linhas) for c in range(colunas)]
             blocos = recortar(jpeg, regioes)
             # Escreve numa pasta temporária e renomeia: a pasta final só existe completa.
             temp = f"{destino}.parcial-{os.getpid()}-{threading.get_ident()}"

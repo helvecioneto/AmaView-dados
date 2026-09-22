@@ -63,10 +63,18 @@ class Grade(unittest.TestCase):
         self.assertEqual(blocos.grade(7200), (9, 15))
         self.assertEqual(blocos.grade(3600), (5, 8))
 
+    def test_regiao_com_sobra_so_onde_ha_vizinho(self):
+        self.assertEqual(blocos.regiao(3600, 0, 0), (0, 0, 528, 528))
+        self.assertEqual(blocos.regiao(3600, 2, 3), (1520, 1008, 544, 544))
+        self.assertEqual(blocos.regiao(3600, 4, 7), (3568, 2032, 32, 128))
+
     def test_recorte_sem_perda_com_bordas_menores(self):
-        regioes = [(x, y, min(512, 3600 - x), min(512, 2160 - y)) for y in (0, 2048) for x in (0, 3584)]
+        regioes = [blocos.regiao(3600, r, c) for r in (0, 2, 4) for c in (0, 3, 7)]
         partes = blocos.recortar(QUADRO_3600, regioes)
-        self.assertEqual([blocos.dimensoes(p) for p in partes], [(512, 512), (16, 512), (512, 112), (16, 112)])
+        self.assertEqual(
+            [blocos.dimensoes(p) for p in partes],
+            [(528, 528), (544, 528), (32, 528), (528, 544), (544, 544), (32, 544), (528, 128), (544, 128), (32, 128)],
+        )
 
 
 class Servidor(unittest.TestCase):
@@ -108,11 +116,11 @@ class Servidor(unittest.TestCase):
         self.assertEqual(codigo, 200)
         self.assertEqual(cab["Access-Control-Allow-Origin"], "*")
         self.assertIn("immutable", cab["Cache-Control"])
-        self.assertEqual(blocos.dimensoes(corpo), (512, 512))
+        self.assertEqual(blocos.dimensoes(corpo), (544, 544))
         self.assertEqual(len(os.listdir(blocos.pasta_do_quadro("13", c, 3600))), 40)
         self.assertTrue(self.baixados[0].endswith(f"/13/{c}_GOES19-ABI-nsa-13-3600x2160.jpg"))
         codigo, _, corpo = self.pedir(f"/blocos/v1/nsa/13/{c}/3600/4_7.jpg")
-        self.assertEqual((codigo, blocos.dimensoes(corpo)), (200, (16, 112)))
+        self.assertEqual((codigo, blocos.dimensoes(corpo)), (200, (32, 128)))
         self.assertEqual(len(self.baixados), 1, "o quadro é baixado e cortado uma vez só")
 
     def test_pedidos_simultaneos_cortam_uma_vez(self):

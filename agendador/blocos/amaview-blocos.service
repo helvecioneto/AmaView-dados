@@ -13,6 +13,7 @@ CacheDirectory=amaview-blocos
 CacheDirectoryMode=0755
 UMask=0022
 Environment=BLOCOS_RAIZ=/var/cache/amaview-blocos
+Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=5
 # O corte é trabalho de fundo: o agendador e o nginx vêm primeiro.
