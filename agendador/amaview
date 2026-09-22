@@ -2,8 +2,9 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers e os blocos
+#   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview token        grava o token (pede na tela, sem eco)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
@@ -21,6 +22,11 @@ DESTINO="/opt/amaview"
 # 1 de 2 horários com ~4 h de atraso.
 UNIDADES="amaview-chuva amaview-sondagem"
 TOKEN="/etc/amaview/token"
+# Blocos do GOES-19 (agendador/blocos): o nome resolve para o IP desta máquina
+# pelo sslip.io, e é com ele que o certificado sai.
+BLOCOS_IP="147.15.84.134"
+BLOCOS_NOME="147-15-84-134.sslip.io"
+BLOCOS_SITE="/etc/nginx/sites-available/amaview-blocos"
 
 verde() { printf '\033[32m%s\033[0m\n' "$*"; }
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -56,11 +62,77 @@ instalar() {
   sudo install -m 755 "$DESTINO/agendador/amaview" /usr/local/bin/amaview 2>/dev/null \
     && echo "  'amaview' disponível em /usr/local/bin"
 
+  instalar_blocos
+
   if [ ! -s "$TOKEN" ]; then
     amarelo "  token ausente — rode: amaview token"
     return 0
   fi
   ligar_timers
+}
+
+# Site do nginx: sempre a porta 80; a 443 só com o certificado já emitido.
+gerar_site_blocos() {
+  local src="$DESTINO/agendador/blocos"
+  sudo install -m 644 "$src/nginx-locais.conf" /etc/nginx/snippets/amaview-blocos.conf
+  {
+    cat "$src/nginx-site.conf"
+    if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
+      cat "$src/nginx-site-tls.conf"
+    fi
+  } | sed "s/@NOME@/$BLOCOS_NOME/g; s/@IP@/$BLOCOS_IP/g" | sudo tee "$BLOCOS_SITE" >/dev/null
+  sudo ln -sf "$BLOCOS_SITE" /etc/nginx/sites-enabled/amaview-blocos
+  if sudo nginx -t -q; then
+    sudo systemctl reload nginx && echo "  nginx: site dos blocos em dia"
+  else
+    vermelho "  nginx recusou a configuração — nada recarregado"
+    return 1
+  fi
+}
+
+instalar_blocos() {
+  titulo "Blocos do GOES-19"
+  getent passwd amaview-blocos >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-blocos
+  dpkg -s libturbojpeg >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libturbojpeg >/dev/null
+  sudo cp "$DESTINO/agendador/blocos/amaview-blocos.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-blocos >/dev/null 2>&1
+  # `restart`: o serviço relê o código que o `git pull` acabou de trazer.
+  sudo systemctl restart amaview-blocos && verde "  amaview-blocos no ar"
+  gerar_site_blocos
+}
+
+certificado() {
+  titulo "Certificado dos blocos ($BLOCOS_NOME)"
+  command -v certbot >/dev/null \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot >/dev/null
+  # Validação pelo nginx da porta 80 (/.well-known); a renovação é do certbot.timer,
+  # e o gancho recarrega o nginx com o certificado novo.
+  sudo certbot certonly --webroot -w /var/www/html -d "$BLOCOS_NOME" \
+    --agree-tos --register-unsafely-without-email --non-interactive \
+    --deploy-hook "systemctl reload nginx" || return 1
+  gerar_site_blocos && verde "  https://$BLOCOS_NOME/blocos/saude"
+}
+
+situacao_blocos() {
+  titulo "Blocos"
+  systemctl is-active --quiet amaview-blocos \
+    && verde "  serviço no ar" || vermelho "  serviço parado — rode: amaview instalar"
+  curl -s --max-time 5 http://127.0.0.1:8090/blocos/saude | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+print(f"  {s["cortes_ultima_hora"]} quadros cortados na última hora ({s["segundos_por_corte"]} s cada)")
+print(f"  fila do pré-corte: {s["fila_pre_corte"]} · falhas: {s["falhas"]} · disco livre: {s["disco_livre_gb"]} GB")
+if s["ultimo_erro"]: print(f"  último erro: {s["ultimo_erro"]}")
+' 2>/dev/null || amarelo "  sem resposta em 127.0.0.1:8090"
+  echo "  em disco: $(sudo du -sh /var/cache/amaview-blocos 2>/dev/null | cut -f1)"
+  if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
+    verde "  https://$BLOCOS_NOME"
+  else
+    amarelo "  sem HTTPS ainda — rode: amaview certificado"
+  fi
 }
 
 gravar_token() {
@@ -130,11 +202,14 @@ situacao() {
 
   titulo "Dado publicado"
   frescor
+
+  situacao_blocos
   echo
 }
 
 case "${1:-status}" in
   instalar | install) instalar ;;
+  certificado) certificado ;;
   token) gravar_token ;;
   disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
   logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
@@ -144,11 +219,14 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
+    sudo systemctl disable --now amaview-blocos 2>/dev/null
+    sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
+    sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload
     verde "removido (o token em $TOKEN foi mantido)"
     ;;
   status | '') situacao ;;
   *)
-    sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

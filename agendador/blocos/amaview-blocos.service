@@ -1,0 +1,29 @@
+[Unit]
+Description=Blocos do GOES-19 para o AmaView (JPEG do STAR cortado sem recompressão)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/blocos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/blocos/blocos.py
+User=amaview-blocos
+Group=amaview-blocos
+# /var/cache/amaview-blocos, legível pelo nginx (www-data): pastas 755, blocos 644.
+CacheDirectory=amaview-blocos
+CacheDirectoryMode=0755
+UMask=0022
+Environment=BLOCOS_RAIZ=/var/cache/amaview-blocos
+Restart=always
+RestartSec=5
+# O corte é trabalho de fundo: o agendador e o nginx vêm primeiro.
+Nice=5
+MemoryMax=4G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

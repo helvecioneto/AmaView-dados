@@ -61,6 +61,44 @@ este repositório e permissão **Actions: Read and write**.
 amaview instalar     # git pull + reinstala as unidades e o próprio script, e religa os timers
 ```
 
+## Blocos do GOES-19
+
+A mesma máquina corta os JPEGs do setor NSA do [NOAA/STAR](https://www.star.nesdis.noaa.gov/goes/sector.php?sat=G19&sector=nsa)
+em blocos de 512 px (larguras 3600 e 7200), para o AmaView baixar e decodificar
+só a parte visível da imagem. No zoom 6, por exemplo, a tela mostra 0,8% do
+quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
+
+- **Sem recompressão.** O corte é feito nos coeficientes do JPEG (`tjTransform`
+  da TurboJPEG, o mesmo do `jpegtran -crop`): o miolo de cada bloco é idêntico
+  pixel a pixel ao arquivo da NOAA; só a borda de 1 px varia (a suavização da
+  cor olha o vizinho). Os 135 blocos de um quadro de 7200 px saem numa chamada
+  (~0,2 s) e somam 1% a mais que o original.
+- **Pré-corte.** Os quadros novos dos 22 produtos são cortados assim que o STAR
+  os publica — os horários seguem a grade de 10 min, então não é preciso baixar
+  a listagem (1,1 MB por produto) —, e o resto das últimas 48 h é preenchido do
+  mais novo para o mais velho. Em regime: ~240 MB baixados do STAR a cada
+  10 min, ~65 GB em disco.
+- **Sob demanda.** O nginx serve o bloco do disco; se ainda não existe (horário
+  fora da grade, pré-corte atrasado), o pedido cai no `blocos.py`, que corta o
+  quadro na hora e devolve o bloco (~2 s, quase tudo download).
+- **Se esta máquina cair**, o AmaView volta sozinho ao JPEG inteiro do STAR.
+
+| Peça | Onde |
+|---|---|
+| `blocos/blocos.py` | serviço (só local, porta 8090), pré-corte e limpeza (> 49 h) |
+| `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`) |
+| `blocos/nginx-*.conf` | site do nginx: disco primeiro, `@blocos` no que falta; CORS e cache imutável |
+
+URL: `/blocos/v1/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
+(dia juliano, UTC, como nos arquivos do STAR). Saúde: `/blocos/saude`.
+
+O `amaview instalar` instala e atualiza tudo; `amaview` mostra a situação. O
+HTTPS (o AmaView é servido por HTTPS e o navegador recusa blocos por HTTP) sai
+do Let's Encrypt para `147-15-84-134.sslip.io`, uma vez, com
+`amaview certificado`; o `certbot.timer` renova.
+
+Testes (sem rede): `python3 -m unittest discover -s agendador/blocos`.
+
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.

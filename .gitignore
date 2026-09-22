@@ -2,3 +2,4 @@ site/
 node_modules/
 # Depósito do espelho dos radares entre ciclos (vai no cache do Actions, nunca no git).
 radar-cache/
+__pycache__/
