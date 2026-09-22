@@ -74,11 +74,15 @@ quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
 - **Sobra de 16 px** do vizinho em cada lado do bloco (múltiplo do MCU, então
   ainda sem perda). O AmaView desenha só o miolo de 512 px; a suavização ao
   ampliar lê a sobra e não aparecem emendas. Custa ~13% a mais de bytes.
-- **Pré-corte.** Os quadros novos dos 22 produtos são cortados assim que o STAR
-  os publica — os horários seguem a grade de 10 min, então não é preciso baixar
-  a listagem (1,1 MB por produto) —, e o resto das últimas 48 h é preenchido do
-  mais novo para o mais velho. Em regime: ~240 MB baixados do STAR a cada
-  10 min, ~65 GB em disco.
+- **Pré-corte.** A cada 30 s um HEAD no `latest.jpg` de cada produto (poucos
+  bytes) diz se o STAR publicou quadro novo; os horários seguem a grade de
+  10 min, então não é preciso baixar a listagem (1,1 MB por produto). Quando um
+  produto publica, os horários que faltam dele nas últimas 6 h são tentados na
+  hora — pega os atrasados que a NOAA solta depois de uma pane (em 22/09/2026
+  o GOES-19 parou das 09:50 às 12h por manutenção no solo). Sem esse sinal, um
+  horário ausente é tentado de novo em 5 min (até 1 h de idade), 30 min (até
+  6 h) ou 3 h. O resto das últimas 48 h é preenchido do mais novo para o mais
+  velho. Em regime: ~240 MB baixados do STAR a cada 10 min, ~85 GB em disco.
 - **Sob demanda.** O nginx serve o bloco do disco; se ainda não existe (horário
   fora da grade, pré-corte atrasado), o pedido cai no `blocos.py`, que corta o
   quadro na hora e devolve o bloco (~2 s, quase tudo download).

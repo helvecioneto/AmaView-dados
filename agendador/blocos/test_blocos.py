@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -166,6 +167,42 @@ class Servidor(unittest.TestCase):
         self.assertEqual(blocos.limpar(datetime.now(timezone.utc)), 1)
         self.assertEqual(os.listdir(os.path.join(blocos.PASTA, "13")), [novo])
         self.assertEqual(os.listdir(os.path.join(blocos.PASTA, "13", novo)), ["3600"])
+
+
+class Atrasados(unittest.TestCase):
+    def setUp(self):
+        blocos._ausentes.clear()
+        blocos._ultima_publicacao.clear()
+        self._head = blocos._head_latest
+
+    def tearDown(self):
+        blocos._head_latest = self._head
+        blocos._ausentes.clear()
+        blocos._ultima_publicacao.clear()
+
+    def test_espera_por_idade(self):
+        self.assertEqual(blocos.espera_ausente(timedelta(minutes=30)), 300)
+        self.assertEqual(blocos.espera_ausente(timedelta(hours=3)), 1800)
+        self.assertEqual(blocos.espera_ausente(timedelta(hours=10)), 3 * 3600)
+
+    def test_quadro_novo_no_star_libera_os_atrasados_do_produto(self):
+        agora = datetime.now(timezone.utc)
+        recente = blocos.carimbo_de(agora - timedelta(hours=2))
+        velho = blocos.carimbo_de(agora - timedelta(hours=8))
+        futuro = time.time() + 3600
+        for chave in (("13", recente, 7200), ("13", velho, 7200), ("GEOCOLOR", recente, 7200)):
+            blocos._ausentes[chave] = futuro
+        publicacoes = {"13": "a", "GEOCOLOR": "a"}
+        blocos._head_latest = lambda p: publicacoes.get(p)
+        # Primeira olhada só registra: não há "antes" para comparar.
+        self.assertEqual(blocos.liberar_atrasados(agora), set())
+        self.assertEqual(len(blocos._ausentes), 3)
+        publicacoes["13"] = "b"
+        self.assertEqual(blocos.liberar_atrasados(agora), {"13"})
+        # O de 2 h do produto que publicou volta para a fila; o de 8 h e o do outro produto, não.
+        self.assertNotIn(("13", recente, 7200), blocos._ausentes)
+        self.assertIn(("13", velho, 7200), blocos._ausentes)
+        self.assertIn(("GEOCOLOR", recente, 7200), blocos._ausentes)
 
 
 if __name__ == "__main__":

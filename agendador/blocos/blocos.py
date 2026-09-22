@@ -14,10 +14,12 @@ navegador baixa e decodifica só os da área visível.
   vizinho). O navegador desenha só o miolo de 512 px, e a suavização ao ampliar
   lê a sobra — sem emendas visíveis entre blocos; e a cor da borda, que a
   decodificação suaviza olhando o vizinho, sai igual à do arquivo inteiro.
-- **Pré-corte.** A cada ciclo, os quadros novos dos 22 produtos são cortados
-  assim que o STAR os publica (horários previstos na grade de 10 min, sem
-  baixar a listagem de 1,1 MB), e o resto das últimas 48 h é preenchido do mais
-  novo para o mais velho.
+- **Pré-corte.** A cada 30 s um HEAD no `latest.jpg` de cada produto (poucos
+  bytes) diz se o STAR publicou quadro novo; quando publica, os horários que
+  faltam desse produto nas últimas 6 h são tentados na hora — é o que pega os
+  atrasados que a NOAA solta depois de uma pane. Os horários seguem a grade
+  de 10 min (sem baixar a listagem de 1,1 MB), e o resto das últimas 48 h é
+  preenchido do mais novo para o mais velho.
 - **Sob demanda.** O nginx serve o bloco do disco; se ele ainda não existe, o
   pedido cai aqui, o quadro é cortado na hora (~0,2 s depois do download) e o
   bloco volta na mesma resposta.
@@ -283,6 +285,52 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido") -> 
 # Pré-corte: os quadros novos assim que saem, depois o resto das últimas 48 h
 
 _ausentes: dict[tuple, float] = {}  # (produto, carimbo, largura) → quando tentar de novo
+_ultima_publicacao: dict[str, str] = {}  # produto → Last-Modified do latest.jpg
+# Sem sinal de novidade, quando tentar de novo um horário que o STAR não tem.
+# Em 22/09/2026 o GOES-19 parou das 09:50 às 12h (manutenção no solo da NOAA):
+# com 3 h para tudo acima de 1 h, os quadros que ela soltasse atrasados
+# ficariam até 3 h sem pré-corte.
+ESPERA_AUSENTE = ((timedelta(hours=1), 300), (timedelta(hours=6), 1800))
+ESPERA_LACUNA = 3 * 3600
+JANELA_ATRASADOS = timedelta(hours=6)
+
+
+def espera_ausente(idade: timedelta) -> int:
+    """Segundos até tentar de novo um horário ausente dessa idade."""
+    for ate, segundos in ESPERA_AUSENTE:
+        if idade < ate:
+            return segundos
+    return ESPERA_LACUNA
+
+
+def _head_latest(produto: str) -> str | None:
+    """Last-Modified do latest.jpg do produto (um HEAD de poucos bytes), ou None."""
+    pedido = urllib.request.Request(f"{STAR}/{produto}/latest.jpg", method="HEAD", headers={"User-Agent": AGENTE})
+    try:
+        with urllib.request.urlopen(pedido, timeout=15) as r:
+            return r.headers.get("Last-Modified")
+    except Exception:  # noqa: BLE001 — sem sinal nesta rodada, fica para a próxima
+        return None
+
+
+def liberar_atrasados(agora: datetime) -> set[str]:
+    """
+    Produtos que publicaram quadro novo desde a última olhada: os horários
+    ausentes deles nas últimas 6 h voltam para a fila já.
+    """
+    mudaram = set()
+    for p in PRODUTOS:
+        lm = _head_latest(p)
+        if not lm:
+            continue
+        if p in _ultima_publicacao and _ultima_publicacao[p] != lm:
+            mudaram.add(p)
+        _ultima_publicacao[p] = lm
+    if mudaram:
+        limite = agora - JANELA_ATRASADOS
+        for chave in [k for k in _ausentes if k[0] in mudaram and instante(k[1]) >= limite]:
+            _ausentes.pop(chave, None)
+    return mudaram
 
 
 def _pendentes(agora: datetime) -> list[tuple[str, str, int]]:
@@ -308,9 +356,8 @@ def _aquecer_um(chave: tuple[str, str, int]) -> None:
         cortar(p, c, w, origem="pre")
         _ausentes.pop(chave, None)
     except Ausente:
-        idade = datetime.now(timezone.utc) - instante(c)
-        # Recente: o STAR publica ~15–20 min depois; tenta de novo logo. Velho: lacuna real.
-        _ausentes[chave] = time.time() + (120 if idade < timedelta(hours=1) else 3 * 3600)
+        # O sinal principal é o latest.jpg (liberar_atrasados); isto é a rede de segurança.
+        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c))
     except Exception as e:  # noqa: BLE001 — o laço não pode morrer
         _estado["falhas"] += 1
         _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
@@ -351,11 +398,12 @@ def aquecer_para_sempre() -> None:
             if time.time() - ultima_limpeza > 1800:
                 limpar(agora)
                 ultima_limpeza = time.time()
+            liberar_atrasados(agora)
             fila = _pendentes(agora)
             _estado["fila"] = len(fila)
             # Lote pequeno: o quadro novo nunca espera o preenchimento do passado.
             list(pool.map(_aquecer_um, fila[:66]))
-            time.sleep(20 if fila else 60)
+            time.sleep(10 if fila else 30)
 
 
 # ---------------------------------------------------------------------------
