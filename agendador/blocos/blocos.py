@@ -65,9 +65,9 @@ SOBRA = 16
 JANELA = timedelta(hours=49)
 # Pré-corte ligado por padrão; BLOCOS_AQUECER=0 deixa só o sob demanda.
 AQUECER = os.environ.get("BLOCOS_AQUECER", "1") != "0"
-TRABALHADORES_AQUECER = 3
+TRABALHADORES_AQUECER = 6
 # Cortes simultâneos no total (cada um segura ~100 MB de coeficientes).
-CORTES = threading.BoundedSemaphore(6)
+CORTES = threading.BoundedSemaphore(8)
 
 ROTA = re.compile(
     r"^/blocos/v1/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/"
@@ -354,7 +354,7 @@ def aquecer_para_sempre() -> None:
             fila = _pendentes(agora)
             _estado["fila"] = len(fila)
             # Lote pequeno: o quadro novo nunca espera o preenchimento do passado.
-            list(pool.map(_aquecer_um, fila[:44]))
+            list(pool.map(_aquecer_um, fila[:66]))
             time.sleep(20 if fila else 60)
 
 
