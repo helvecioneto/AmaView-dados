@@ -14,12 +14,13 @@ navegador baixa e decodifica só os da área visível.
   vizinho). O navegador desenha só o miolo de 512 px, e a suavização ao ampliar
   lê a sobra — sem emendas visíveis entre blocos; e a cor da borda, que a
   decodificação suaviza olhando o vizinho, sai igual à do arquivo inteiro.
-- **Pré-corte.** A cada 30 s um HEAD no `latest.jpg` de cada produto (poucos
-  bytes) diz se o STAR publicou quadro novo; quando publica, os horários que
-  faltam desse produto nas últimas 6 h são tentados na hora — é o que pega os
-  atrasados que a NOAA solta depois de uma pane. Os horários seguem a grade
-  de 10 min (sem baixar a listagem de 1,1 MB), e o resto das últimas 48 h é
-  preenchido do mais novo para o mais velho.
+- **Pré-corte.** A cada minuto, um HEAD no arquivo de 450 px de cada horário
+  que falta nas últimas 6 h diz se o STAR o publicou — inclusive atrasado,
+  depois de uma pane; publicado, todos os produtos dele são cortados na hora.
+  Os horários seguem a grade de 10 min (sem baixar a listagem de 1,1 MB), e o
+  resto das últimas 48 h é preenchido do mais novo para o mais velho.
+- `/blocos/v1/ultimos`: o horário mais recente já cortado de cada produto — o
+  app pergunta a cada minuto e recarrega quando há quadro novo.
 - **Sob demanda.** O nginx serve o bloco do disco; se ele ainda não existe, o
   pedido cai aqui, o quadro é cortado na hora (~0,2 s depois do download) e o
   bloco volta na mesma resposta.
@@ -285,52 +286,88 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido") -> 
 # Pré-corte: os quadros novos assim que saem, depois o resto das últimas 48 h
 
 _ausentes: dict[tuple, float] = {}  # (produto, carimbo, largura) → quando tentar de novo
-_ultima_publicacao: dict[str, str] = {}  # produto → Last-Modified do latest.jpg
-# Sem sinal de novidade, quando tentar de novo um horário que o STAR não tem.
-# Em 22/09/2026 o GOES-19 parou das 09:50 às 12h (manutenção no solo da NOAA):
-# com 3 h para tudo acima de 1 h, os quadros que ela soltasse atrasados
-# ficariam até 3 h sem pré-corte.
+# Horários que a NOAA já publicou (vistos no STAR), com quando foram vistos.
+_publicados: dict[str, float] = {}
+# Última sonda de cada horário ainda não publicado.
+_sondados: dict[str, float] = {}
+
+# Sem publicação confirmada, quando tentar de novo um horário que o STAR não
+# tem: 5 min até 1 h de idade, 30 min até 6 h, depois 3 h (lacuna de verdade).
 ESPERA_AUSENTE = ((timedelta(hours=1), 300), (timedelta(hours=6), 1800))
 ESPERA_LACUNA = 3 * 3600
+# Horário já publicado, produto que ainda não chegou: os produtos saem com
+# minutos de diferença (em 22/09/2026 o GEOCOLOR voltou antes das bandas).
+ESPERA_PUBLICADO = 60
+# Até onde procurar horários publicados atrasados, e de quanto em quanto.
 JANELA_ATRASADOS = timedelta(hours=6)
+SONDA_A_CADA = 60
+# O arquivo que diz se um horário saiu: o menor do produto padrão.
+PRODUTO_SONDA = "GEOCOLOR"
 
 
-def espera_ausente(idade: timedelta) -> int:
+def espera_ausente(idade: timedelta, publicado: bool = False) -> int:
     """Segundos até tentar de novo um horário ausente dessa idade."""
+    if publicado:
+        return ESPERA_PUBLICADO
     for ate, segundos in ESPERA_AUSENTE:
         if idade < ate:
             return segundos
     return ESPERA_LACUNA
 
 
-def _head_latest(produto: str) -> str | None:
-    """Last-Modified do latest.jpg do produto (um HEAD de poucos bytes), ou None."""
-    pedido = urllib.request.Request(f"{STAR}/{produto}/latest.jpg", method="HEAD", headers={"User-Agent": AGENTE})
+def _existe_no_star(carimbo: str) -> bool:
+    """O STAR tem esse horário? Um HEAD no arquivo de 450 px do produto padrão."""
+    url = f"{STAR}/{PRODUTO_SONDA}/{carimbo}_GOES19-ABI-nsa-{PRODUTO_SONDA}-450x270.jpg"
+    pedido = urllib.request.Request(url, method="HEAD", headers={"User-Agent": AGENTE})
     try:
         with urllib.request.urlopen(pedido, timeout=15) as r:
-            return r.headers.get("Last-Modified")
-    except Exception:  # noqa: BLE001 — sem sinal nesta rodada, fica para a próxima
-        return None
+            return r.status == 200
+    except Exception:  # noqa: BLE001 — 404 ou rede: não publicado (ainda)
+        return False
 
 
-def liberar_atrasados(agora: datetime) -> set[str]:
+def sondar_publicados(agora: datetime) -> list[str]:
     """
-    Produtos que publicaram quadro novo desde a última olhada: os horários
-    ausentes deles nas últimas 6 h voltam para a fila já.
+    Horários da grade (últimas 6 h) que o STAR passou a ter desde a última
+    olhada: todos os produtos deles voltam para a fila já.
+
+    Em 22/09/2026 o GOES-19 parou às 09:50 UTC (manutenção no solo da NOAA) e
+    voltou às 13h soltando os quadros das 12:00–12:20 de uma vez — sem mexer
+    no `latest.jpg`, que ficou em 09:55. Sondar o próprio horário é o único
+    sinal que enxerga quadro atrasado. Custo: um HEAD por horário faltante por
+    minuto (1–2 em regime, ~36 durante uma pane de 6 h).
     """
-    mudaram = set()
-    for p in PRODUTOS:
-        lm = _head_latest(p)
-        if not lm:
+    base = agora.replace(minute=agora.minute - agora.minute % 10, second=0, microsecond=0)
+    novos = []
+    passos = int(JANELA_ATRASADOS.total_seconds() // 600)
+    for k in range(passos + 1):
+        c = carimbo_de(base - timedelta(minutes=10 * k))
+        if c in _publicados or os.path.isdir(pasta_do_quadro(PRODUTO_SONDA, c, 7200)):
             continue
-        if p in _ultima_publicacao and _ultima_publicacao[p] != lm:
-            mudaram.add(p)
-        _ultima_publicacao[p] = lm
-    if mudaram:
-        limite = agora - JANELA_ATRASADOS
-        for chave in [k for k in _ausentes if k[0] in mudaram and instante(k[1]) >= limite]:
-            _ausentes.pop(chave, None)
-    return mudaram
+        if time.time() - _sondados.get(c, 0) < SONDA_A_CADA:
+            continue
+        _sondados[c] = time.time()
+        if _existe_no_star(c):
+            _publicados[c] = time.time()
+            _sondados.pop(c, None)
+            novos.append(c)
+            for chave in [k2 for k2 in _ausentes if k2[1] == c]:
+                _ausentes.pop(chave, None)
+    return novos
+
+
+def ultimos() -> dict[str, str]:
+    """Horário mais recente já cortado de cada produto (o app usa para saber que há quadro novo)."""
+    out = {}
+    for p in PRODUTOS:
+        pasta = os.path.join(PASTA, p)
+        try:
+            prontos = [c for c in os.listdir(pasta) if len(c) == 11 and c.isdigit() and os.path.isdir(os.path.join(pasta, c, "7200"))]
+        except FileNotFoundError:
+            continue
+        if prontos:
+            out[p] = max(prontos)
+    return out
 
 
 def _pendentes(agora: datetime) -> list[tuple[str, str, int]]:
@@ -356,8 +393,8 @@ def _aquecer_um(chave: tuple[str, str, int]) -> None:
         cortar(p, c, w, origem="pre")
         _ausentes.pop(chave, None)
     except Ausente:
-        # O sinal principal é o latest.jpg (liberar_atrasados); isto é a rede de segurança.
-        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c))
+        # O sinal principal é a sonda do horário (sondar_publicados); isto é a rede de segurança.
+        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c), c in _publicados)
     except Exception as e:  # noqa: BLE001 — o laço não pode morrer
         _estado["falhas"] += 1
         _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
@@ -387,6 +424,9 @@ def limpar(agora: datetime) -> int:
                     shutil.rmtree(os.path.join(cp, w), ignore_errors=True)
     for chave in [k for k in _ausentes if instante(k[1]) < limite]:
         _ausentes.pop(chave, None)
+    for mapa in (_publicados, _sondados):
+        for c in [c for c in mapa if instante(c) < limite]:
+            mapa.pop(c, None)
     return removidos
 
 
@@ -398,7 +438,7 @@ def aquecer_para_sempre() -> None:
             if time.time() - ultima_limpeza > 1800:
                 limpar(agora)
                 ultima_limpeza = time.time()
-            liberar_atrasados(agora)
+            sondar_publicados(agora)
             fila = _pendentes(agora)
             _estado["fila"] = len(fila)
             # Lote pequeno: o quadro novo nunca espera o preenchimento do passado.
@@ -451,6 +491,9 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         caminho = self.path.split("?", 1)[0]
         if caminho == "/blocos/saude":
             return self._responder(200, json.dumps(saude()).encode(), "application/json", "no-store")
+        if caminho == "/blocos/v1/ultimos":
+            # O app pergunta a cada minuto se há quadro novo: vale mais que o latest.jpg do STAR.
+            return self._responder(200, json.dumps(ultimos()).encode(), "application/json", "no-store")
         m = ROTA.match(caminho)
         if not m:
             return self._erro(404, "rota desconhecida")
