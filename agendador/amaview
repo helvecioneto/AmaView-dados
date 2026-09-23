@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça e o ar
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar e as estações
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -71,6 +71,7 @@ instalar() {
 
   instalar_fumaca
   instalar_ar
+  instalar_meteo
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -86,6 +87,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$src/nginx-locais.conf" /etc/nginx/snippets/amaview-blocos.conf
   sudo install -m 644 "$DESTINO/agendador/fumaca/nginx-locais.conf" /etc/nginx/snippets/amaview-fumaca.conf
   sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
+  sudo install -m 644 "$DESTINO/agendador/meteo/nginx-locais.conf" /etc/nginx/snippets/amaview-meteo.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -211,6 +213,38 @@ for nome, f in p["fontes"].items():
 PY
   journalctl -u amaview-ar -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   echo "  em disco: $(du -sh /var/cache/amaview-ar 2>/dev/null | cut -f1)"
+}
+
+# Estações meteorológicas (agendador/meteo): timer independente do token — lê o
+# WIS2 do INMET e o METAR da NOAA AWC e escreve em /var/cache/amaview-meteo,
+# que o nginx serve. Só Python da biblioteca padrão.
+instalar_meteo() {
+  titulo "Estações meteorológicas"
+  getent passwd amaview-meteo >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-meteo
+  sudo cp "$DESTINO/agendador/meteo/amaview-meteo.service" "$DESTINO/agendador/meteo/amaview-meteo.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-meteo.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-meteo.timer && verde "  amaview-meteo.timer ligado (a cada 5 min)"
+}
+
+situacao_meteo() {
+  titulo "Estações meteorológicas"
+  systemctl is-active --quiet amaview-meteo.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem estacoes.json ainda em /var/cache/amaview-meteo"
+import json
+from datetime import datetime, timezone
+e = json.load(open("/var/cache/amaview-meteo/meteo/v1/estacoes.json"))["estacoes"]
+agora = datetime.now(timezone.utc).timestamp() * 1000
+for k, nome in (("i", "INMET"), ("m", "METAR")):
+    x = [s for s in e if s["k"] == k]
+    if x:
+        novo = max(s["u"]["ms"] for s in x)
+        print(f"  {nome:6} {len(x)} estações · mais nova de {(agora - novo) / 60e3:.0f} min atrás")
+PY
+  journalctl -u amaview-meteo -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-meteo 2>/dev/null | cut -f1)"
 }
 
 situacao_fumaca() {
@@ -340,6 +374,7 @@ situacao() {
   situacao_blocos
   situacao_fumaca
   situacao_ar
+  situacao_meteo
   echo
 }
 
@@ -356,10 +391,11 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
+    sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload

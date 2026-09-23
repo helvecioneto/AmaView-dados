@@ -231,6 +231,72 @@ URLs (em `https://147.15.84.134/ar/v1/`):
 Logs: `journalctl -u amaview-ar`. Testes (sem rede):
 `python3 -m unittest discover -s agendador/ar`.
 
+## Estações meteorológicas
+
+A mesma máquina junta, para a camada "Estações meteorológicas" do AmaView, as
+observações de superfície das últimas 48 h na Amazônia Legal:
+
+- **INMET pelo WIS2 da OMM** (nó oficial `wis2bra.inmet.gov.br`, OGC API
+  Features, sem token): estações automáticas (de hora em hora) e
+  convencionais/sinóticas, já decodificadas do BUFR — uma feature por variável
+  por estação. O navegador não lê direto: a resposta vem com
+  `Access-Control-Allow-Origin` duplicado e o CORS quebra. Uma hora HH chega
+  aos poucos até ~HH+60 min; a cada rodada as 4 horas mais novas têm a
+  **contagem** conferida (`limit=1`, `numberMatched`, ~1 KB) e só são baixadas
+  de novo quando ela muda; até 12 h, conferidas de hora em hora. O
+  preenchimento inicial das 48 h leva ~1 min.
+- **Chuva só de 1 h.** O período vem no `phenomenonTime`: as automáticas
+  mandam 1 h (`HH-1/HH`); as convencionais, 12 e 24 h ou um instante sem
+  período — esses ficam fora, porque não se somam à série horária.
+- **METAR/SPECI dos aeródromos** (NOAA Aviation Weather Center): o
+  `metars.cache.csv.gz` (~256 KB, mundo inteiro, atualizado a cada minuto)
+  traz só a observação mais recente de cada aeródromo — **a série de 48 h é
+  acumulada aqui**. A API (`/api/data/metar`, corta em 400 observações) é
+  usada de hora em hora, em lotes de 6 aeródromos, para o preenchimento
+  inicial, os buracos e os nomes. Nós → m/s, polegadas → hPa, visibilidade
+  pelos 4 dígitos do próprio METAR (9999 e CAVOK = 10 km ou mais), umidade
+  pela fórmula de Magnus. "WO ATTN" e afins (sem nenhuma medição) não entram.
+- **Nomes.** Cadastro do INMET (`apitempo.inmet.gov.br/estacoes/T` e `/M`,
+  exige User-Agent de navegador; uma vez por dia), casado pelo WIGOS
+  (`CD_WSI`) e, nas convencionais, pelo índice da OMM. As sinóticas de
+  aeroporto que o nó transmite mas que não estão no cadastro do INMET têm o
+  nome lido uma vez do OSCAR/Surface da OMM — e saem quando há um METAR a
+  menos de 5 km (mesmo lugar, dado repetido).
+- **Recorte:** dentro da Amazônia Legal (IBGE, `meteo/amazonia_legal.json`,
+  simplificado a ~3 km) ou a até 100 km da divisa — a faixa dá contexto na
+  borda do mapa (Bolívia, Peru, Colômbia, Guianas, Goiás) sem trazer o Brasil
+  inteiro.
+- **Nada é inventado nem suavizado.** Hora sem observação fica `null`; valor
+  fora da faixa física (ex.: orvalho de 99 °C) é defeito de sensor e fica
+  fora; os números só perdem o resíduo de ponto flutuante (1 casa).
+
+| Peça | Onde |
+|---|---|
+| `meteo/meteo.py` | uma rodada: confere/baixa as horas do WIS2, acumula o METAR, publica |
+| `meteo/amazonia_legal.json` | contorno da Amazônia Legal (IBGE) para o recorte |
+| `meteo/amaview-meteo.{service,timer}` | a cada 5 min; usuário `amaview-meteo`, `/var/cache/amaview-meteo`; só a biblioteca padrão do Python |
+| `meteo/nginx-locais.conf` | `/meteo/v1/`: CORS `*`, gzip, `no-cache` (revalida com ETag) |
+
+URLs (em `https://147.15.84.134/meteo/v1/`), tempos em epoch ms UTC:
+
+- `estacoes.json` (~45 KB, ~10 KB com gzip): `estacoes`, cada uma com `k`
+  (`i` INMET, `m` METAR), `c` (código: A101, 82332, SBMN), `w` (WIGOS),
+  `n`, `uf`, `pais`, `x`/`y`/`z` e `u`, a última leitura (`ms`, `t`, `td`,
+  `ur`, `vv`, `dv`, `raj`, `p`, `ps`, `chuva`, `chuva24`; METAR também `vis`,
+  `wx`, `raw`).
+- `serie.json` (~440 KB, ~90 KB com gzip): `t0`, `passoMin` 60, `slots` 48;
+  `inmet` por código, uma lista de 48 valores por variável (`null` = sem
+  observação); `metar` por ICAO, em colunas com os instantes próprios (`ms`,
+  variáveis, `wx`, `raw`, `speci`).
+
+Unidades: °C, %, m/s, graus (de onde o vento vem), hPa (`p` ao nível do mar;
+`ps` na estação), mm na hora, metros.
+
+Reserva não implementada: se o `wis2bra` cair, o Ogimet (`getsynop`) tem as
+mesmas sinóticas em texto. Logs: `journalctl -u amaview-meteo`.
+
+Testes (sem rede): `python3 -m unittest discover -s agendador/meteo`.
+
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.

@@ -1,0 +1,28 @@
+[Unit]
+Description=Estações meteorológicas para o AmaView (INMET pelo WIS2 da OMM e METAR da NOAA AWC)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/meteo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/meteo/meteo.py
+User=amaview-meteo
+Group=amaview-meteo
+# /var/cache/amaview-meteo, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-meteo
+CacheDirectoryMode=0755
+UMask=0022
+Environment=METEO_RAIZ=/var/cache/amaview-meteo
+Environment=PYTHONUNBUFFERED=1
+# O preenchimento das 48 h leva ~1 min; uma rodada normal, poucos segundos.
+TimeoutStartSec=10min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

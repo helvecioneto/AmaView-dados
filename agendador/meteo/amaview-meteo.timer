@@ -1,0 +1,15 @@
+[Unit]
+Description=Estações meteorológicas a cada 5 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/meteo
+
+[Timer]
+# O METAR muda a cada minuto (SPECI a qualquer hora); a hora do INMET chega aos
+# poucos até ~HH+60 min. Cada olhada custa o CSV da AWC (~256 KB) e poucas
+# contagens de ~1 KB no WIS2 — a hora só é baixada de novo quando a contagem muda.
+OnCalendar=*:0/5
+Persistent=true
+AccuracySec=15s
+Unit=amaview-meteo.service
+
+[Install]
+WantedBy=timers.target
