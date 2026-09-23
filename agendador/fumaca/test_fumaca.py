@@ -42,11 +42,14 @@ def netcdf_sintetico(fumaca_em=None, noite=False) -> bytes:
         y = f.create_dataset("y", data=np.arange(N, dtype=np.int16))
         y.attrs["scale_factor"] = np.array([-PASSO], np.float32)
         y.attrs["add_offset"] = np.array([OFFSET], np.float32)
-        s = np.full((N, N), -128 if noite else 0, np.int8)
+        # De noite a NOAA grava 0 ("sem fumaça"), não vazio: medido em 23/09/2026.
+        s = np.zeros((N, N), np.int8)
         if fumaca_em is not None:
             s[fumaca_em] = 1
         d = f.create_dataset("Smoke", data=s, chunks=(48, N), compression="gzip")
         d.attrs["_FillValue"] = np.array([-128], np.int8)
+        # PQI1: bits 2–3 = ângulo solar (0 válido, 2 fora da faixa: noite).
+        f.create_dataset("PQI1", data=np.full((N, N), 8 if noite else 0, np.uint16), chunks=(24, N), compression="gzip")
         p = f.create_dataset("goes_imager_projection", data=0, dtype=np.int32)
         for k, v in PROJ.items():
             p.attrs[k] = np.array([v])

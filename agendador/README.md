@@ -131,9 +131,9 @@ em contornos para o AmaView.
   falta na janela é preenchido do mais novo para o mais velho (até 36 por
   rodada, para o quadro novo nunca esperar; o que sobra fica na fila da
   próxima). Arquivo que falha espera 30 min antes de ser baixado de novo.
-- **Cobertura.** Cada quadro diz em que fração do setor a NOAA tentou detectar
-  fumaça (`cob`): de noite o `Smoke` vem todo vazio, e "sem fumaça" não é o
-  mesmo que "sem dado".
+- **Cobertura.** Cada quadro diz em que fração da área a NOAA tentou detectar
+  fumaça (`cob`, pelo ângulo solar do `PQI1`): de noite o `Smoke` vem **0**
+  ("sem fumaça") no disco inteiro, e "sem fumaça" não é o mesmo que "sem dado".
 - `amaview-fumaca.timer` a cada 2 min (a NOAA publica ~14 min depois da
   varredura). Cada olhada lista as duas horas mais novas no S3 (~5 KB cada);
   hora antiga com quadro faltando é relistada no máximo a cada 30 min.

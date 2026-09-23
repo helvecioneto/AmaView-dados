@@ -207,22 +207,24 @@ def processar(nc: bytes | str) -> tuple[dict, dict]:
         l0 = max(0, math.floor((NSA["yMax"] - yo) / ys))
         l1 = min(ny, math.ceil((NSA["yMin"] - yo) / ys) + 1)
         fumaca = f["Smoke"][l0:l1, c0:c1]
-        fill = int(f["Smoke"].attrs["_FillValue"][0])
+        # Bits 2–3 do PQI1: ângulo solar válido (0), inválido (1) ou fora da
+        # faixa do algoritmo (2); 65535 fora do disco. Só na grade grossa.
+        g = PASSO_GROSSO
+        sol = (f["PQI1"][l0:l1:g, c0:c1:g] >> 2) & 3
         p = f["goes_imager_projection"].attrs
         proj = {k: float(p[k][0]) for k in ("semi_major_axis", "semi_minor_axis", "perspective_point_height", "longitude_of_projection_origin")}
 
     eixo_x = lambda col: xo + col * xs  # noqa: E731
     eixo_y = lambda lin: yo + lin * ys  # noqa: E731
     # Área de interesse numa grade grossa: no disco e a oeste de LON_LESTE.
-    g = PASSO_GROSSO
     gx, gy = np.meshgrid(eixo_x(np.arange(c0, c1, g) + g / 2), eixo_y(np.arange(l0, l1, g) + g / 2))
     with np.errstate(invalid="ignore"):
         lon = geos_para_lonlat(gx, gy, proj)[0]
         area = np.isfinite(lon) & (lon <= LON_LESTE)
-    # Cobertura: fração da área em que a NOAA tentou detectar fumaça. De noite
-    # (e fora do ângulo de sol do algoritmo) o `Smoke` vem todo vazio: "sem
-    # fumaça" e "sem dado" não são a mesma coisa.
-    validos = (fumaca[::g, ::g][: area.shape[0], : area.shape[1]] != fill) & area
+    # Cobertura: fração da área em que a NOAA tentou detectar fumaça — com sol.
+    # De noite o `Smoke` vem 0 ("sem fumaça") em todo o disco, e "sem fumaça"
+    # não é "sem dado": o que diz a diferença é o ângulo solar do PQI1.
+    validos = (sol[: area.shape[0], : area.shape[1]] == 0) & area
     cob = float(validos.sum() / max(1, area.sum()))
     dentro = np.repeat(np.repeat(area, g, axis=0), g, axis=1)[: fumaca.shape[0], : fumaca.shape[1]]
 
