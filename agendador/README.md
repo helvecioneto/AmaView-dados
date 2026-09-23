@@ -165,6 +165,72 @@ URLs: `/fumaca/v2/indice.json` (`{"gerado", "quadros": [{"c": "AAAADDDHHMM",
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/fumaca`.
 
+## Qualidade do ar
+
+A mesma máquina espelha três fontes de qualidade do ar para a camada
+"Qualidade do ar" do AmaView. Nenhuma delas é chamada pelo navegador: a rede do
+Acre não manda CORS utilizável, o Open-Meteo tem limite de uso por IP, e um
+espelho só é mais robusto que três servidores de terceiros.
+
+- **Rede de Qualidade do Ar do Acre** (UFAC/MPAC,
+  [acrequalidadedoar.ufac.br](https://acrequalidadedoar.ufac.br)): sensores
+  PurpleAir com o PM2,5 corrigido pela própria rede. A API não tem série por
+  sensor — só a leitura mais recente de cada um —, então **o espelho monta a
+  série**: a cada 5 min guarda a leitura mais recente de cada sensor numa
+  grade de 5 min, janela móvel de 48 h. A média horária por município que a
+  rede calcula (`/readings/history`) vai junto: é o histórico que já existe
+  quando o espelho começa, e o complemento quando um sensor falha. Em
+  23/09/2026: 39 sensores no `latest-by-sensor`, 30 no cadastro, 14 vivos.
+  Sensor fora do cadastro e parado há mais de 48 h (os de 2019–2022) sai;
+  sensor do cadastro parado continua, sem série (o AmaView mostra "sem dado").
+- **MonitorAr** (MMA, [monitorar.mma.gov.br](https://monitorar.mma.gov.br)):
+  todas as estações oficiais da Amazônia Legal (os nove estados; o Maranhão a
+  oeste de 44°W), com o **IQAr e a classificação CONAMA 491 que o próprio
+  MonitorAr calcula**, por poluente. A API dá as últimas 24 medições
+  horárias; o espelho acumula 48 h. `dtMedicao` vem **no horário de Brasília,
+  sem fuso** (medido: às 16:09 BRT, o horário mais novo do país inteiro era
+  16:00). Em 23/09/2026, só 2 das 12 estações da região tinham dado recente
+  (Gapara e UTE Interna, em São Luís); uma tem `dtUltimaAtualizacao` em 2066,
+  tratada como sem data.
+- **CAMS global** (ECMWF/Copernicus) via [Open-Meteo](https://open-meteo.com/en/docs/air-quality-api):
+  **modelo, não medição**. Grade de 0,8° sobre a Amazônia Legal (721
+  células; os centros caem sobre a grade de 0,4° do CAMS, então cada valor é
+  o de uma célula do modelo, sem interpolação): PM2,5, PM10, CO, O₃, NO₂ e
+  profundidade óptica de aerossóis (AOD), horário. O modelo roda de 12 em
+  12 h: o espelho lê o `meta.json` de hora em hora e só baixa a grade quando
+  há rodada nova (ou a cada 6 h, por segurança) — ~2–3 mil chamadas por dia,
+  em lotes de 100 pontos, dentro do limite não comercial. Publica só as 48 h
+  até a hora corrente: a previsão não entra na camada.
+
+Nada é filtrado nem reclassificado; os números só perdem o resíduo de ponto
+flutuante (2 casas). A faixa de qualidade do ar dos sensores e do modelo é
+calculada no AmaView, com a tabela documentada lá (`docs/qualidade-ar.md`).
+Cada fonte roda isolada: se uma cai, as outras publicam, e `fontes` no
+`pontos.json` diz quando cada uma respondeu pela última vez e o erro.
+
+| Peça | Onde |
+|---|---|
+| `ar/ar.py` | uma rodada: lê as três fontes, acumula e publica |
+| `ar/amazonia_legal.json` | contorno da Amazônia Legal (IBGE, simplificado a 0,1°) para a grade do modelo |
+| `ar/amaview-ar.{service,timer}` | a cada 5 min; usuário `amaview-ar`, `/var/cache/amaview-ar`; só a biblioteca padrão do Python |
+| `ar/nginx-locais.conf` | `/ar/v1/`: CORS `*`, gzip, `max-age=60` |
+
+URLs (em `https://147.15.84.134/ar/v1/`):
+
+- `pontos.json` (~100 KB, ~5 KB com gzip): `sensores` (`t0`, `passoMin` 5,
+  `slots` 577, `lista` com `id`, `cod`, `nome`, `mun`, `lat`, `lon`, `ult`
+  `{t, pm, fl}` e `serie`), `municipios` (`h0`, `horas` 48, `serie` por
+  município), `estacoes` (`h0`, `horas`, `lista` com `atual` e `polu`: por
+  poluente, `iqar`, `cl` — id da classificação do MonitorAr — e `val`,
+  validado) e `fontes`. Tempos em epoch ms, UTC.
+- `cams.json` (~170 KB, ~50 KB com gzip): `celulas` `[lon, lat]`, `passo`,
+  `h0`, `horas` e `pm2_5` por célula.
+- `cams-series.json` (~1 MB, ~250 KB com gzip): as seis variáveis por célula
+  (`vars`, `unidades`, `series`), para a ficha de uma célula.
+
+Logs: `journalctl -u amaview-ar`. Testes (sem rede):
+`python3 -m unittest discover -s agendador/ar`.
+
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.

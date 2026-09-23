@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos e a fumaça
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça e o ar
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -70,6 +70,7 @@ instalar() {
     && echo "  'amaview' disponível em /usr/local/bin"
 
   instalar_fumaca
+  instalar_ar
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -84,6 +85,7 @@ gerar_site_blocos() {
   local src="$DESTINO/agendador/blocos"
   sudo install -m 644 "$src/nginx-locais.conf" /etc/nginx/snippets/amaview-blocos.conf
   sudo install -m 644 "$DESTINO/agendador/fumaca/nginx-locais.conf" /etc/nginx/snippets/amaview-fumaca.conf
+  sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -174,6 +176,41 @@ instalar_fumaca() {
   sudo systemctl daemon-reload
   sudo systemctl enable amaview-fumaca.timer >/dev/null 2>&1
   sudo systemctl restart amaview-fumaca.timer && verde "  amaview-fumaca.timer ligado (a cada 2 min)"
+}
+
+# Qualidade do ar (agendador/ar): outro timer independente do token — lê as
+# APIs públicas da UFAC, do MonitorAr e do Open-Meteo e escreve em
+# /var/cache/amaview-ar, que o nginx serve. Só Python da biblioteca padrão.
+instalar_ar() {
+  titulo "Qualidade do ar"
+  getent passwd amaview-ar >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-ar
+  sudo cp "$DESTINO/agendador/ar/amaview-ar.service" "$DESTINO/agendador/ar/amaview-ar.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-ar.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-ar.timer && verde "  amaview-ar.timer ligado (a cada 5 min)"
+}
+
+situacao_ar() {
+  titulo "Qualidade do ar"
+  systemctl is-active --quiet amaview-ar.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem pontos.json ainda em /var/cache/amaview-ar"
+import json
+from datetime import datetime, timezone
+p = json.load(open("/var/cache/amaview-ar/ar/v1/pontos.json"))
+agora = datetime.now(timezone.utc).timestamp() * 1000
+s = p["sensores"]["lista"]
+vivos = [x for x in s if agora - x["ult"]["t"] <= 48 * 3600e3]
+print(f"  {len(s)} sensores da rede do Acre, {len(vivos)} com leitura nas últimas 48 h")
+e = p["estacoes"]["lista"]
+print(f"  {len(e)} estações do MonitorAr, {sum(1 for x in e if x['ult'] and agora - x['ult'] <= 48 * 3600e3)} com dado nas últimas 48 h")
+for nome, f in p["fontes"].items():
+    quando = f"{(agora - f['em']) / 60e3:.0f} min atrás" if f.get("em") else "nunca"
+    print(f"  {nome:9} ok {quando}" + (f" · erro: {f['erro']}" if f.get("erro") else ""))
+PY
+  journalctl -u amaview-ar -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-ar 2>/dev/null | cut -f1)"
 }
 
 situacao_fumaca() {
@@ -302,6 +339,7 @@ situacao() {
 
   situacao_blocos
   situacao_fumaca
+  situacao_ar
   echo
 }
 
@@ -318,9 +356,10 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
+    sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload

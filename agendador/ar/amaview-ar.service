@@ -1,0 +1,28 @@
+[Unit]
+Description=Qualidade do ar para o AmaView (sensores UFAC/MPAC, MonitorAr/MMA e modelo CAMS via Open-Meteo)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/ar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/ar/ar.py
+User=amaview-ar
+Group=amaview-ar
+# /var/cache/amaview-ar, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-ar
+CacheDirectoryMode=0755
+UMask=0022
+Environment=AR_RAIZ=/var/cache/amaview-ar
+Environment=PYTHONUNBUFFERED=1
+# Uma rodada normal leva ~2 s; a que baixa a grade do CAMS, ~30 s.
+TimeoutStartSec=5min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
