@@ -3,8 +3,9 @@
 Fumaça do GOES-19 para o AmaView: a máscara `Smoke` do produto ABI-L2-ADPF da
 NOAA (detecção de aerossóis, disco completo, 10 em 10 min) virada contorno.
 
-- **Só o que a NOAA marcou.** `Smoke == 1` (fumaça presente) vira polígono;
-  nada é filtrado, suavizado além do contorno ou reclassificado. O contorno é
+- **Só o que a NOAA marcou, onde ela garante a qualidade.** `Smoke == 1`
+  (fumaça presente) com o sol na faixa quantitativa do algoritmo (PQI1) vira
+  polígono; nada mais é filtrado, suavizado além do contorno ou reclassificado. O contorno é
   o de meio caminho entre pixel com e sem fumaça (marching squares), na grade
   de 2 km do próprio produto.
 - **Leve.** O arquivo (~4 MB) é baixado para a MEMÓRIA, lido só nas linhas do
@@ -207,16 +208,17 @@ def processar(nc: bytes | str) -> tuple[dict, dict]:
         l0 = max(0, math.floor((NSA["yMax"] - yo) / ys))
         l1 = min(ny, math.ceil((NSA["yMin"] - yo) / ys) + 1)
         fumaca = f["Smoke"][l0:l1, c0:c1]
-        # Bits 2–3 do PQI1: ângulo solar válido (0), inválido (1) ou fora da
-        # faixa do algoritmo (2); 65535 fora do disco. Só na grade grossa.
-        g = PASSO_GROSSO
-        sol = (f["PQI1"][l0:l1:g, c0:c1:g] >> 2) & 3
+        # Bits 2–3 do PQI1, ângulo solar: 0 = válido (zênite < 60°, a faixa
+        # quantitativa), 2 = inválido (noite), 3 = fora da faixa (60–87°,
+        # detecção degradada); 65535 fora do disco.
+        sol_ok = ((f["PQI1"][l0:l1, c0:c1] >> 2) & 3) == 0
         p = f["goes_imager_projection"].attrs
         proj = {k: float(p[k][0]) for k in ("semi_major_axis", "semi_minor_axis", "perspective_point_height", "longitude_of_projection_origin")}
 
     eixo_x = lambda col: xo + col * xs  # noqa: E731
     eixo_y = lambda lin: yo + lin * ys  # noqa: E731
     # Área de interesse numa grade grossa: no disco e a oeste de LON_LESTE.
+    g = PASSO_GROSSO
     gx, gy = np.meshgrid(eixo_x(np.arange(c0, c1, g) + g / 2), eixo_y(np.arange(l0, l1, g) + g / 2))
     with np.errstate(invalid="ignore"):
         lon = geos_para_lonlat(gx, gy, proj)[0]
@@ -224,11 +226,15 @@ def processar(nc: bytes | str) -> tuple[dict, dict]:
     # Cobertura: fração da área em que a NOAA tentou detectar fumaça — com sol.
     # De noite o `Smoke` vem 0 ("sem fumaça") em todo o disco, e "sem fumaça"
     # não é "sem dado": o que diz a diferença é o ângulo solar do PQI1.
-    validos = (sol[: area.shape[0], : area.shape[1]] == 0) & area
+    validos = sol_ok[::g, ::g] & area
     cob = float(validos.sum() / max(1, area.sum()))
     dentro = np.repeat(np.repeat(area, g, axis=0), g, axis=1)[: fumaca.shape[0], : fumaca.shape[1]]
 
-    polis = poligonos((fumaca == 1) & dentro, c0, l0, eixo_x, eixo_y, proj)
+    # Com o sol baixo (60–87°) o ADP marca como fumaça faixas inteiras do
+    # terminador: em 23/09/2026 09:10 UTC, 46.396 de 46.437 pixels (264 mil
+    # km² de "fumaça" ao amanhecer). A NOAA chama essa faixa de degradada; o
+    # AmaView mostra só a quantitativa.
+    polis = poligonos((fumaca == 1) & dentro & sol_ok, c0, l0, eixo_x, eixo_y, proj)
     feicoes = [
         {
             "type": "Feature",

@@ -30,7 +30,7 @@ PASSO = 5.6e-05
 OFFSET = 0.151844
 
 
-def netcdf_sintetico(fumaca_em=None, noite=False) -> bytes:
+def netcdf_sintetico(fumaca_em=None, noite=False, sol_baixo=None) -> bytes:
     """ADPF de disco completo com `Smoke` 0 no disco, 1 em `fumaca_em` (linhas, colunas) e vazio fora."""
     import h5py
 
@@ -49,7 +49,10 @@ def netcdf_sintetico(fumaca_em=None, noite=False) -> bytes:
         d = f.create_dataset("Smoke", data=s, chunks=(48, N), compression="gzip")
         d.attrs["_FillValue"] = np.array([-128], np.int8)
         # PQI1: bits 2–3 = ângulo solar (0 válido, 2 fora da faixa: noite).
-        f.create_dataset("PQI1", data=np.full((N, N), 8 if noite else 0, np.uint16), chunks=(24, N), compression="gzip")
+        pqi1 = np.full((N, N), 8 if noite else 0, np.uint16)
+        if sol_baixo is not None:
+            pqi1[sol_baixo] = 12
+        f.create_dataset("PQI1", data=pqi1, chunks=(24, N), compression="gzip")
         p = f.create_dataset("goes_imager_projection", data=0, dtype=np.int32)
         for k, v in PROJ.items():
             p.attrs[k] = np.array([v])
@@ -143,6 +146,13 @@ class Quadro(unittest.TestCase):
         # Borda do disco sobre o Saara: onde o ADP confunde poeira com fumaça.
         r, c = celula(-5.0, 21.0)
         gj, resumo = fumaca.processar(netcdf_sintetico((slice(r, r + 6), slice(c, c + 6))))
+        self.assertEqual(resumo["n"], 0)
+
+    def test_sol_baixo_fica_de_fora(self):
+        # Faixa degradada (zênite 60–87°): o ADP marca o terminador como fumaça.
+        r, c = celula(-63.0, -10.0)
+        area = (slice(r, r + 6), slice(c, c + 6))
+        _, resumo = fumaca.processar(netcdf_sintetico(area, sol_baixo=area))
         self.assertEqual(resumo["n"], 0)
 
     def test_noite_sem_cobertura(self):

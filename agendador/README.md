@@ -114,8 +114,12 @@ NOAA (detecção de aerossóis, disco completo, a cada 10 min; balde público
 [`noaa-goes19`](https://noaa-goes19.s3.amazonaws.com/index.html#ABI-L2-ADPF/))
 em contornos para o AmaView.
 
-- **Só o que a NOAA marcou.** `Smoke == 1` vira polígono, sem filtro nem
-  reclassificação. O contorno passa a meio caminho entre pixel com e sem
+- **Só o que a NOAA marcou, onde ela garante a qualidade.** `Smoke == 1` com
+  o sol na faixa quantitativa do algoritmo (zênite < 60°, `PQI1`) vira
+  polígono, sem outro filtro nem reclassificação. Com o sol baixo (60–87°, a
+  faixa que a NOAA chama de degradada) o ADP marca o terminador inteiro: em
+  23/09/2026 09:10 UTC eram 264 mil km² de "fumaça" ao amanhecer, 99,9% nessa
+  faixa. O contorno passa a meio caminho entre pixel com e sem
   fumaça (marching squares do `contourpy`), na grade de 2 km do produto;
   vértices colineares saem, coordenadas em lon/lat com 3 casas (~100 m).
 - **Só a América do Sul do setor NSA** (a oeste de 30°W). A leste, o setor
