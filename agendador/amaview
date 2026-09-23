@@ -5,6 +5,7 @@
 #   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça)
 #   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos e a fumaça
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
+#   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
@@ -27,6 +28,12 @@ TOKEN="/etc/amaview/token"
 BLOCOS_IP="147.15.84.134"
 BLOCOS_NOME="147-15-84-134.sslip.io"
 BLOCOS_SITE="/etc/nginx/sites-available/amaview-blocos"
+# Certificado do próprio IP (lego; o certbot 2.9 do Ubuntu não emite para IP).
+# É o endereço que o AmaView usa: o sslip.io é bloqueado por filtros de DNS.
+LEGO_VERSAO="5.5.2"
+LEGO_SHA256="15b14ec2ab14fde69cc8396eb0204c5ce4327e31a486953225a6059b26db3e8c"
+LEGO_PASTA="/etc/amaview/lego"
+CERT_IP="$LEGO_PASTA/certificates/$BLOCOS_IP.crt"
 
 verde() { printf '\033[32m%s\033[0m\n' "$*"; }
 vermelho() { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -82,6 +89,9 @@ gerar_site_blocos() {
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
       cat "$src/nginx-site-tls.conf"
     fi
+    if sudo test -s "$CERT_IP"; then
+      cat "$src/nginx-site-tls-ip.conf"
+    fi
   } | sed "s/@NOME@/$BLOCOS_NOME/g; s/@IP@/$BLOCOS_IP/g" | sudo tee "$BLOCOS_SITE" >/dev/null
   sudo ln -sf "$BLOCOS_SITE" /etc/nginx/sites-enabled/amaview-blocos
   if sudo nginx -t -q; then
@@ -104,6 +114,49 @@ instalar_blocos() {
   # `restart`: o serviço relê o código que o `git pull` acabou de trazer.
   sudo systemctl restart amaview-blocos && verde "  amaview-blocos no ar"
   gerar_site_blocos
+  instalar_certificado_ip
+}
+
+# lego com versão e checksum fixos: baixar binário da internet para rodar como
+# root só depois de conferir o hash.
+instalar_lego() {
+  if command -v lego >/dev/null && lego --version 2>/dev/null | grep -q "$LEGO_VERSAO"; then return 0; fi
+  local tmp arq
+  tmp="$(mktemp -d)"
+  arq="lego_v${LEGO_VERSAO}_linux_arm64.tar.gz"
+  curl -fsSL -o "$tmp/$arq" "https://github.com/go-acme/lego/releases/download/v$LEGO_VERSAO/$arq" || { vermelho "  não consegui baixar o lego"; rm -rf "$tmp"; return 1; }
+  if ! echo "$LEGO_SHA256  $tmp/$arq" | sha256sum -c --quiet; then
+    vermelho "  checksum do lego não confere — nada instalado"; rm -rf "$tmp"; return 1
+  fi
+  tar -xzf "$tmp/$arq" -C "$tmp" lego && sudo install -m 755 "$tmp/lego" /usr/local/bin/lego && echo "  lego $LEGO_VERSAO instalado"
+  rm -rf "$tmp"
+}
+
+instalar_certificado_ip() {
+  titulo "Certificado do IP ($BLOCOS_IP)"
+  instalar_lego || return 1
+  sudo cp "$DESTINO/agendador/amaview-certificado-ip.service" "$DESTINO/agendador/amaview-certificado-ip.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-certificado-ip.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-certificado-ip.timer && verde "  renovação automática ligada (2×/dia)"
+  if ! sudo test -s "$CERT_IP"; then
+    echo "  emitindo o primeiro certificado…"
+    renovar_ip
+  fi
+}
+
+# Emite ou renova (o lego decide: só com metade da validade gasta) e refaz o
+# site do nginx, que ganha o bloco 443 do IP na primeira vez.
+renovar_ip() {
+  sudo mkdir -p "$LEGO_PASTA" && sudo chmod 700 "$LEGO_PASTA"
+  if sudo lego --path "$LEGO_PASTA" --log.format text run --accept-tos \
+      --domains "$BLOCOS_IP" --profile shortlived \
+      --http --http.webroot /var/www/html; then
+    gerar_site_blocos
+  else
+    vermelho "  a Let's Encrypt recusou ou não respondeu — o certificado atual continua"
+    return 1
+  fi
 }
 
 # Fumaça do GOES-19 (agendador/fumaca): um timer independente do token — lê o
@@ -167,6 +220,11 @@ print(f"  fila do pré-corte: {s["fila_pre_corte"]} · falhas: {s["falhas"]} · 
 if s["ultimo_erro"]: print(f"  último erro: {s["ultimo_erro"]}")
 ' 2>/dev/null || amarelo "  sem resposta em 127.0.0.1:8090"
   echo "  em disco: $(sudo du -sh /var/cache/amaview-blocos 2>/dev/null | cut -f1)"
+  if sudo test -s "$CERT_IP"; then
+    verde "  https://$BLOCOS_IP (vence $(sudo openssl x509 -in "$CERT_IP" -noout -enddate | cut -d= -f2))"
+  else
+    amarelo "  sem certificado do IP — rode: amaview renovar-ip"
+  fi
   if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
     verde "  https://$BLOCOS_NOME"
   else
@@ -250,6 +308,7 @@ situacao() {
 case "${1:-status}" in
   instalar | install) instalar ;;
   certificado) certificado ;;
+  renovar-ip) renovar_ip ;;
   token) gravar_token ;;
   disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
   logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
@@ -259,7 +318,8 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null

@@ -1,0 +1,10 @@
+[Unit]
+Description=Certificado de IP dos blocos e da fumaça do AmaView (Let's Encrypt, shortlived)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# O `lego run` só pede certificado novo quando falta metade da validade.
+ExecStart=/usr/local/bin/amaview renovar-ip

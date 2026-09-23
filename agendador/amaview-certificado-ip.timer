@@ -1,0 +1,15 @@
+[Unit]
+Description=Renovação do certificado de IP (duas vezes por dia)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador
+
+[Timer]
+# O certificado dura ~6 dias e é renovado com 3 restantes: duas olhadas por
+# dia dão várias chances antes de vencer, mesmo com a Let's Encrypt fora.
+OnCalendar=*-*-* 03,15:17
+OnBootSec=2min
+Persistent=true
+RandomizedDelaySec=30min
+Unit=amaview-certificado-ip.service
+
+[Install]
+WantedBy=timers.target

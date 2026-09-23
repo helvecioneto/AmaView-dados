@@ -101,9 +101,19 @@ URL: `/blocos/v1/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
 (dia juliano, UTC, como nos arquivos do STAR). Saúde: `/blocos/saude`.
 
 O `amaview instalar` instala e atualiza tudo; `amaview` mostra a situação. O
-HTTPS (o AmaView é servido por HTTPS e o navegador recusa blocos por HTTP) sai
-do Let's Encrypt para `147-15-84-134.sslip.io`, uma vez, com
-`amaview certificado`; o `certbot.timer` renova.
+HTTPS (o AmaView é servido por HTTPS e o navegador recusa blocos por HTTP) tem
+dois nomes:
+
+- **`https://147.15.84.134`, o que o AmaView usa.** Certificado de IP da Let's
+  Encrypt (perfil `shortlived`, ~6 dias), emitido e renovado pelo
+  [`lego`](https://go-acme.github.io/lego/) (versão e checksum fixos no
+  `amaview`; o certbot 2.9 do Ubuntu não emite para IP) no
+  `amaview-certificado-ip.timer`, duas vezes por dia; `amaview renovar-ip` faz
+  na mão. Motivo: em 23/09/2026 uma rede com filtro FortiGuard desviava o DNS
+  de `sslip.io` e `nip.io` para a página de bloqueio (208.91.112.55) — blocos e
+  fumaça sumiam para quem estava atrás dela, mas o IP passava.
+- `https://147-15-84-134.sslip.io`, o nome antigo, continua no ar
+  (`amaview certificado`, uma vez; o `certbot.timer` renova).
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/blocos`.
 
