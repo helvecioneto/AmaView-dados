@@ -1,5 +1,5 @@
 [Unit]
-Description=Qualidade do ar para o AmaView (sensores UFAC/MPAC, MonitorAr/MMA e modelo CAMS via Open-Meteo)
+Description=Qualidade do ar para o AmaView (sensores UFAC/MPAC, RedeAr, AirGradient, PurpleAir e OpenAQ; MonitorAr/MMA; modelo CAMS via Open-Meteo)
 Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/ar
 After=network-online.target
 Wants=network-online.target

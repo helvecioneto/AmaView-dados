@@ -1,0 +1,34 @@
+[
+ {
+  "sensor_index": 25551,
+  "time_stamp": "2026-09-23T19:53:42Z",
+  "pm2_5_corrected": 7.994999999999999,
+  "latitude": -8.170079,
+  "longitude": -70.35503,
+  "channel_flags": 1
+ },
+ {
+  "sensor_index": 31095,
+  "time_stamp": "2026-09-23T19:53:18Z",
+  "pm2_5_corrected": 1.095,
+  "latitude": -9.063847,
+  "longitude": -68.65999,
+  "channel_flags": 1
+ },
+ {
+  "sensor_index": 31109,
+  "time_stamp": "2026-09-23T19:53:47Z",
+  "pm2_5_corrected": 4.665,
+  "latitude": -9.966662,
+  "longitude": -67.84944,
+  "channel_flags": 0
+ },
+ {
+  "sensor_index": 25531,
+  "time_stamp": "2026-09-23T19:53:43Z",
+  "pm2_5_corrected": 1.515,
+  "latitude": -7.61302,
+  "longitude": -72.90297,
+  "channel_flags": 0
+ }
+]

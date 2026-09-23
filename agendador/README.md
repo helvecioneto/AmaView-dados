@@ -40,6 +40,7 @@ Tudo pelo `amaview`, que fica em `~` e em `/usr/local/bin`:
 | `amaview` | situação: timers, token, últimas execuções e frescor do dado |
 | `amaview instalar` | clona/atualiza, instala as unidades e liga os timers |
 | `amaview token` | grava o token (pede na tela, sem eco) |
+| `amaview chave purpleair` / `amaview chave openaq` | grava a chave opcional da qualidade do ar (sem eco; testa com uma chamada grátis antes; `… remover` apaga) |
 | `amaview disparar [workflow]` | dispara um ciclo agora (`chuva.yml`, ou `sondagem.yml`) |
 | `amaview logs [n]` | últimas execuções |
 | `amaview parar` | desliga os timers |
@@ -167,10 +168,11 @@ Testes (sem rede): `python3 -m unittest discover -s agendador/fumaca`.
 
 ## Qualidade do ar
 
-A mesma máquina espelha três fontes de qualidade do ar para a camada
+A mesma máquina espelha as fontes de qualidade do ar para a camada
 "Qualidade do ar" do AmaView. Nenhuma delas é chamada pelo navegador: a rede do
-Acre não manda CORS utilizável, o Open-Meteo tem limite de uso por IP, e um
-espelho só é mais robusto que três servidores de terceiros.
+Acre não manda CORS utilizável, o Open-Meteo tem limite de uso por IP, as
+redes de sensores só dão a leitura do momento (o espelho monta a série) e um
+espelho só é mais robusto que vários servidores de terceiros.
 
 - **Rede de Qualidade do Ar do Acre** (UFAC/MPAC,
   [acrequalidadedoar.ufac.br](https://acrequalidadedoar.ufac.br)): sensores
@@ -183,6 +185,55 @@ espelho só é mais robusto que três servidores de terceiros.
   23/09/2026: 39 sensores no `latest-by-sensor`, 30 no cadastro, 14 vivos.
   Sensor fora do cadastro e parado há mais de 48 h (os de 2019–2022) sai;
   sensor do cadastro parado continua, sem série (o AmaView mostra "sem dado").
+- **RedeAr** (IPAM/UFPA, [redear.org.br](https://redear.org.br), sem chave):
+  `GET https://hmg.api.redear.org.br/v1/sensors` — 91 sensores do Brasil, cada
+  um com as ~15 leituras mais recentes (~30 min; horário UTC sem "Z"): 82
+  PurpleAir espelhados (`sensor_id` = `sensor_index` da PurpleAir; T em °F) e
+  9 aparelhos próprios (T em °C). A **produção** (`api.redear.org.br`) parou
+  em 21/07/2026; a homologação ("hmg") é a base, e a cada 6 h o espelho confere
+  se a produção voltou a ter o dado mais novo (e troca). Só entram os
+  sensores **dentro da Amazônia Legal pela coordenada** (o cadastro às vezes
+  erra: o "Quilombo Mel da Pedreira", cadastrado como Belém/PA, fica em
+  Macapá/AP). Os próprios da RedeAr têm série de 48 h na API
+  (`/sensors/{id}/readings?startDate&endDate&limit=1000&offset`), usada para
+  completar a do espelho a cada 6 h; os espelhados, não — o espelho acumula.
+  Em 23/09/2026: 75 na Amazônia Legal, 59 vivos, 47 além dos da UFAC.
+- **AirGradient** (sem chave): a lista mundial
+  (`api.airgradient.com/public/api/v1/world/locations/measures/current`,
+  1,5 MB) uma vez por dia, para achar os pontos da Amazônia Legal (1 em
+  23/09/2026: Imperatriz); a cada rodada, só a leitura de cada um
+  (`…/world/locations/{id}/measures/current`, ~600 bytes).
+- **PurpleAir** (opcional, chave em `/etc/amaview/purpleair-key`): 1×/dia a
+  lista dos sensores externos vistos na última hora no retângulo da Amazônia
+  Legal (`/v1/sensors?fields=name,latitude,longitude,last_seen&location_type=0&max_age=3600&nwlng…`);
+  a cada 60 min (`PURPLEAIR_INTERVALO_MIN`), só os que **não** vieram pela
+  UFAC nem pela RedeAr nas últimas 2 h (`show_only=…&fields=pm2.5_atm_a,pm2.5_atm_b,last_seen`
+  — o mínimo para a mesma correção). O saldo (`/v1/organization`, grátis) é
+  lido antes e depois de cada consulta: o gasto real vai para `fontes`, e
+  abaixo de 50.000 pontos (`PURPLEAIR_SALDO_MIN`) o espelho para de consultar.
+- **OpenAQ v3** (opcional, chave em `/etc/amaview/openaq-key`): 1×/dia
+  `/v3/locations?bbox=…`; a cada 60 min (`OPENAQ_INTERVALO_MIN`)
+  `/v3/locations/{id}/latest` de cada local com MP2,5 (limites da OpenAQ: 60
+  pedidos/min, 2.000/h). Local a menos de 200 m de um sensor de outra fonte é
+  o mesmo aparelho repassado (a OpenAQ agrega AirGradient, PurpleAir…): fica a
+  fonte direta.
+
+  Sem o arquivo de chave, a fonte fica de fora em silêncio (`fontes.<nome>.nota`
+  = "sem chave"). As chaves se instalam com `sudo amaview chave purpleair` /
+  `sudo amaview chave openaq` (pedidas sem eco, testadas antes, gravadas 640
+  root:amaview-ar). `/etc/amaview/ar.conf` (opcional, `CHAVE=valor`) muda os
+  intervalos e o saldo mínimo.
+
+  **Correção**: a UFAC publica o PM2,5 com a correção da **LRAPA**
+  (0,5 × média de A e B "atm" − 0,66, sem negativo) — conferido leitura a
+  leitura contra o bruto da RedeAr (7 sensores nas duas, iguais até a 3ª casa).
+  Todo sensor com bruto (RedeAr, PurpleAir, AirGradient, OpenAQ de baixo
+  custo) recebe a mesma fórmula, com a checagem de concordância A/B da EPA:
+  descarta a leitura quando |A−B| > 5 µg/m³ **e** > 70% da média (`fl` = 4);
+  um canal só vale sozinho (`fl` 1 ou 2, como os `channel_flags` da PurpleAir).
+  **Um sensor, um ponto**: o mesmo `sensor_index` em várias fontes vira um
+  item só, da fonte de maior prioridade (UFAC > RedeAr > PurpleAir), com a
+  série completada pelas outras (`tambem`).
 - **MonitorAr** (MMA, [monitorar.mma.gov.br](https://monitorar.mma.gov.br)):
   todas as estações oficiais da Amazônia Legal (os nove estados; o Maranhão a
   oeste de 44°W), com o **IQAr e a classificação CONAMA 491 que o próprio
@@ -210,19 +261,30 @@ Cada fonte roda isolada: se uma cai, as outras publicam, e `fontes` no
 
 | Peça | Onde |
 |---|---|
-| `ar/ar.py` | uma rodada: lê as três fontes, acumula e publica |
-| `ar/amazonia_legal.json` | contorno da Amazônia Legal (IBGE, simplificado a 0,1°) para a grade do modelo |
+| `ar/ar.py` | uma rodada: lê as fontes, corrige, junta, acumula e publica |
+| `ar/amazonia_legal.json` | contorno da Amazônia Legal (IBGE, simplificado a 0,1°) para a grade do modelo e o filtro dos sensores |
+| `ar/municipios_al.json` | malha municipal da Amazônia Legal (IBGE, simplificada a ~600 m): município e UF de cada sensor pela coordenada |
+| `ar/amostras/` | recortes de respostas reais (RedeAr, AirGradient, UFAC) para os testes |
 | `ar/amaview-ar.{service,timer}` | a cada 5 min; usuário `amaview-ar`, `/var/cache/amaview-ar`; só a biblioteca padrão do Python |
 | `ar/nginx-locais.conf` | `/ar/v1/`: CORS `*`, gzip, `max-age=60` |
 
 URLs (em `https://147.15.84.134/ar/v1/`):
 
-- `pontos.json` (~100 KB, ~5 KB com gzip): `sensores` (`t0`, `passoMin` 5,
+- `pontos.json` (~270 KB, ~13 KB com gzip): `sensores` (`t0`, `passoMin` 5,
   `slots` 577, `lista` com `id`, `cod`, `nome`, `mun`, `lat`, `lon`, `ult`
-  `{t, pm, fl}` e `serie`), `municipios` (`h0`, `horas` 48, `serie` por
-  município), `estacoes` (`h0`, `horas`, `lista` com `atual` e `polu`: por
+  `{t, pm, fl}` e `serie` — e, desde a RedeAr, `fonte` (`ufac`, `redear`,
+  `purpleair`, `airgradient`, `openaq`), `uf`, `dono`, `ref` (id na origem),
+  `pa` (aparelho PurpleAir), `ab` `{a, b, t, fl}` (bruto "atm" dos canais da
+  leitura mais recente), `met` `{temp, ur}` (medidas dentro do sensor),
+  `tol` (min que a leitura vale no mapa, nas fontes horárias), `tambem`
+  (outras fontes do mesmo sensor)), `municipios` (`h0`, `horas` 48, `serie`
+  por município), `estacoes` (`h0`, `horas`, `lista` com `atual` e `polu`: por
   poluente, `iqar`, `cl` — id da classificação do MonitorAr — e `val`,
-  validado) e `fontes`. Tempos em epoch ms, UTC.
+  validado) e `fontes` (`em`, `erro` e, nas com chave, `nota`, `saldo`,
+  `gastoRodada`, `gastoDia`, `intervaloMin`). Ids: PurpleAir = `sensor_index`;
+  próprios da RedeAr 900.000.000 + id; AirGradient 910.000.000 + id; OpenAQ
+  920.000.000 + id. Tempos em epoch ms, UTC. Os campos novos são opcionais:
+  o AmaView antigo lê o arquivo novo, e o novo lê o antigo.
 - `cams.json` (~170 KB, ~50 KB com gzip): `celulas` `[lon, lat]`, `passo`,
   `h0`, `horas` e `pm2_5` por célula.
 - `cams-series.json` (~1 MB, ~250 KB com gzip): as seis variáveis por célula

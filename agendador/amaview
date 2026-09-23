@@ -7,6 +7,8 @@
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
+#   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
+#   amaview chave F remover   apaga a chave (a fonte sai na próxima rodada)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -181,8 +183,9 @@ instalar_fumaca() {
 }
 
 # Qualidade do ar (agendador/ar): outro timer independente do token — lê as
-# APIs públicas da UFAC, do MonitorAr e do Open-Meteo e escreve em
-# /var/cache/amaview-ar, que o nginx serve. Só Python da biblioteca padrão.
+# APIs públicas da UFAC, da RedeAr, da AirGradient, do MonitorAr e do
+# Open-Meteo (e, com chave, da PurpleAir e da OpenAQ: `amaview chave`) e
+# escreve em /var/cache/amaview-ar, que o nginx serve. Só Python da biblioteca padrão.
 instalar_ar() {
   titulo "Qualidade do ar"
   getent passwd amaview-ar >/dev/null \
@@ -203,13 +206,33 @@ from datetime import datetime, timezone
 p = json.load(open("/var/cache/amaview-ar/ar/v1/pontos.json"))
 agora = datetime.now(timezone.utc).timestamp() * 1000
 s = p["sensores"]["lista"]
-vivos = [x for x in s if agora - x["ult"]["t"] <= 48 * 3600e3]
-print(f"  {len(s)} sensores da rede do Acre, {len(vivos)} com leitura nas últimas 48 h")
+por = {}
+for x in s:
+    f = x.get("fonte", "ufac")
+    t, v = por.get(f, (0, 0))
+    por[f] = (t + 1, v + (agora - x["ult"]["t"] <= 48 * 3600e3))
+vivos = sum(v for _, v in por.values())
+print(f"  {len(s)} sensores de baixo custo, {vivos} com leitura nas últimas 48 h:")
+for f, (t, v) in sorted(por.items(), key=lambda kv: -kv[1][1]):
+    print(f"    {f:12} {v:4} vivos de {t}")
 e = p["estacoes"]["lista"]
 print(f"  {len(e)} estações do MonitorAr, {sum(1 for x in e if x['ult'] and agora - x['ult'] <= 48 * 3600e3)} com dado nas últimas 48 h")
+print("  fontes:")
 for nome, f in p["fontes"].items():
-    quando = f"{(agora - f['em']) / 60e3:.0f} min atrás" if f.get("em") else "nunca"
-    print(f"  {nome:9} ok {quando}" + (f" · erro: {f['erro']}" if f.get("erro") else ""))
+    if f.get("nota") == "sem chave":
+        print(f"    {nome:12} inativa (sem chave — rode: sudo amaview chave {nome})")
+        continue
+    quando = f"ok {(agora - f['em']) / 60e3:.0f} min atrás" if f.get("em") else "nunca respondeu"
+    extra = []
+    if f.get("nota"):
+        extra.append(f["nota"])
+    if f.get("saldo") is not None:
+        extra.append(f"saldo {f['saldo']:,} pontos".replace(",", "."))
+    if f.get("gastoDia") is not None:
+        extra.append(f"~{f['gastoDia']:,} pontos/dia".replace(",", "."))
+    if f.get("erro"):
+        extra.append(f"erro: {f['erro']}")
+    print(f"    {nome:12} {quando}" + (" · " + " · ".join(extra) if extra else ""))
 PY
   journalctl -u amaview-ar -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   echo "  em disco: $(du -sh /var/cache/amaview-ar 2>/dev/null | cut -f1)"
@@ -331,6 +354,76 @@ gravar_token() {
   fi
 }
 
+# Chaves opcionais da qualidade do ar (PurpleAir e OpenAQ). Pedidas na tela
+# sem eco, testadas com uma chamada grátis ANTES de gravar e gravadas 640
+# root:amaview-ar — o serviço lê, ninguém mais. A chave nunca vai para a
+# linha de comando (vai ao curl pelo stdin, `-H @-`), nem para a tela.
+gravar_chave() {
+  local fonte="${1:-}" acao="${2:-}" arq teste onde
+  case "$fonte" in
+    purpleair)
+      arq="/etc/amaview/purpleair-key"
+      teste="https://api.purpleair.com/v1/keys"
+      onde="https://develop.purpleair.com/ (entre com o e-mail; crie uma chave READ)"
+      ;;
+    openaq)
+      arq="/etc/amaview/openaq-key"
+      teste="https://api.openaq.org/v3/locations?limit=1"
+      onde="https://explore.openaq.org/register (a chave aparece em Account → API Key)"
+      ;;
+    *)
+      echo "uso: amaview chave purpleair|openaq [remover]"
+      return 1
+      ;;
+  esac
+  titulo "Chave $fonte"
+  if [ "$acao" = "remover" ]; then
+    sudo rm -f "$arq" && verde "  $arq apagado; a fonte sai na próxima rodada"
+    return 0
+  fi
+  echo "  Onde conseguir: $onde"
+  echo
+  read -rsp "  Cole a chave (não aparece na tela): " k
+  echo
+  k="$(printf '%s' "$k" | tr -d '[:space:]')"
+  if [ -z "$k" ]; then vermelho "  nada colado; nada gravado"; return 1; fi
+
+  echo "  Testando (chamada grátis)…"
+  local resp codigo corpo
+  resp="$(printf 'X-API-Key: %s\n' "$k" | curl -s -m 30 -H @- -w '\n%{http_code}' "$teste")"
+  codigo="$(printf '%s' "$resp" | tail -n 1)"
+  corpo="$(printf '%s' "$resp" | sed '$d')"
+  if [ "$codigo" != "200" ]; then
+    unset k
+    vermelho "  chave recusada (HTTP $codigo) — nada gravado"
+    printf '%s' "$corpo" | head -c 300 | sed 's/^/  /'
+    echo
+    return 1
+  fi
+  if ! getent group amaview-ar >/dev/null; then
+    vermelho "  o serviço da qualidade do ar não está instalado — rode antes: amaview instalar"
+    unset k
+    return 1
+  fi
+  sudo mkdir -p /etc/amaview
+  sudo install -m 640 -o root -g amaview-ar /dev/null "$arq"
+  printf '%s\n' "$k" | sudo tee "$arq" >/dev/null
+  unset k
+  verde "  aceita e gravada em $arq (640 root:amaview-ar)"
+  if [ "$fonte" = "purpleair" ]; then
+    printf '%s' "$corpo" | python3 -c 'import json, sys; print("  tipo da chave:", json.load(sys.stdin).get("api_key_type", "?"))' 2>/dev/null
+    sudo cat "$arq" | sed 's/^/X-API-Key: /' | curl -s -m 30 -H @- https://api.purpleair.com/v1/organization | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("  organização:", d.get("organization_name") or "?")
+print("  saldo:", format(int(d.get("remaining_points") or 0), ",").replace(",", "."), "pontos")' 2>/dev/null
+    echo "  O espelho consulta só os sensores da Amazônia Legal que a UFAC, a RedeAr e"
+    echo "  a AirGradient não trazem, de hora em hora, e para abaixo de 50.000 pontos."
+    echo "  Intervalo e limite: /etc/amaview/ar.conf (PURPLEAIR_INTERVALO_MIN, PURPLEAIR_SALDO_MIN)."
+  fi
+  echo "  Rodando o espelho agora…"
+  sudo systemctl start amaview-ar.service && situacao_ar
+}
+
 frescor() {
   python3 - <<'PY' 2>/dev/null || echo "  não consegui ler o dado publicado"
 import json, urllib.request
@@ -383,6 +476,7 @@ case "${1:-status}" in
   certificado) certificado ;;
   renovar-ip) renovar_ip ;;
   token) gravar_token ;;
+  chave | chaves) gravar_chave "${2:-}" "${3:-}" ;;
   disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
   logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
   parar | stop) sudo systemctl disable --now $(timers) && verde "timers desligados" ;;
@@ -403,6 +497,6 @@ case "${1:-status}" in
     ;;
   status | '') situacao ;;
   *)
-    sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
