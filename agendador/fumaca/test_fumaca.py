@@ -204,6 +204,8 @@ class Rodada(unittest.TestCase):
 
     def test_baixa_o_novo_apaga_o_velho_e_indexa(self):
         os.makedirs(fumaca.QUADROS)
+        # Versão antiga do formato no disco: sai na primeira rodada.
+        os.makedirs(os.path.join(self.raiz, "fumaca", "v0", "quadros"))
         velho = fumaca.carimbo_de(self.agora - timedelta(hours=49))
         open(os.path.join(fumaca.QUADROS, f"{velho}.geojson"), "w").write('{"features":[]}')
         publicados = {fumaca.carimbo_de(self.agora - timedelta(minutes=m)): None for m in (20, 30)}
@@ -233,6 +235,7 @@ class Rodada(unittest.TestCase):
         self.assertEqual([q["c"] for q in indice["quadros"]], sorted(publicados))
         self.assertEqual(indice["quadros"][0]["cob"], 0.0)
         self.assertFalse(os.path.exists(os.path.join(fumaca.QUADROS, f"{velho}.geojson")))
+        self.assertEqual(os.listdir(os.path.join(self.raiz, "fumaca")), ["v1"])
         # Nenhum netCDF no disco, nunca.
         self.assertFalse([n for _, _, fs in os.walk(self.raiz) for n in fs if n.endswith(".nc")])
 

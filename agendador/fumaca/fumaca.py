@@ -360,7 +360,7 @@ def rodada(agora: datetime | None = None) -> dict:
     removidos = limpar(agora)
     # Versões antigas do formato: o app já não as pede.
     for nome in os.listdir(os.path.dirname(PASTA)):
-        if nome != f"v{VERSAO}":
+        if nome != os.path.basename(PASTA):
             shutil.rmtree(os.path.join(os.path.dirname(PASTA), nome), ignore_errors=True)
     no_disco = {n.split(".", 1)[0] for n in os.listdir(QUADROS) if n.endswith(".geojson")}
     limite = agora - JANELA
