@@ -49,11 +49,22 @@ MAX_POR_RODADA = 36
 # Hora com quadro faltando: listar de novo no S3 no máximo a cada 30 min
 # (as duas horas mais recentes são listadas em toda rodada).
 RELISTAR_S = 1800
+# Arquivo que falhou (download ou leitura): tentar de novo só depois disto,
+# para um arquivo quebrado não ser baixado a cada 2 min.
+ESPERA_FALHA_S = 1800
 
 # Setor NSA do STAR (ângulos de varredura das bordas; `src/config/georef.json`
 # do AmaView). Recortar aqui é o que deixa a leitura barata: 2161 × 3437 de
 # 5424 × 5424 pixels.
 NSA = {"xMin": -0.040572, "xMax": 0.161028, "yMin": -0.06048, "yMax": 0.06048}
+# E só a parte oeste dele: a leste de 30°W o setor mostra o Atlântico e a
+# borda do disco sobre a África, onde o pixel tem dezenas de km e o ADP marca
+# como fumaça a poeira do Saara. Medido em 23/09/2026 14:50 UTC: 303 das 315
+# áreas (88 mil de 89 mil km²) estavam lá, e nenhuma na Amazônia que o
+# AmaView mostra.
+LON_LESTE = -30.0
+# Passo da grade grossa em que a longitude é calculada (16 km: o corte cai no mar).
+PASSO_GROSSO = 8
 
 ARQUIVO = re.compile(r"OR_ABI-L2-ADPF-M\d_G19_s(\d{4})(\d{3})(\d{2})(\d{2})\d{3}_e\d{14}_c\d{14}\.nc$")
 
@@ -202,15 +213,20 @@ def processar(nc: bytes | str) -> tuple[dict, dict]:
 
     eixo_x = lambda col: xo + col * xs  # noqa: E731
     eixo_y = lambda lin: yo + lin * ys  # noqa: E731
-    # Cobertura: fração do setor (no disco) em que a NOAA tentou detectar fumaça.
-    # De noite (e fora do ângulo de sol do algoritmo) o `Smoke` vem todo vazio:
-    # "sem fumaça" e "sem dado" não são a mesma coisa.
-    gx, gy = np.meshgrid(eixo_x(np.arange(c0, c1, 8)), eixo_y(np.arange(l0, l1, 8)))
-    no_disco = np.isfinite(geos_para_lonlat(gx, gy, proj)[0])
-    validos = (fumaca[::8, ::8] != fill) & no_disco
-    cob = float(validos.sum() / max(1, no_disco.sum()))
+    # Área de interesse numa grade grossa: no disco e a oeste de LON_LESTE.
+    g = PASSO_GROSSO
+    gx, gy = np.meshgrid(eixo_x(np.arange(c0, c1, g) + g / 2), eixo_y(np.arange(l0, l1, g) + g / 2))
+    with np.errstate(invalid="ignore"):
+        lon = geos_para_lonlat(gx, gy, proj)[0]
+        area = np.isfinite(lon) & (lon <= LON_LESTE)
+    # Cobertura: fração da área em que a NOAA tentou detectar fumaça. De noite
+    # (e fora do ângulo de sol do algoritmo) o `Smoke` vem todo vazio: "sem
+    # fumaça" e "sem dado" não são a mesma coisa.
+    validos = (fumaca[::g, ::g][: area.shape[0], : area.shape[1]] != fill) & area
+    cob = float(validos.sum() / max(1, area.sum()))
+    dentro = np.repeat(np.repeat(area, g, axis=0), g, axis=1)[: fumaca.shape[0], : fumaca.shape[1]]
 
-    polis = poligonos(fumaca == 1, c0, l0, eixo_x, eixo_y, proj)
+    polis = poligonos((fumaca == 1) & dentro, c0, l0, eixo_x, eixo_y, proj)
     feicoes = [
         {
             "type": "Feature",
@@ -323,9 +339,12 @@ def rodada(agora: datetime | None = None) -> dict:
     no_disco = {n.split(".", 1)[0] for n in os.listdir(QUADROS) if n.endswith(".geojson")}
     limite = agora - JANELA
 
+    # O que já foi listado e ainda não processado (passou do limite da rodada,
+    # ou falhou) continua na fila: sem isto, a hora listada esperaria 30 min
+    # para ser vista de novo.
+    pendentes: dict[str, str] = dict(estado.get("pendentes", {}))
     # Quais horas listar: as duas mais novas sempre; as outras só se falta
     # quadro e a última olhada foi há mais de 30 min.
-    pendentes: dict[str, str] = {}
     for k, hora in enumerate(horas_da_janela(agora)):
         prefixo = prefixo_da_hora(hora)
         esperados = {carimbo_de(hora + timedelta(minutes=m)) for m in range(0, 60, 10)}
@@ -338,9 +357,11 @@ def rodada(agora: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001 — uma hora falhando não para as outras
             print(f"falha ao listar {prefixo}: {e}", file=sys.stderr)
 
+    falhados: dict[str, float] = {c: t for c, t in estado.get("falhados", {}).items() if time.time() - t < ESPERA_FALHA_S}
     fila = sorted((c for c in pendentes if c not in no_disco and instante(c) >= limite), reverse=True)
+    feitos_agora: set[str] = set()
     feitos, falhas = 0, 0
-    for c in fila[:MAX_POR_RODADA]:
+    for c in [c for c in fila if c not in falhados][:MAX_POR_RODADA]:
         t0 = time.time()
         try:
             nc = baixar(f"{BALDE}/{pendentes[c]}")
@@ -348,10 +369,12 @@ def rodada(agora: datetime | None = None) -> dict:
             del nc  # 4 MB: nunca vai para o disco
             escrever_atomico(os.path.join(QUADROS, f"{c}.geojson"), json.dumps(gj, separators=(",", ":")).encode())
             resumos[c] = resumo
+            feitos_agora.add(c)
             feitos += 1
             print(f"{c}: {resumo['n']} áreas, {resumo['km2']} km², cobertura {resumo['cob']:.0%} ({time.time() - t0:.1f} s)")
         except Exception as e:  # noqa: BLE001
             falhas += 1
+            falhados[c] = time.time()
             print(f"{c}: falhou — {e}", file=sys.stderr)
 
     indice = montar_indice(resumos, agora)
@@ -361,9 +384,11 @@ def rodada(agora: datetime | None = None) -> dict:
     estado = {
         "listadas": {p: t for p, t in listadas.items() if t > corte},
         "resumos": {c: r for c, r in resumos.items() if c in vivos},
+        "pendentes": {c: pendentes[c] for c in fila if c not in feitos_agora},
+        "falhados": falhados,
     }
     escrever_atomico(ESTADO, json.dumps(estado).encode())
-    return {"novos": feitos, "falhas": falhas, "fila": max(0, len(fila) - feitos - falhas), "removidos": removidos, "quadros": len(vivos)}
+    return {"novos": feitos, "falhas": falhas, "fila": len(fila) - feitos, "removidos": removidos, "quadros": len(vivos)}
 
 
 def main() -> None:

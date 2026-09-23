@@ -118,13 +118,19 @@ em contornos para o AmaView.
   reclassificação. O contorno passa a meio caminho entre pixel com e sem
   fumaça (marching squares do `contourpy`), na grade de 2 km do produto;
   vértices colineares saem, coordenadas em lon/lat com 3 casas (~100 m).
+- **Só a América do Sul do setor NSA** (a oeste de 30°W). A leste, o setor
+  mostra a borda do disco sobre a África, onde o pixel tem dezenas de km e o
+  ADP marca a poeira do Saara como fumaça: em 23/09/2026 14:50 UTC eram 303
+  das 315 áreas, e sem o corte o painel do AmaView contava 89 mil km² de
+  fumaça que ninguém via no mapa.
 - **Leve.** O netCDF (~4 MB) é baixado para a memória, lido só nas linhas do
   setor NSA (o `Smoke` vem em blocos de 48 linhas) e descartado — **nenhum
-  netCDF toca o disco**. Um quadro vira um GeoJSON de ~20–80 KB (~5–20 KB com
-  gzip) em ~0,5 s. 48 h ≈ 288 quadros ≈ 10–20 MB.
+  netCDF toca o disco**. Um quadro vira um GeoJSON de poucos KB a algumas
+  dezenas (com gzip, bem menos) em ~0,3 s. 48 h ≈ 288 quadros, poucos MB.
 - **48 h, no máximo.** Quadros mais velhos são apagados a cada rodada; o que
   falta na janela é preenchido do mais novo para o mais velho (até 36 por
-  rodada, para o quadro novo nunca esperar).
+  rodada, para o quadro novo nunca esperar; o que sobra fica na fila da
+  próxima). Arquivo que falha espera 30 min antes de ser baixado de novo.
 - **Cobertura.** Cada quadro diz em que fração do setor a NOAA tentou detectar
   fumaça (`cob`): de noite o `Smoke` vem todo vazio, e "sem fumaça" não é o
   mesmo que "sem dado".

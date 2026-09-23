@@ -136,6 +136,12 @@ class Quadro(unittest.TestCase):
         self.assertEqual(resumo["n"], 0)
         self.assertEqual(gj["features"], [])
 
+    def test_africa_fica_de_fora(self):
+        # Borda do disco sobre o Saara: onde o ADP confunde poeira com fumaça.
+        r, c = celula(-5.0, 21.0)
+        gj, resumo = fumaca.processar(netcdf_sintetico((slice(r, r + 6), slice(c, c + 6))))
+        self.assertEqual(resumo["n"], 0)
+
     def test_noite_sem_cobertura(self):
         _, resumo = fumaca.processar(netcdf_sintetico(noite=True))
         self.assertEqual(resumo, {"n": 0, "km2": 0, "cob": 0.0})
@@ -196,6 +202,25 @@ class Rodada(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(fumaca.QUADROS, f"{velho}.geojson")))
         # Nenhum netCDF no disco, nunca.
         self.assertFalse([n for _, _, fs in os.walk(self.raiz) for n in fs if n.endswith(".nc")])
+
+    def test_fila_que_sobra_continua_na_proxima_rodada(self):
+        publicados = {fumaca.carimbo_de(self.agora - timedelta(hours=h, minutes=20)): None for h in (5, 6, 7)}
+        listar = lambda prefixo: {c: self.nome(fumaca.instante(c)) for c in publicados if self.nome(fumaca.instante(c)).startswith(prefixo)}  # noqa: E731
+        nc = netcdf_sintetico(noite=True)
+        with mock.patch.object(fumaca, "MAX_POR_RODADA", 2), mock.patch.object(fumaca, "listar", side_effect=listar), mock.patch.object(fumaca, "baixar", return_value=nc):
+            r = fumaca.rodada(self.agora)
+            self.assertEqual((r["novos"], r["fila"]), (2, 1))
+            # Dois minutos depois as horas antigas não são relistadas, mas o que sobrou é feito.
+            r = fumaca.rodada(self.agora + timedelta(minutes=2))
+            self.assertEqual((r["novos"], r["fila"], r["quadros"]), (1, 0, 3))
+
+    def test_arquivo_quebrado_espera_antes_de_tentar_de_novo(self):
+        c = fumaca.carimbo_de(self.agora - timedelta(minutes=20))
+        listar = lambda prefixo: {c: self.nome(fumaca.instante(c))} if self.nome(fumaca.instante(c)).startswith(prefixo) else {}  # noqa: E731
+        with mock.patch.object(fumaca, "listar", side_effect=listar), mock.patch.object(fumaca, "baixar", return_value=b"lixo") as baixar:
+            self.assertEqual(fumaca.rodada(self.agora)["falhas"], 1)
+            self.assertEqual(fumaca.rodada(self.agora + timedelta(minutes=2))["falhas"], 0)
+            self.assertEqual(baixar.call_count, 1)
 
     def test_indice_se_refaz_sem_estado(self):
         os.makedirs(fumaca.QUADROS)
