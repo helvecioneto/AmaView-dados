@@ -1,0 +1,15 @@
+[Unit]
+Description=Fumaça do GOES-19 a cada 2 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/fumaca
+
+[Timer]
+# A NOAA publica cada quadro ~14 min depois da varredura; olhar a cada 2 min
+# põe o quadro no ar no máximo 2 min depois dela. Cada olhada custa duas
+# listagens de ~5 KB no S3.
+OnCalendar=*:0/2
+Persistent=true
+AccuracySec=10s
+Unit=amaview-fumaca.service
+
+[Install]
+WantedBy=timers.target

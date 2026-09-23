@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers e os blocos
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos e a fumaça
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview token        grava o token (pede na tela, sem eco)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
@@ -62,6 +62,7 @@ instalar() {
   sudo install -m 755 "$DESTINO/agendador/amaview" /usr/local/bin/amaview 2>/dev/null \
     && echo "  'amaview' disponível em /usr/local/bin"
 
+  instalar_fumaca
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -75,6 +76,7 @@ instalar() {
 gerar_site_blocos() {
   local src="$DESTINO/agendador/blocos"
   sudo install -m 644 "$src/nginx-locais.conf" /etc/nginx/snippets/amaview-blocos.conf
+  sudo install -m 644 "$DESTINO/agendador/fumaca/nginx-locais.conf" /etc/nginx/snippets/amaview-fumaca.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -102,6 +104,43 @@ instalar_blocos() {
   # `restart`: o serviço relê o código que o `git pull` acabou de trazer.
   sudo systemctl restart amaview-blocos && verde "  amaview-blocos no ar"
   gerar_site_blocos
+}
+
+# Fumaça do GOES-19 (agendador/fumaca): um timer independente do token — lê o
+# balde público da NOAA e escreve em /var/cache/amaview-fumaca, que o nginx serve.
+instalar_fumaca() {
+  titulo "Fumaça do GOES-19"
+  getent passwd amaview-fumaca >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-fumaca
+  local falta=""
+  for p in python3-numpy python3-h5py python3-contourpy; do
+    dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
+  done
+  [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null
+  sudo cp "$DESTINO/agendador/fumaca/amaview-fumaca.service" "$DESTINO/agendador/fumaca/amaview-fumaca.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-fumaca.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-fumaca.timer && verde "  amaview-fumaca.timer ligado (a cada 2 min)"
+}
+
+situacao_fumaca() {
+  titulo "Fumaça"
+  systemctl is-active --quiet amaview-fumaca.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-fumaca"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-fumaca/fumaca/v1/indice.json"))
+q = i["quadros"]
+agora = datetime.now(timezone.utc)
+print(f"  {len(q)} quadros nas últimas 48 h (esperados 288)")
+if q:
+    c = q[-1]["c"]
+    t = datetime.strptime(c, "%Y%j%H%M").replace(tzinfo=timezone.utc)
+    print(f"  mais novo: {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás) · {q[-1]['n']} áreas, {q[-1]['km2']} km²")
+PY
+  journalctl -u amaview-fumaca -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-fumaca 2>/dev/null | cut -f1)"
 }
 
 certificado() {
@@ -204,6 +243,7 @@ situacao() {
   frescor
 
   situacao_blocos
+  situacao_fumaca
   echo
 }
 
@@ -219,7 +259,8 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer 2>/dev/null
+    sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload

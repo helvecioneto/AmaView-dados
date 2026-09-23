@@ -1,0 +1,28 @@
+[Unit]
+Description=Fumaça do GOES-19 para o AmaView (máscara Smoke do ADPF da NOAA em contorno)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/fumaca
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/fumaca/fumaca.py
+User=amaview-fumaca
+Group=amaview-fumaca
+# /var/cache/amaview-fumaca, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-fumaca
+CacheDirectoryMode=0755
+UMask=0022
+Environment=FUMACA_RAIZ=/var/cache/amaview-fumaca
+Environment=PYTHONUNBUFFERED=1
+# Preenchimento das 48 h leva alguns minutos; uma rodada normal, segundos.
+TimeoutStartSec=15min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

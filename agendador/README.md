@@ -107,6 +107,43 @@ do Let's Encrypt para `147-15-84-134.sslip.io`, uma vez, com
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/blocos`.
 
+## Fumaça do GOES-19
+
+A mesma máquina transforma a máscara de fumaça do produto **ABI-L2-ADPF** da
+NOAA (detecção de aerossóis, disco completo, a cada 10 min; balde público
+[`noaa-goes19`](https://noaa-goes19.s3.amazonaws.com/index.html#ABI-L2-ADPF/))
+em contornos para o AmaView.
+
+- **Só o que a NOAA marcou.** `Smoke == 1` vira polígono, sem filtro nem
+  reclassificação. O contorno passa a meio caminho entre pixel com e sem
+  fumaça (marching squares do `contourpy`), na grade de 2 km do produto;
+  vértices colineares saem, coordenadas em lon/lat com 3 casas (~100 m).
+- **Leve.** O netCDF (~4 MB) é baixado para a memória, lido só nas linhas do
+  setor NSA (o `Smoke` vem em blocos de 48 linhas) e descartado — **nenhum
+  netCDF toca o disco**. Um quadro vira um GeoJSON de ~20–80 KB (~5–20 KB com
+  gzip) em ~0,5 s. 48 h ≈ 288 quadros ≈ 10–20 MB.
+- **48 h, no máximo.** Quadros mais velhos são apagados a cada rodada; o que
+  falta na janela é preenchido do mais novo para o mais velho (até 36 por
+  rodada, para o quadro novo nunca esperar).
+- **Cobertura.** Cada quadro diz em que fração do setor a NOAA tentou detectar
+  fumaça (`cob`): de noite o `Smoke` vem todo vazio, e "sem fumaça" não é o
+  mesmo que "sem dado".
+- `amaview-fumaca.timer` a cada 2 min (a NOAA publica ~14 min depois da
+  varredura). Cada olhada lista as duas horas mais novas no S3 (~5 KB cada);
+  hora antiga com quadro faltando é relistada no máximo a cada 30 min.
+
+| Peça | Onde |
+|---|---|
+| `fumaca/fumaca.py` | uma rodada: lista, baixa, contorna, indexa e apaga o velho |
+| `fumaca/amaview-fumaca.{service,timer}` | usuário `amaview-fumaca`, `/var/cache/amaview-fumaca` |
+| `fumaca/nginx-locais.conf` | `/fumaca/v1/`: CORS, gzip, quadro imutável, índice `no-cache` |
+
+URLs: `/fumaca/v1/indice.json` (`{"gerado", "quadros": [{"c": "AAAADDDHHMM",
+"n": áreas, "km2", "cob"}]}`) e `/fumaca/v1/quadros/{AAAADDDHHMM}.geojson`
+(polígonos com `km2`). Logs: `journalctl -u amaview-fumaca`.
+
+Testes (sem rede): `python3 -m unittest discover -s agendador/fumaca`.
+
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.
