@@ -526,6 +526,16 @@ class TestFontesNovas(unittest.TestCase):
         self.assertFalse(any("purpleair" in u for u, _ in self.api.pedidos[n:]))
         self.assertIn(999001, self.sensores())
 
+    def test_purpleair_saldo_que_demora_a_descontar(self):
+        # A PurpleAir desconta depois: o saldo lido no fim da rodada ainda é o do início.
+        self.chave("purpleair")
+        self.api.gasto = 0
+        ar.rodada(AGORA2)
+        self.api.saldo -= 350  # o desconto da consulta chega depois
+        ar.rodada(AGORA2 + 120 * 60)
+        f = self.ler()["fontes"]["purpleair"]
+        self.assertEqual((f["gastoRodada"], f["gastoDia"]), (350, 4_200))
+
     def test_purpleair_para_com_saldo_baixo(self):
         self.chave("purpleair")
         self.api.saldo = 40_000

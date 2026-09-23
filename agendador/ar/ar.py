@@ -948,6 +948,7 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
         if antes is not None and meio is not None and antes >= meio:
             gasto_descoberta = antes - meio
             antes = meio
+            p["saldo_inicio"] = None
         meta_ant = p.get("meta") or {}
         meta = {}
         for x in linhas:
@@ -992,7 +993,16 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
         p["meta"][k]["tol"] = conf["PURPLEAIR_INTERVALO_MIN"] + 15
     depois = saldo_pa(chave)
     f["saldo"] = depois if depois is not None else antes
-    gasto = antes - depois if antes is not None and depois is not None and antes >= depois else gasto_previsto
+    # O saldo da PurpleAir demora a descontar: medido logo depois, o gasto da
+    # rodada às vezes sai 0. Entre o início de uma rodada e o da seguinte nada
+    # mais gasta pontos, então essa diferença é o custo real da anterior.
+    gasto = antes - depois if antes is not None and depois is not None and antes > depois else None
+    ant = p.get("saldo_inicio")
+    if gasto is None and isinstance(ant, int) and antes is not None and ant > antes:
+        gasto = ant - antes
+    if gasto is None:
+        gasto = f.get("gastoRodada") or gasto_previsto
+    p["saldo_inicio"] = antes
     f["gastoRodada"] = gasto
     f["gastoDia"] = int(gasto * 86400 / intervalo)
     if gasto_descoberta:
