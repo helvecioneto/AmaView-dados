@@ -149,7 +149,7 @@ instalar_certificado_ip() {
 # site do nginx, que ganha o bloco 443 do IP na primeira vez.
 renovar_ip() {
   sudo mkdir -p "$LEGO_PASTA" && sudo chmod 700 "$LEGO_PASTA"
-  if sudo lego --path "$LEGO_PASTA" --log.format text run --accept-tos \
+  if sudo lego --log.format text run --path "$LEGO_PASTA" --accept-tos \
       --domains "$BLOCOS_IP" --profile shortlived \
       --http --http.webroot /var/www/html; then
     gerar_site_blocos
