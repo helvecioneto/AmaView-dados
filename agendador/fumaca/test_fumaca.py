@@ -125,6 +125,26 @@ class Geometria(unittest.TestCase):
         self.assertTrue(250 < km2 < 450, km2)
 
 
+    def test_borda_e_a_dos_pixels(self):
+        # Um pixel sozinho tem 1/4 da área de um bloco 2×2 — com o contorno
+        # interpolado (marching squares) virava um losango de meia área (1/7).
+        # Dois pixels só na diagonal também ficam inteiros.
+        eixo_x = lambda c: -OFFSET + (c + 3000) * PASSO  # noqa: E731
+        eixo_y = lambda r: OFFSET - (r + 2700) * PASSO  # noqa: E731
+        m = np.zeros((12, 12), bool)
+        m[2, 2] = True
+        m[6:8, 6:8] = True
+        m[10, 1] = m[11, 2] = True
+        polis = fumaca.poligonos(m, 0, 0, eixo_x, eixo_y, PROJ)
+        areas = sorted(k for _, k in polis)
+        self.assertEqual(len(polis), 4)  # a diagonal vira dois quadrados que se tocam na quina
+        um = areas[0]
+        self.assertAlmostEqual(areas[1] / um, 1, delta=0.02)
+        self.assertAlmostEqual(areas[2] / um, 1, delta=0.02)
+        self.assertAlmostEqual(areas[3] / um, 4, delta=0.05)
+        self.assertEqual(len(polis[0][0][0]), 5)  # quadrado: 4 cantos + fechamento
+
+
 class Quadro(unittest.TestCase):
     def test_fumaca_sobre_rondonia(self):
         r, c = celula(-63.0, -10.0)

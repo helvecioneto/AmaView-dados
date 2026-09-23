@@ -129,9 +129,10 @@ em contornos para o AmaView.
   polígono, sem outro filtro nem reclassificação. Com o sol baixo (60–87°, a
   faixa que a NOAA chama de degradada) o ADP marca o terminador inteiro: em
   23/09/2026 09:10 UTC eram 264 mil km² de "fumaça" ao amanhecer, 99,9% nessa
-  faixa. O contorno passa a meio caminho entre pixel com e sem
-  fumaça (marching squares do `contourpy`), na grade de 2 km do produto;
-  vértices colineares saem, coordenadas em lon/lat com 3 casas (~100 m).
+  faixa. O contorno é a borda dos próprios pixels (união dos
+  quadrados com o `shapely`), na grade de 2 km do produto: cobre exatamente o
+  que a NOAA marcou. Vértices colineares saem; coordenadas em lon/lat com 3
+  casas (~100 m).
 - **Só a América do Sul do setor NSA** (a oeste de 30°W). A leste, o setor
   mostra a borda do disco sobre a África, onde o pixel tem dezenas de km e o
   ADP marca a poeira do Saara como fumaça: em 23/09/2026 14:50 UTC eram 303

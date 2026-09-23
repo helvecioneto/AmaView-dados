@@ -166,7 +166,7 @@ instalar_fumaca() {
   getent passwd amaview-fumaca >/dev/null \
     || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-fumaca
   local falta=""
-  for p in python3-numpy python3-h5py python3-contourpy; do
+  for p in python3-numpy python3-h5py python3-shapely; do
     dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
   done
   [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null

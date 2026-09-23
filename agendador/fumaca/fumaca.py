@@ -6,8 +6,8 @@ NOAA (detecção de aerossóis, disco completo, 10 em 10 min) virada contorno.
 - **Só o que a NOAA marcou, onde ela garante a qualidade.** `Smoke == 1`
   (fumaça presente) com o sol na faixa quantitativa do algoritmo (PQI1) vira
   polígono; nada mais é filtrado, suavizado além do contorno ou reclassificado. O contorno é
-  o de meio caminho entre pixel com e sem fumaça (marching squares), na grade
-  de 2 km do próprio produto.
+  a borda dos próprios pixels (a união dos quadrados), na grade de 2 km do
+  produto: cobre exatamente o que a NOAA marcou.
 - **Leve.** O arquivo (~4 MB) é baixado para a MEMÓRIA, lido só nas linhas do
   setor NSA (o `Smoke` vem em blocos de 48 linhas) e descartado: nenhum netCDF
   toca o disco. Um quadro vira um GeoJSON de dezenas de KB (~0,2 s).
@@ -152,25 +152,35 @@ def poligonos(mascara, col0: int, lin0: int, eixo_x, eixo_y, proj, casas: int = 
     """
     Máscara booleana (recorte começando em col0, lin0 da grade do arquivo) →
     lista de polígonos [[anel externo, buracos…], …] em lon/lat, cada um com a
-    área em km². `eixo_x(col)`/`eixo_y(lin)` dão o ângulo de varredura.
+    área em km². `eixo_x(col)`/`eixo_y(lin)` dão o ângulo de varredura do
+    CENTRO do pixel.
+
+    A borda é a dos próprios pixels (a união dos quadrados), não um contorno
+    interpolado: cobre exatamente o que a NOAA marcou. O marching squares, usado
+    antes, passava a meio caminho entre os centros e cortava as quinas — um
+    pixel isolado virava um losango com metade da área, e os polígonos cobriam
+    82–91% da área dos pixels (medido em 23/09/2026).
     """
-    import contourpy
     import numpy as np
+    import shapely
 
     if not mascara.any():
         return []
-    # Borda de zeros: toda mancha vira anel fechado, inclusive a que toca o recorte.
-    z = np.pad(mascara.astype(np.float32), 1)
-    gerador = contourpy.contour_generator(z=z, fill_type=contourpy.FillType.OuterOffset, name="serial")
-    pontos, offsets = gerador.filled(0.5, 2.0)
+    # Cada linha vira faixas horizontais contínuas (um retângulo por faixa, não
+    # um por pixel): a união fica bem mais leve.
+    d = np.diff(np.pad(mascara.astype(np.int8), ((0, 0), (1, 1))), axis=1)
+    lin, ini = np.nonzero(d == 1)
+    _, fim = np.nonzero(d == -1)  # mesma ordem (linha a linha): pareadas com `ini`
+    uniao = shapely.union_all(shapely.box(ini - 0.5, lin - 0.5, fim - 0.5, lin + 0.5))
+    partes = getattr(uniao, "geoms", [uniao])
     saida = []
-    for pts, offs in zip(pontos, offsets):
+    for parte in partes:
         aneis = []
-        for i in range(len(offs) - 1):
-            anel = enxugar(pts[offs[i] : offs[i + 1]])
-            if len(anel) < 4:
+        for anel in [parte.exterior, *parte.interiors]:
+            xy = enxugar(np.asarray(anel.coords))
+            if len(xy) < 4:
                 continue
-            lon, lat = geos_para_lonlat(eixo_x(anel[:, 0] - 1 + col0), eixo_y(anel[:, 1] - 1 + lin0), proj)
+            lon, lat = geos_para_lonlat(eixo_x(xy[:, 0] + col0), eixo_y(xy[:, 1] + lin0), proj)
             ll = np.round(np.column_stack([lon, lat]), casas)
             if not np.isfinite(ll).all():
                 continue  # no limbo do disco (não acontece sobre a América do Sul)
