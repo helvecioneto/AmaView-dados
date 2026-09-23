@@ -279,8 +279,9 @@ PA_DESCOBERTA = {
 PA_LEITURAS = {
     "api_version": "V1.0.14-0.0.58",
     "time_stamp": 1790195100,
-    "fields": ["sensor_index", "last_seen", "pm2.5_atm_a", "pm2.5_atm_b"],
-    "data": [[999001, 1790195040, 60.2, 58.4]],
+    "data_time_stamp": 1790195040,
+    "fields": ["sensor_index", "pm2.5_atm_a", "pm2.5_atm_b"],
+    "data": [[999001, 60.2, 58.4]],
 }
 
 
@@ -507,17 +508,19 @@ class TestFontesNovas(unittest.TestCase):
         # 25531 já vem pela UFAC e pela RedeAr; São Paulo está fora.
         self.assertIn("show_only=999001", consulta)
         self.assertNotIn("25531", consulta)
-        self.assertIn("pm2.5_atm_a%2Cpm2.5_atm_b%2Clast_seen", consulta)
+        self.assertIn("fields=pm2.5_atm_a%2Cpm2.5_atm_b&", consulta)
+        self.assertIn("max_age=600", consulta)
         s = self.sensores()
         self.assertNotIn(999002, s)
         m = s[999001]
-        self.assertEqual((m["fonte"], m["dono"], m["mun"], m["tol"]), ("purpleair", "SEMA-AM", "Manaus", 75))
+        self.assertEqual((m["fonte"], m["dono"], m["mun"], m["tol"]), ("purpleair", "SEMA-AM", "Manaus", 135))
         self.assertEqual(m["ult"]["pm"], 28.99)  # 0,5 × 59,3 − 0,66
         f = self.ler()["fontes"]["purpleair"]
-        # Duas consultas de 500 pontos: o gasto medido pelo saldo.
-        self.assertEqual((f["saldo"], f["gastoRodada"], f["gastoDia"]), (998_000, 1000, 24_000))
+        # Descoberta e consulta, 500 pontos cada, medidas pelo saldo e separadas:
+        # a conta do dia (12 consultas de 2 em 2 h) é só da consulta regular.
+        self.assertEqual((f["saldo"], f["gastoRodada"], f["gastoDia"], f["gastoDescoberta"]), (998_000, 500, 6_000, 500))
         self.assertIsNone(f["erro"])
-        # Na rodada seguinte (5 min depois), nada de PurpleAir: o intervalo é de 60 min.
+        # Na rodada seguinte (5 min depois), nada de PurpleAir: o intervalo é de 120 min.
         n = len(self.api.pedidos)
         ar.rodada(AGORA2 + 300)
         self.assertFalse(any("purpleair" in u for u, _ in self.api.pedidos[n:]))

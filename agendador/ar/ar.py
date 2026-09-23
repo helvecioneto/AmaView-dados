@@ -84,8 +84,10 @@ CHAVE_PURPLEAIR = os.environ.get("AR_CHAVE_PURPLEAIR", "/etc/amaview/purpleair-k
 CHAVE_OPENAQ = os.environ.get("AR_CHAVE_OPENAQ", "/etc/amaview/openaq-key")
 CONF = os.environ.get("AR_CONF", "/etc/amaview/ar.conf")
 CONF_PADRAO = {
-    # Minutos entre consultas pagas à PurpleAir (o custo vem em pontos).
-    "PURPLEAIR_INTERVALO_MIN": 60,
+    # Minutos entre consultas pagas à PurpleAir (o custo vem em pontos). De
+    # 2 em 2 h: o MP2,5 varia devagar, e o 1 milhão de pontos da conta dura
+    # meses em vez de semanas.
+    "PURPLEAIR_INTERVALO_MIN": 120,
     # Abaixo deste saldo de pontos, o espelho para de consultar a PurpleAir.
     "PURPLEAIR_SALDO_MIN": 50000,
     "OPENAQ_INTERVALO_MIN": 60,
@@ -113,6 +115,12 @@ VARS_CAMS = ["pm2_5", "pm10", "carbon_monoxide", "ozone", "nitrogen_dioxide", "a
 
 # Descobrir sensores novos (listas grandes ou pagas): uma vez por dia.
 DESCOBERTA_S = 24 * 3600
+# A descoberta da PurpleAir é paga (varre o retângulo inteiro) e sensor novo
+# na Amazônia é raro: uma por mês. Ela aceita quem reportou nos últimos 7
+# dias, para um sensor fora do ar no dia não sumir por um mês; os parados não
+# custam nada na consulta regular, cujo `max_age` os deixa fora da resposta.
+DESCOBERTA_PA_S = 30 * 24 * 3600
+DESCOBERTA_PA_MAX_AGE = 7 * 24 * 3600
 # Os aparelhos próprios da RedeAr têm série de 48 h na API: completar a do
 # espelho (lacunas de quando ele esteve fora) no máximo a cada 6 h.
 REDEAR_SERIE_S = 6 * 3600
@@ -870,8 +878,11 @@ def bbox_al(anel) -> tuple[float, float, float, float]:
 
 # Campos da consulta de cada rodada: o mínimo para a MESMA correção (LRAPA
 # sobre o "atm" de A e B, com a checagem A/B) e o horário.
-CAMPOS_PA = ["pm2.5_atm_a", "pm2.5_atm_b", "last_seen"]
-CAMPOS_PA_DESCOBERTA = ["name", "latitude", "longitude", "last_seen"]
+# Só os dois canais: o horário é o `data_time_stamp` da resposta, e o
+# `max_age` de 10 min deixa de fora quem não reportou nesse tempo — o erro do
+# horário fica em até 10 min (cada campo custa pontos por linha).
+CAMPOS_PA = ["pm2.5_atm_a", "pm2.5_atm_b"]
+CAMPOS_PA_DESCOBERTA = ["name", "latitude", "longitude"]
 # Estimativa (a conta real vem do saldo antes e depois): base + campos × linhas.
 CUSTO_PA_BASE = 5
 CUSTO_PA_CAMPO = 2
@@ -916,13 +927,14 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
         return f"saldo {antes} < {minimo}: sem consulta"
     cab = {"X-API-Key": chave}
     gasto_previsto = 0
-    if agora - p.get("descoberto_em", 0) >= DESCOBERTA_S or p.get("meta") is None:
+    gasto_descoberta = 0
+    if agora - p.get("descoberto_em", 0) >= DESCOBERTA_PA_S or p.get("meta") is None:
         x0, y0, x1, y1 = bbox_al(anel)
         q = urllib.parse.urlencode(
             {
                 "fields": ",".join(CAMPOS_PA_DESCOBERTA),
                 "location_type": 0,
-                "max_age": 3600,
+                "max_age": DESCOBERTA_PA_MAX_AGE,
                 "nwlng": x0,
                 "nwlat": y1,
                 "selng": x1,
@@ -930,7 +942,12 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
             }
         )
         linhas = tabela_pa(baixar_json(f"{PURPLEAIR}/sensors?{q}", cabecalhos=cab, timeout=90))
-        gasto_previsto += custo_pa(len(CAMPOS_PA_DESCOBERTA), len(linhas))
+        gasto_descoberta = custo_pa(len(CAMPOS_PA_DESCOBERTA), len(linhas))
+        # O gasto da descoberta sai do saldo aqui, para a conta do dia medir só a consulta regular.
+        meio = saldo_pa(chave)
+        if antes is not None and meio is not None and antes >= meio:
+            gasto_descoberta = antes - meio
+            antes = meio
         meta_ant = p.get("meta") or {}
         meta = {}
         for x in linhas:
@@ -956,12 +973,15 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
     novas = 0
     for i in range(0, len(alvo), 500):
         lote = alvo[i : i + 500]
-        q = urllib.parse.urlencode({"fields": ",".join(CAMPOS_PA), "show_only": ",".join(lote)})
-        linhas = tabela_pa(baixar_json(f"{PURPLEAIR}/sensors?{q}", cabecalhos=cab, timeout=90))
+        q = urllib.parse.urlencode({"fields": ",".join(CAMPOS_PA), "show_only": ",".join(lote), "max_age": 600})
+        cru = baixar_json(f"{PURPLEAIR}/sensors?{q}", cabecalhos=cab, timeout=90)
+        linhas = tabela_pa(cru)
         gasto_previsto += custo_pa(len(CAMPOS_PA), len(linhas))
+        # Os sensores reportam a cada 2 min: o instante do dado da resposta vale para todos.
+        t_dado = cru.get("data_time_stamp") or cru.get("time_stamp")
         for x in linhas:
             k = str(x.get("sensor_index"))
-            t = x.get("last_seen")
+            t = x.get("last_seen", t_dado)
             if k not in p["meta"] or not isinstance(t, (int, float)):
                 continue
             pm, fl = corrigir_ab(x.get("pm2.5_atm_a"), x.get("pm2.5_atm_b"))
@@ -975,6 +995,8 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
     gasto = antes - depois if antes is not None and depois is not None and antes >= depois else gasto_previsto
     f["gastoRodada"] = gasto
     f["gastoDia"] = int(gasto * 86400 / intervalo)
+    if gasto_descoberta:
+        f["gastoDescoberta"] = gasto_descoberta
     f["nota"] = f"{len(alvo)} sensores consultados a cada {conf['PURPLEAIR_INTERVALO_MIN']} min"
     podar(p, agora)
     return f"{len(p['meta'])} sensores na Amazônia Legal, {len(alvo)} consultados, {novas} leituras novas, gasto {gasto} pontos, saldo {f['saldo']}"

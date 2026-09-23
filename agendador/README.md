@@ -206,7 +206,7 @@ espelho só é mais robusto que vários servidores de terceiros.
 - **PurpleAir** (opcional, chave em `/etc/amaview/purpleair-key`): 1×/dia a
   lista dos sensores externos vistos na última hora no retângulo da Amazônia
   Legal (`/v1/sensors?fields=name,latitude,longitude,last_seen&location_type=0&max_age=3600&nwlng…`);
-  a cada 60 min (`PURPLEAIR_INTERVALO_MIN`), só os que **não** vieram pela
+  a cada 120 min (`PURPLEAIR_INTERVALO_MIN`; só os canais A/B, descoberta mensal), só os que **não** vieram pela
   UFAC nem pela RedeAr nas últimas 2 h (`show_only=…&fields=pm2.5_atm_a,pm2.5_atm_b,last_seen`
   — o mínimo para a mesma correção). O saldo (`/v1/organization`, grátis) é
   lido antes e depois de cada consulta: o gasto real vai para `fontes`, e
