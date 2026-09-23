@@ -157,10 +157,10 @@ em contornos para o AmaView.
 |---|---|
 | `fumaca/fumaca.py` | uma rodada: lista, baixa, contorna, indexa e apaga o velho |
 | `fumaca/amaview-fumaca.{service,timer}` | usuário `amaview-fumaca`, `/var/cache/amaview-fumaca` |
-| `fumaca/nginx-locais.conf` | `/fumaca/v1/`: CORS, gzip, quadro imutável, índice `no-cache` |
+| `fumaca/nginx-locais.conf` | `/fumaca/v2/`: CORS, gzip, quadro imutável, índice `no-cache` |
 
-URLs: `/fumaca/v1/indice.json` (`{"gerado", "quadros": [{"c": "AAAADDDHHMM",
-"n": áreas, "km2", "cob"}]}`) e `/fumaca/v1/quadros/{AAAADDDHHMM}.geojson`
+URLs: `/fumaca/v2/indice.json` (`{"gerado", "quadros": [{"c": "AAAADDDHHMM",
+"n": áreas, "km2", "cob"}]}`) e `/fumaca/v2/quadros/{AAAADDDHHMM}.geojson`
 (polígonos com `km2`). Logs: `journalctl -u amaview-fumaca`.
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/fumaca`.

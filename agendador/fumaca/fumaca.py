@@ -16,10 +16,10 @@ NOAA (detecção de aerossóis, disco completo, 10 em 10 min) virada contorno.
 - Roda pelo `amaview-fumaca.timer` (a cada 2 min). A NOAA publica cada quadro
   ~14 min depois do início da varredura.
 
-Saída (abaixo de FUMACA_RAIZ, servida pelo nginx em /fumaca/v1/):
+Saída (abaixo de FUMACA_RAIZ, servida pelo nginx em /fumaca/vN/):
 
-  fumaca/v1/indice.json                 quadros disponíveis (o app lê a cada minuto)
-  fumaca/v1/quadros/AAAADDDHHMM.geojson  um por horário (imutável)
+  fumaca/v2/indice.json                 quadros disponíveis (o app lê a cada minuto)
+  fumaca/v2/quadros/AAAADDDHHMM.geojson  um por horário (imutável)
 
   fumaca.py                  uma rodada (o que o timer chama)
   fumaca.py quadro ARQ.nc    processa um arquivo local e imprime o resumo (teste)
@@ -29,13 +29,17 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-VERSAO = 1
+# Sobe quando o conteúdo dos quadros muda: eles têm cache imutável de 1 ano no
+# navegador, e só um endereço novo faz o visitante ver a versão nova.
+# v2 (23/09/2026): borda exata dos pixels no lugar do contorno interpolado.
+VERSAO = 2
 RAIZ = os.environ.get("FUMACA_RAIZ", "/var/cache/amaview-fumaca")
 PASTA = os.path.join(RAIZ, "fumaca", f"v{VERSAO}")
 QUADROS = os.path.join(PASTA, "quadros")
@@ -354,6 +358,10 @@ def rodada(agora: datetime | None = None) -> dict:
     listadas: dict[str, float] = estado.get("listadas", {})
     resumos: dict[str, dict] = estado.get("resumos", {})
     removidos = limpar(agora)
+    # Versões antigas do formato: o app já não as pede.
+    for nome in os.listdir(os.path.dirname(PASTA)):
+        if nome != f"v{VERSAO}":
+            shutil.rmtree(os.path.join(os.path.dirname(PASTA), nome), ignore_errors=True)
     no_disco = {n.split(".", 1)[0] for n in os.listdir(QUADROS) if n.endswith(".geojson")}
     limite = agora - JANELA
 

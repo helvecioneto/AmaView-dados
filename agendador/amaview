@@ -183,7 +183,7 @@ situacao_fumaca() {
   python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-fumaca"
 import json
 from datetime import datetime, timezone
-i = json.load(open("/var/cache/amaview-fumaca/fumaca/v1/indice.json"))
+i = json.load(open("/var/cache/amaview-fumaca/fumaca/v2/indice.json"))
 q = i["quadros"]
 agora = datetime.now(timezone.utc)
 print(f"  {len(q)} quadros nas últimas 48 h (esperados 288)")
