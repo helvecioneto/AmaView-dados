@@ -25,23 +25,24 @@ Legal e do modelo CAMS.
 
 - **RedeAr** (IPAM/UFPA, sem chave): ~90 sensores — PurpleAir espelhados
   (id = `sensor_index` da PurpleAir) e aparelhos próprios —, cada um com as
-  ~15 leituras mais recentes (bruto dos canais A e B). O espelho aplica a
-  MESMA correção que a rede do Acre usa (ver "Correção") e acumula a série.
-- **AirGradient** (sem chave): a lista mundial 1×/dia; a leitura corrente de
-  cada ponto da Amazônia Legal a cada rodada.
+  ~15 leituras mais recentes dos canais A e B. O valor é o que o mapa da
+  RedeAr mostra: a média simples de A e B ("env"), sem correção.
+- **AirGradient** (sem chave): a API do próprio mapa público
+  (`map-data.airgradient.com`), com o PM2,5 que o mapa exibe (o da AirGradient,
+  corrigido por ela). A lista da região 1×/dia; a leitura a cada rodada.
 - **PurpleAir** e **OpenAQ** (opcionais, com chave em /etc/amaview): só os
-  sensores que as fontes sem chave não trazem, de hora em hora, com o saldo
-  de pontos da PurpleAir vigiado (para de consultar abaixo de 50 mil).
+  sensores que as fontes sem chave não trazem, com o saldo de pontos da
+  PurpleAir vigiado (para de consultar abaixo de 50 mil).
 
-Correção dos sensores de baixo custo: a rede do Acre publica o PM2,5 com a
-correção da LRAPA (0,5 × média dos canais A e B "atm" − 0,66, sem negativo),
-conferida leitura a leitura contra o bruto da RedeAr em 23/09/2026. Todo
-sensor com bruto recebe a mesma fórmula, para ficarem na mesma régua, com a
-checagem de concordância A/B da EPA (descartada quando |A−B| > 5 µg/m³ E
-> 70% da média). Um mesmo sensor vindo de duas fontes vira um ponto só.
-
-Fora isso, nada é filtrado, suavizado ou reclassificado. A faixa de qualidade
-do ar é calculada no navegador, com a tabela documentada no AmaView.
+**Cada rede fica com o próprio dado** (mudança de 23/09/2026, a pedido do
+usuário: padronizar tirava a credibilidade). O valor publicado é o que a
+fonte publica ou mostra no mapa dela, na unidade dela, sem correção do
+AmaView: UFAC `pm2_5_corrected`; RedeAr média de A e B; PurpleAir
+`pm2.5_10minute` (a média de 10 min que o mapa dela usa para o AQI);
+AirGradient o `pm25` do mapa; OpenAQ o `value`; MonitorAr o IQAr. A escala
+(faixas e cores) de cada rede é aplicada no navegador. Um mesmo sensor vindo
+de duas fontes vira um ponto só, com a série de UMA fonte (nunca misturada);
+o valor da outra vai junto, para a ficha.
 
 Saída (abaixo de AR_RAIZ, servida pelo nginx em /ar/v1/):
 
@@ -74,7 +75,8 @@ UFAC = "https://acrequalidadedoar.ufac.br/api"
 # A base em uso é a que tem a leitura mais recente (ver `atualizar_redear`).
 REDEAR_HMG = "https://hmg.api.redear.org.br/v1"
 REDEAR_PROD = "https://api.redear.org.br/v1"
-AIRGRADIENT = "https://api.airgradient.com/public/api/v1/world/locations"
+# A API do mapa público da AirGradient: o valor que o mapa exibe.
+AIRGRADIENT = "https://map-data.airgradient.com/map/api/v1"
 PURPLEAIR = "https://api.purpleair.com/v1"
 OPENAQ = "https://api.openaq.org/v3"
 
@@ -132,13 +134,18 @@ MESMO_LUGAR_M = 200
 # Um sensor de fonte horária pinta o mapa até esta folga depois da leitura.
 TOL_PADRAO_MIN = 30
 # Ids publicados: os PurpleAir usam o `sensor_index`; os outros ganham uma
-# faixa própria, para nunca colidirem com ele.
-ID_BASE = {"redear": 900_000_000, "airgradient": 910_000_000, "openaq": 920_000_000}
+# faixa própria, para nunca colidirem com ele (os ids do mapa da AirGradient
+# passam de 100 milhões: faixa a partir de 3 bilhões).
+ID_BASE = {"redear": 900_000_000, "openaq": 920_000_000, "airgradient": 3_000_000_000}
 # Prioridade quando o mesmo sensor vem de mais de uma fonte.
 PRIORIDADE = ("ufac", "redear", "purpleair", "airgradient", "openaq")
 # Códigos de `fl` (os de 0 a 3 são os `channel_flags` da PurpleAir: 1 = canal A
-# degradado, 2 = B, 3 = os dois). 4 = A e B discordam: leitura descartada.
+# degradado, 2 = B, 3 = os dois). 4 = A e B divergem pelo critério do mapa da
+# RedeAr (|A − B| > 10 µg/m³ e ≥ 40% do maior): só aviso, o valor fica.
 FL_AB = 4
+# Versão dos valores guardados no estado: 2 = como cada fonte publica (antes,
+# 1, com a LRAPA do AmaView). Estado de outra versão tem as séries apagadas.
+VALORES = 2
 
 # Amazônia Legal: os nove estados; o Maranhão só a oeste do meridiano de 44°W.
 UFS_AL = {"AC", "AM", "AP", "PA", "RO", "RR", "TO", "MT", "MA"}
@@ -413,44 +420,29 @@ def publicar_ufac(u: dict, agora: float) -> tuple[dict, dict]:
 # Sensores de baixo custo: correção, lugar, dono e série
 
 
-def lrapa(atm: float) -> float:
-    """
-    Correção da LRAPA (Lane Regional Air Protection Agency) sobre o PM2,5 "atm"
-    do PMS5003: 0,5 × PA − 0,66, sem negativo. É a que a rede do Acre publica
-    como `pm2_5_corrected` — conferido em 23/09/2026 com 7 sensores que estão
-    nas duas redes (UFAC e RedeAr): 0,5 × média(A, B) − 0,66 bate com o valor
-    da UFAC até a terceira casa (ex.: A 10,0 e B 11,3 → 4,665). A série horária
-    da UFAC tem zeros e nenhum negativo: o corte em zero é dela também.
-    """
-    return max(0.0, 0.5 * atm - 0.66)
-
-
 def canal(v) -> float | None:
-    """Leitura de um canal do PMS5003 que serve (número, 0–2000 µg/m³)."""
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and 0 <= v <= 2000 else None
+    """Leitura de um canal que serve: número finito."""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
 
-def corrigir_ab(a, b) -> tuple[float | None, int | None]:
+def media_ab(a, b) -> tuple[float | None, int | None]:
     """
-    (PM2,5 corrigido, fl) a partir do "atm" dos canais A e B, com a checagem de
-    concordância da EPA (Barkjohn et al., 2021): os canais discordam quando a
-    diferença passa de 5 µg/m³ E de 70% da média — a leitura é descartada
-    (fl = 4), porque não dá para saber qual canal está certo. Um canal só
-    serve sozinho, marcado como o outro degradado (fl 1 ou 2, como a PurpleAir).
-    Sem canal nenhum: (None, None).
+    (valor, fl) como o mapa da RedeAr mostra o PM2,5 (`za` e `is_trustworthy`
+    no código dela, conferidos em 23/09/2026): a média simples dos canais A e B
+    arredondada a 0,1, ou o canal que houver, sem correção e sem descartar
+    nada. `fl` = 4 quando o mapa dela avisa "leituras divergentes" — |A − B|
+    > 10 e ≥ 40% do maior (canal ausente conta como 0) —; 1 ou 2 quando só há
+    um canal (o outro faltou, como os `channel_flags` da PurpleAir).
     """
     va, vb = canal(a), canal(b)
+    if va is None and vb is None:
+        return None, None
+    dif = abs((va or 0) - (vb or 0))
+    maior = max(va or 0, vb or 0)
+    divergem = dif > 10 and maior > 0 and dif / maior >= 0.4
     if va is not None and vb is not None:
-        media = (va + vb) / 2
-        dif = abs(va - vb)
-        if dif > 5 and media > 0 and dif / media > 0.7:
-            return None, FL_AB
-        return num(lrapa(media)), 0
-    if va is not None:
-        return num(lrapa(va)), 2
-    if vb is not None:
-        return num(lrapa(vb)), 1
-    return None, None
+        return round((va + vb) / 2, 1), FL_AB if divergem else 0
+    return (va if va is not None else vb), FL_AB if divergem else (2 if va is not None else 1)
 
 
 _MUNICIPIOS = None
@@ -526,7 +518,7 @@ def f_para_c(f) -> float | None:
 
 def guardar_leitura(fonte: dict, k: str, t: float, pm, fl, extra: dict, agora: float) -> bool:
     """
-    Junta uma leitura (t, pm corrigido, fl, bruto/tempo) do sensor `k` à fonte.
+    Junta uma leitura (t, valor da fonte, fl, bruto/tempo) do sensor `k` à fonte.
     A mais nova vira a `ultima`; a série guarda uma por horário de 5 min (a
     mais nova), dentro da janela de 48 h. Devolve True se entrou na série.
     """
@@ -598,19 +590,20 @@ def item_publicado(fonte_nome: str, k: str, meta: dict, fonte: dict, t0: float, 
         item["met"] = met
     if meta.get("tol"):
         item["tol"] = meta["tol"]
-    if meta.get("corr"):
-        item["corr"] = meta["corr"]
+    for c in ("monitor", "lic"):
+        if meta.get(c):
+            item[c] = meta[c]
     return item
 
 
 def mesclar(principal: dict, outro: dict) -> None:
-    """O mesmo sensor em duas fontes: um ponto só, a série da principal com as lacunas preenchidas pela outra."""
-    principal["serie"] = [a if a is not None else b for a, b in zip(principal["serie"], outro["serie"])]
-    # A leitura mais recente com valor; uma descartada pela checagem A/B na
-    # outra fonte não apaga o valor que a fonte principal publicou.
-    if outro["ult"]["t"] > principal["ult"]["t"] and (outro["ult"]["pm"] is not None or principal["ult"]["pm"] is None):
-        principal["ult"] = outro["ult"]
-    principal["fl"] = sorted(set(principal["fl"]) | set(outro["fl"]))
+    """
+    O mesmo sensor em duas fontes: um ponto só, com o valor e a série da
+    principal — cada rede tem a própria régua, então as séries NUNCA se
+    misturam. A leitura mais recente da outra vai em `outras`, para a ficha.
+    """
+    if outro["ult"]["pm"] is not None:
+        principal.setdefault("outras", []).append({"fonte": outro["fonte"], "t": outro["ult"]["t"], "pm": outro["ult"]["pm"]})
     for c in ("ab", "met"):
         if c in outro and c not in principal:
             principal[c] = outro[c]
@@ -622,33 +615,47 @@ def mesclar(principal: dict, outro: dict) -> None:
         principal["tambem"].append(outro["fonte"])
 
 
-def juntar_sensores(por_fonte: dict) -> list:
+# A fonte principal de um sensor repetido é a de maior prioridade entre as que
+# leram nas últimas 2 h (senão, a de maior prioridade): um sensor que a RedeAr
+# deixou de trazer e a PurpleAir consulta aparece com o valor da PurpleAir.
+RECENTE_MS = 2 * 3600 * 1000
+
+
+def juntar_sensores(por_fonte: dict, agora: float | None = None) -> list:
     """
     Todas as fontes numa lista só, sem dois símbolos no mesmo sensor:
-    - pelo `sensor_index` da PurpleAir (UFAC, RedeAr, PurpleAir): fica a fonte
-      de maior prioridade (`PRIORIDADE`), com a série completada pelas outras;
+    - pelo `sensor_index` da PurpleAir (UFAC, RedeAr, PurpleAir): fica uma
+      fonte (ver `RECENTE_MS`), com a leitura das outras em `outras`;
     - a OpenAQ a menos de 200 m de um sensor de outra fonte é o mesmo aparelho
       repassado (a OpenAQ agrega AirGradient, PurpleAir…): fica a fonte direta.
     """
-    saida: list = []
-    por_id: dict = {}
+    grupos: dict = {}
+    ordem: list = []
     for nome in PRIORIDADE:
+        if nome == "openaq":
+            continue
         for item in por_fonte.get(nome, []):
-            if nome == "openaq":
-                perto = next(
-                    (o for o in saida if distancia_m(o["lon"], o["lat"], item["lon"], item["lat"]) < MESMO_LUGAR_M), None
-                )
-                if perto is not None:
-                    perto.setdefault("tambem", [])
-                    if "openaq" not in perto["tambem"]:
-                        perto["tambem"].append("openaq")
-                    continue
-            existente = por_id.get(item["id"])
-            if existente is not None:
-                mesclar(existente, item)
-                continue
-            por_id[item["id"]] = item
-            saida.append(item)
+            if item["id"] not in grupos:
+                grupos[item["id"]] = []
+                ordem.append(item["id"])
+            grupos[item["id"]].append(item)
+    agora_ms = ms(agora) if agora is not None else max((i["ult"]["t"] for g in grupos.values() for i in g), default=0)
+    saida: list = []
+    for ide in ordem:
+        g = grupos[ide]
+        principal = next((i for i in g if i["ult"]["pm"] is not None and agora_ms - i["ult"]["t"] <= RECENTE_MS), g[0])
+        for outro in g:
+            if outro is not principal:
+                mesclar(principal, outro)
+        saida.append(principal)
+    for item in por_fonte.get("openaq", []):
+        perto = next((o for o in saida if distancia_m(o["lon"], o["lat"], item["lon"], item["lat"]) < MESMO_LUGAR_M), None)
+        if perto is not None:
+            perto.setdefault("tambem", [])
+            if "openaq" not in perto["tambem"]:
+                perto["tambem"].append("openaq")
+            continue
+        saida.append(item)
     return saida
 
 
@@ -657,12 +664,12 @@ def juntar_sensores(por_fonte: dict) -> list:
 
 
 def leitura_redear(r: dict, purpleair: bool) -> tuple[float, float | None, int | None, dict] | None:
-    """Uma leitura da RedeAr → (t, pm corrigido, fl, extra). T nos PurpleAir vem em °F."""
+    """Uma leitura da RedeAr → (t, média de A e B como o mapa dela mostra, fl, extra). T nos PurpleAir vem em °F."""
     t = iso_para_s(r.get("datetime"))
     if t is None:
         return None
     a, b = r.get("pms1_pm2_5_env"), r.get("pms2_pm2_5_env")
-    pm, fl = corrigir_ab(a, b)
+    pm, fl = media_ab(a, b)
     temp = r.get("bme_temperature")
     extra = {
         "a": num(canal(a), 1),
@@ -778,45 +785,54 @@ def publicar_redear(r: dict, agora: float) -> list:
 
 
 def leitura_airgradient(x: dict) -> tuple[float, float | None, int | None, dict] | None:
-    t = iso_para_s(x.get("timestamp"))
+    """`/locations/{id}/measures/current` do mapa → (t, pm25 como o mapa mostra, None, T e UR)."""
+    t = iso_para_s(x.get("measuredAt"))
     if t is None:
         return None
-    pm02 = canal(x.get("pm02"))
-    # Um PMS5003 só (O-1PST): sem par A/B para checar; a mesma correção.
-    pm = num(lrapa(pm02)) if pm02 is not None else None
-    return t, pm, None, {"a": num(pm02, 1), "temp": num(x.get("atmp"), 1), "ur": num(x.get("rhum"), 0)}
+    return t, num(canal(x.get("pm25")), 1), None, {"temp": num(x.get("atmp"), 1), "ur": num(x.get("rhum"), 0)}
 
 
 def atualizar_airgradient(estado: dict, agora: float, anel) -> str:
     g = estado.setdefault("airgradient", {})
     if agora - g.get("descoberto_em", 0) >= DESCOBERTA_S or "meta" not in g:
-        # 1,5 MB com o mundo todo: uma vez por dia; depois, ponto a ponto.
-        mundo = baixar_json(f"{AIRGRADIENT}/measures/current", timeout=120)
+        # Os pontos do mapa no retângulo da Amazônia Legal (zoom alto: um por
+        # sensor, sem agrupar); só os da AirGradient — os "Reference" que o
+        # mapa repassa da OpenAQ ficam para a OpenAQ.
+        x0, y0, x1, y1 = bbox_al(anel)
+        q = urllib.parse.urlencode({"measure": "pm25", "zoom": 18, "xmin": x0, "ymin": y0, "xmax": x1, "ymax": y1})
+        cru = baixar_json(f"{AIRGRADIENT}/measurements/current/cluster?{q}", timeout=120)
+        meta_ant = g.get("meta") or {}
         meta = {}
-        for x in mundo if isinstance(mundo, list) else []:
+        for x in (cru.get("data") if isinstance(cru, dict) else None) or []:
             lid, lat, lon = x.get("locationId"), x.get("latitude"), x.get("longitude")
+            if x.get("type") != "sensor" or x.get("dataSource") != "AirGradient":
+                continue
             if not isinstance(lid, int) or not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
                 continue
             if not no_poligono(lon, lat, anel):
                 continue
+            k = str(lid)
+            try:
+                loc = baixar_json(f"{AIRGRADIENT}/locations/{k}")
+            except Exception as e:  # noqa: BLE001 — sem o cadastro, fica o do mapa
+                print(f"airgradient: cadastro de {k} falhou — {e}", file=sys.stderr)
+                loc = meta_ant.get(k, {}).get("_loc") or {}
             mun, uf = municipio_em(lon, lat)
-            meta[str(lid)] = {
-                "nome": x.get("publicLocationName") or x.get("locationName"),
+            meta[k] = {
+                "nome": x.get("locationName"),
                 "lat": num(lat, 6),
                 "lon": num(lon, 6),
                 "mun": mun,
                 "uf": uf,
-                "dono": (x.get("publicContributorName") or "").strip() or None,
+                "dono": (loc.get("ownerName") or "").strip() or None,
+                "lic": ", ".join(loc.get("licenses") or []) or None,
                 "pa": False,
             }
-            lida = leitura_airgradient(x)
-            if lida:
-                guardar_leitura(g, str(lid), *lida, agora)
         g["meta"] = meta
         g["descoberto_em"] = agora
     novas = 0
     for k in g["meta"]:
-        x = baixar_json(f"{AIRGRADIENT}/{k}/measures/current")
+        x = baixar_json(f"{AIRGRADIENT}/locations/{k}/measures/current")
         lida = leitura_airgradient(x) if isinstance(x, dict) else None
         if lida:
             novas += guardar_leitura(g, k, *lida, agora)
@@ -876,12 +892,13 @@ def bbox_al(anel) -> tuple[float, float, float, float]:
 # ---------------------------------------------------------------------------
 # PurpleAir (API v1, com chave e saldo de pontos)
 
-# Campos da consulta de cada rodada: o mínimo para a MESMA correção (LRAPA
-# sobre o "atm" de A e B, com a checagem A/B) e o horário.
-# Só os dois canais: o horário é o `data_time_stamp` da resposta, e o
-# `max_age` de 10 min deixa de fora quem não reportou nesse tempo — o erro do
-# horário fica em até 10 min (cada campo custa pontos por linha).
-CAMPOS_PA = ["pm2.5_atm_a", "pm2.5_atm_b"]
+# Campos da consulta de cada rodada: o valor que o mapa da PurpleAir usa por
+# padrão — `pm2.5_10minute`, a média de 10 min dos canais A e B ("atm" no
+# sensor externo), da qual ele calcula o AQI da EPA, sem conversão — e os
+# `channel_flags`. O horário é o `data_time_stamp` da resposta, e o `max_age`
+# de 10 min deixa de fora quem não reportou nesse tempo (cada campo custa
+# pontos por linha).
+CAMPOS_PA = ["pm2.5_10minute", "channel_flags"]
 CAMPOS_PA_DESCOBERTA = ["name", "latitude", "longitude"]
 # Estimativa (a conta real vem do saldo antes e depois): base + campos × linhas.
 CUSTO_PA_BASE = 5
@@ -985,9 +1002,10 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
             t = x.get("last_seen", t_dado)
             if k not in p["meta"] or not isinstance(t, (int, float)):
                 continue
-            pm, fl = corrigir_ab(x.get("pm2.5_atm_a"), x.get("pm2.5_atm_b"))
-            extra = {"a": num(canal(x.get("pm2.5_atm_a")), 1), "b": num(canal(x.get("pm2.5_atm_b")), 1)}
-            novas += guardar_leitura(p, k, float(t), pm, fl, extra, agora)
+            fl = x.get("channel_flags") if isinstance(x.get("channel_flags"), int) else None
+            # Os dois canais degradados: o mapa da PurpleAir mostra "sem dado".
+            pm = None if fl == 3 else num(canal(x.get("pm2.5_10minute")), 1)
+            novas += guardar_leitura(p, k, float(t), pm, fl, {}, agora)
     # Quem não saiu na consulta desta hora não é mais alvo: fica só a série acumulada.
     for k in p["meta"]:
         p["meta"][k]["tol"] = conf["PURPLEAIR_INTERVALO_MIN"] + 15
@@ -1064,9 +1082,8 @@ def atualizar_openaq(estado: dict, agora: float, anel, conf: dict, fontes: dict)
                     "dono": " · ".join(x for x in (dono, provedor) if x) or None,
                     "pa": False,
                     "sensor": pm25[0],
-                    # Monitor de referência: o valor vale como publicado; baixo custo: a mesma correção.
+                    # Monitor de referência ou baixo custo: o valor vale como publicado.
                     "monitor": bool(loc.get("isMonitor")),
-                    "corr": None if loc.get("isMonitor") else "lrapa",
                     "tol": 90,
                 }
             if not resultados or len(resultados) < 1000:
@@ -1083,8 +1100,7 @@ def atualizar_openaq(estado: dict, agora: float, anel, conf: dict, fontes: dict)
             v = canal(x.get("value"))
             if t is None:
                 continue
-            pm = num(v) if m.get("monitor") else (num(lrapa(v)) if v is not None else None)
-            novas += guardar_leitura(o, k, t, pm, None, {"a": num(v, 1)}, agora)
+            novas += guardar_leitura(o, k, t, num(v), None, {}, agora)
         time.sleep(1.1)  # 60 pedidos por minuto
     podar(o, agora)
     f["nota"] = f"{len(o['meta'])} locais a cada {conf['OPENAQ_INTERVALO_MIN']} min"
@@ -1356,10 +1372,31 @@ def marcar(fontes: dict, nome: str, agora: float, erro: Exception | None) -> Non
         f["erro"] = str(erro)[:300]
 
 
+def migrar_valores(estado: dict) -> None:
+    """
+    Estado de antes de `VALORES` (séries com a LRAPA do AmaView): apaga as
+    leituras guardadas das fontes que eram corrigidas, para a série não
+    misturar as duas réguas. A UFAC sempre publicou o próprio valor e fica.
+    """
+    if estado.get("valores") == VALORES:
+        return
+    for nome in ("redear", "purpleair", "openaq"):
+        f = estado.get(nome)
+        if isinstance(f, dict):
+            f.pop("leituras", None)
+            f.pop("ultimas", None)
+            f.pop("serie_em", None)
+            f.pop("consultado_em", None)
+    # A AirGradient mudou de API (ids do mapa): começa do zero.
+    estado.pop("airgradient", None)
+    estado["valores"] = VALORES
+
+
 def rodada(agora: float | None = None) -> dict:
     agora = agora if agora is not None else time.time()
     os.makedirs(PASTA, exist_ok=True)
     estado = ler_json(ESTADO, {})
+    migrar_valores(estado)
     fontes = estado.setdefault("fontes", {})
     anel = carregar_anel()
     conf = ler_conf()
@@ -1396,7 +1433,8 @@ def rodada(agora: float | None = None) -> dict:
             "purpleair": publicar_purpleair(estado.get("purpleair", {}), agora),
             "airgradient": publicar_airgradient(estado.get("airgradient", {}), agora),
             "openaq": publicar_openaq(estado.get("openaq", {}), agora),
-        }
+        },
+        agora,
     )
     estacoes = publicar_monitorar(estado.get("monitorar", {}), agora)
     tamanho = escrever_json(

@@ -1,0 +1,209 @@
+{
+ "cluster": {
+  "data": [
+   {
+    "type": "sensor",
+    "latitude": 4.937846700122823,
+    "longitude": -52.32092999972592,
+    "locationId": 70931,
+    "locationName": "Caiena3",
+    "sensorType": "Reference",
+    "dataSource": "OpenAQ",
+    "value": 6
+   },
+   {
+    "type": "sensor",
+    "latitude": 5.164247999692364,
+    "longitude": -52.64649000042069,
+    "locationId": 72915,
+    "locationName": "Kourou Gaston Monnerville Brady",
+    "sensorType": "Reference",
+    "dataSource": "OpenAQ",
+    "value": 4
+   },
+   {
+    "type": "sensor",
+    "latitude": 4.920832999862801,
+    "longitude": -52.32194499987723,
+    "locationId": 73718,
+    "locationName": "Cayenne-Bouchon",
+    "sensorType": "Reference",
+    "dataSource": "OpenAQ",
+    "value": 5
+   },
+   {
+    "type": "sensor",
+    "latitude": -3.1209190075022586,
+    "longitude": -60.021405806179125,
+    "locationId": 11613105,
+    "locationName": "Manaus",
+    "sensorType": "Small Sensor",
+    "dataSource": "AirGradient",
+    "value": 51
+   },
+   {
+    "type": "sensor",
+    "latitude": -7.296019,
+    "longitude": -64.782463,
+    "locationId": 11613326,
+    "locationName": "Lábrea Caititu",
+    "sensorType": "Small Sensor",
+    "dataSource": "AirGradient",
+    "value": 13
+   },
+   {
+    "type": "sensor",
+    "latitude": -8.7930229,
+    "longitude": -63.8893946,
+    "locationId": 11613339,
+    "locationName": "Porto Velho - Brux",
+    "sensorType": "Small Sensor",
+    "dataSource": "AirGradient",
+    "value": 16
+   },
+   {
+    "type": "sensor",
+    "latitude": -5.523688,
+    "longitude": -47.477717,
+    "locationId": 12579403,
+    "locationName": "Imperatriz",
+    "sensorType": "Small Sensor",
+    "dataSource": "AirGradient",
+    "value": 9
+   },
+   {
+    "type": "sensor",
+    "latitude": -16.5912614,
+    "longitude": -68.178268,
+    "locationId": 112622425,
+    "locationName": "Américo Vespucio, El Alto",
+    "sensorType": "Small Sensor",
+    "dataSource": "AirGradient",
+    "value": 4
+   }
+  ],
+  "total": 8,
+  "page": null,
+  "pagesize": null
+ },
+ "locations": {
+  "11613105": {
+   "locationId": 11613105,
+   "locationName": "Manaus",
+   "latitude": -3.1209190075022586,
+   "longitude": -60.021405806179125,
+   "ownerId": 1371529,
+   "ownerName": "Greenpeace",
+   "url": null,
+   "sensorType": "Small Sensor",
+   "licenses": [
+    "CC BY-SA 4.0"
+   ],
+   "provider": "AirGradient",
+   "dataSource": "AirGradient",
+   "timezone": "America/Caracas"
+  },
+  "11613326": {
+   "locationId": 11613326,
+   "locationName": "Lábrea Caititu",
+   "latitude": -7.296019,
+   "longitude": -64.782463,
+   "ownerId": 1371751,
+   "ownerName": "AIrWatch",
+   "url": null,
+   "sensorType": "Small Sensor",
+   "licenses": [
+    "CC BY-SA 4.0"
+   ],
+   "provider": "AirGradient",
+   "dataSource": "AirGradient",
+   "timezone": "America/Caracas"
+  },
+  "11613339": {
+   "locationId": 11613339,
+   "locationName": "Porto Velho - Brux",
+   "latitude": -8.7930229,
+   "longitude": -63.8893946,
+   "ownerId": 1371751,
+   "ownerName": "AIrWatch",
+   "url": null,
+   "sensorType": "Small Sensor",
+   "licenses": [
+    "CC BY-SA 4.0"
+   ],
+   "provider": "AirGradient",
+   "dataSource": "AirGradient",
+   "timezone": "America/Caracas"
+  },
+  "12579403": {
+   "locationId": 12579403,
+   "locationName": "Imperatriz",
+   "latitude": -5.523688,
+   "longitude": -47.477717,
+   "ownerId": 1692785,
+   "ownerName": "Bogdan",
+   "url": null,
+   "sensorType": "Small Sensor",
+   "licenses": [
+    "CC BY-SA 4.0"
+   ],
+   "provider": "AirGradient",
+   "dataSource": "AirGradient",
+   "timezone": "America/Sao_Paulo"
+  }
+ },
+ "measures": {
+  "11613105": {
+   "locationId": 11613105,
+   "pm25": 51.3,
+   "pm10": 69.8,
+   "atmp": 34.6,
+   "rhum": 39,
+   "rco2": 419,
+   "o3": null,
+   "no2": null,
+   "measuredAt": "2026-09-24T00:42:29.000Z",
+   "sensorType": "Small Sensor",
+   "dataSource": "AirGradient"
+  },
+  "11613326": {
+   "locationId": 11613326,
+   "pm25": 13.4,
+   "pm10": 23.8,
+   "atmp": 30.6,
+   "rhum": 56,
+   "rco2": 517,
+   "o3": null,
+   "no2": null,
+   "measuredAt": "2026-09-24T00:42:59.000Z",
+   "sensorType": "Small Sensor",
+   "dataSource": "AirGradient"
+  },
+  "11613339": {
+   "locationId": 11613339,
+   "pm25": 15.5,
+   "pm10": 26,
+   "atmp": 32.4,
+   "rhum": 45,
+   "rco2": 409,
+   "o3": null,
+   "no2": null,
+   "measuredAt": "2026-09-24T00:42:14.000Z",
+   "sensorType": "Small Sensor",
+   "dataSource": "AirGradient"
+  },
+  "12579403": {
+   "locationId": 12579403,
+   "pm25": 8.6,
+   "pm10": 15.8,
+   "atmp": 31.9,
+   "rhum": 38,
+   "rco2": 416,
+   "o3": null,
+   "no2": null,
+   "measuredAt": "2026-09-24T00:42:43.000Z",
+   "sensorType": "Small Sensor",
+   "dataSource": "AirGradient"
+  }
+ }
+}

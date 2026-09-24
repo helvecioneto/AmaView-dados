@@ -1,6 +1,6 @@
 """
 Testes da qualidade do ar, sem rede: as APIs são trocadas por respostas
-gravadas (no formato medido em 23/09/2026). As da RedeAr, AirGradient e UFAC
+gravadas (no formato medido em 23/09/2026). As da RedeAr, AirGradient (mapa) e UFAC
 estão em `amostras/` (recortes de respostas reais); as da PurpleAir e da
 OpenAQ, que pedem chave, seguem o formato da documentação de cada uma.
 
@@ -102,11 +102,13 @@ def falso_baixar_json(url, **_):
         return {"last_run_initialisation_time": 1790121600, "last_run_availability_time": 1790158882}
     if "/v1/air-quality" in url:
         return resposta_cams(url)
-    if url.endswith("/world/locations/measures/current"):
-        return amostra("airgradient-mundo.json")
-    if "/world/locations/" in url and url.endswith("/measures/current"):
-        lid = int(url.split("/world/locations/")[1].split("/")[0])
-        return next(x for x in amostra("airgradient-mundo.json") if x["locationId"] == lid)
+    if "map-data.airgradient.com" in url and "/measurements/current/cluster?" in url:
+        return amostra("airgradient-mapa.json")["cluster"]
+    if "map-data.airgradient.com" in url and url.endswith("/measures/current"):
+        # Gravada à 00:42 do dia 24: no relógio dos testes, a leitura é das 20:22 do dia 23.
+        return dict(amostra("airgradient-mapa.json")["measures"][url.split("/locations/")[1].split("/")[0]], measuredAt="2026-09-23T20:22:43Z")
+    if "map-data.airgradient.com" in url and "/locations/" in url:
+        return amostra("airgradient-mapa.json")["locations"][url.rsplit("/", 1)[1]]
     raise AssertionError(url)
 
 
@@ -280,8 +282,8 @@ PA_LEITURAS = {
     "api_version": "V1.0.14-0.0.58",
     "time_stamp": 1790195100,
     "data_time_stamp": 1790195040,
-    "fields": ["sensor_index", "pm2.5_atm_a", "pm2.5_atm_b"],
-    "data": [[999001, 60.2, 58.4]],
+    "fields": ["sensor_index", "pm2.5_10minute", "channel_flags"],
+    "data": [[999001, 59.3, 0]],
 }
 
 
@@ -334,33 +336,29 @@ def local_openaq(lid, nome, lat, lon, sensor, monitor=False):
     }
 
 
-class TestCorrecao(unittest.TestCase):
-    def test_lrapa_bate_com_o_corrigido_da_ufac(self):
-        # Pares medidos em 23/09/2026 (bruto da RedeAr × `pm2_5_corrected` da UFAC, mesmo sensor e instante).
-        for a, b, ufac in ((10, 11.3, 4.665), (7.1, 7.4, 2.965), (4.4, 5.2, 1.74), (11.7, 13.8, 5.715), (13.5, 11.2, 5.515)):
-            pm, fl = ar.corrigir_ab(a, b)
-            self.assertAlmostEqual(pm, ufac, delta=0.006)
-            self.assertEqual(fl, 0)
+class TestValorDaFonte(unittest.TestCase):
+    def test_media_ab_como_o_mapa_da_redear(self):
+        # Média simples de A e B ("env"), a 0,1, sem correção nem corte.
+        self.assertEqual(ar.media_ab(10, 11.3), (10.7, 0))
+        self.assertEqual(ar.media_ab(3.7, 5.1), (4.4, 0))
+        self.assertEqual(ar.media_ab(0.5, 0.5), (0.5, 0))
 
-    def test_sem_negativo(self):
-        self.assertEqual(ar.corrigir_ab(0.5, 0.5), (0.0, 0))
-
-    def test_checagem_ab_da_epa(self):
-        # Canal A morto (0) e B em 35: descartada.
-        self.assertEqual(ar.corrigir_ab(0, 35.1), (None, ar.FL_AB))
-        self.assertEqual(ar.corrigir_ab(20, 8.4), (None, ar.FL_AB))
-        # Diferença relativa grande mas de poucos µg/m³: vale (as duas condições da EPA).
-        self.assertEqual(ar.corrigir_ab(0, 4)[1], 0)
-        # Diferença grande em µg/m³ mas pequena em proporção: vale.
-        self.assertEqual(ar.corrigir_ab(115.4, 125.7)[1], 0)
+    def test_leituras_divergentes_so_avisam(self):
+        # |A − B| > 10 e ≥ 40% do maior: o mapa da RedeAr avisa, mas mostra a média.
+        self.assertEqual(ar.media_ab(0, 26.6), (13.3, ar.FL_AB))
+        self.assertEqual(ar.media_ab(2853.6, 6.1), (1429.8, ar.FL_AB))
+        # Diferença relativa grande mas de poucos µg/m³: sem aviso.
+        self.assertEqual(ar.media_ab(0, 4), (2.0, 0))
+        # Grande em µg/m³ mas pequena em proporção: sem aviso.
+        self.assertEqual(ar.media_ab(115.4, 125.7), (120.6, 0))
 
     def test_um_canal_so(self):
-        self.assertEqual(ar.corrigir_ab(None, 6.1), (2.39, 1))
-        self.assertEqual(ar.corrigir_ab(5.7, None), (2.19, 2))
-        self.assertEqual(ar.corrigir_ab(None, None), (None, None))
-        # Lixo não é leitura.
-        self.assertEqual(ar.corrigir_ab(-1, 99999), (None, None))
-        self.assertEqual(ar.corrigir_ab(True, "3"), (None, None))
+        self.assertEqual(ar.media_ab(None, 6.1), (6.1, 1))
+        self.assertEqual(ar.media_ab(5.7, None), (5.7, 2))
+        # Um canal só e alto: diverge do ausente (que conta como 0).
+        self.assertEqual(ar.media_ab(None, 30), (30.0, ar.FL_AB))
+        self.assertEqual(ar.media_ab(None, None), (None, None))
+        self.assertEqual(ar.media_ab(True, "3"), (None, None))
 
 
 class TestLugarEDono(unittest.TestCase):
@@ -445,14 +443,18 @@ class TestFontesNovas(unittest.TestCase):
         ids = [s["id"] for s in p["sensores"]["lista"]]
         self.assertEqual(len(ids), len(set(ids)), "dois símbolos no mesmo sensor")
         s = self.sensores()
-        # Na UFAC e na RedeAr: um ponto só, da UFAC, com a série completada pela RedeAr.
+        # Na UFAC e na RedeAr: um ponto só, da UFAC, com o valor e a série SÓ
+        # da UFAC (réguas diferentes não se misturam); o da RedeAr vai à parte.
         mnl = s[25531]
         self.assertEqual(mnl["fonte"], "ufac")
         self.assertEqual(mnl["tambem"], ["redear"])
         self.assertEqual(mnl["dono"], "MPAC")
-        self.assertGreaterEqual(sum(v is not None for v in mnl["serie"]), 3)
+        ufac = next(x for x in amostra("ufac-latest.json") if x["sensor_index"] == 25531)
+        self.assertEqual(mnl["ult"]["pm"], ar.num(ufac["pm2_5_corrected"]))
+        self.assertEqual(sum(v is not None for v in mnl["serie"]), 1)
+        self.assertEqual([(o["fonte"], o["pm"]) for o in mnl["outras"]], [("redear", 4.4)])
         self.assertIn("a", mnl["ab"])
-        # A RedeAr descarta (A/B discordam), mas o valor publicado pela UFAC continua no ponto.
+        # A RedeAr avisa que A e B divergem; o valor da UFAC continua no ponto.
         fij = s[25551]
         self.assertIsNotNone(fij["ult"]["pm"])
         self.assertEqual(fij["ab"]["fl"], ar.FL_AB)
@@ -468,13 +470,19 @@ class TestFontesNovas(unittest.TestCase):
         # Só na RedeAr (PurpleAir espelhado): dono pelo nome, município pela coordenada.
         uea = s[161259]
         self.assertEqual((uea["fonte"], uea["dono"], uea["mun"], uea["uf"], uea["pa"]), ("redear", "UEA (EducAIR)", "Manaus", "AM", True))
-        # Um canal só (Poconé: o A não veio).
-        self.assertEqual(s[242087]["ult"]["fl"], 1)
-        # AirGradient: só o de Imperatriz é da Amazônia Legal; a mesma correção sobre o pm02.
-        ag = [x for x in s.values() if x["fonte"] == "airgradient"]
-        self.assertEqual([(x["id"], x["mun"], x["uf"]) for x in ag], [(910174298, "Imperatriz", "MA")])
-        self.assertEqual(ag[0]["ab"]["a"], 4.7)
-        self.assertEqual(ag[0]["ult"]["pm"], 1.69)
+        # Poconé: canal A com defeito (2853). A RedeAr mostra a média, com o
+        # aviso de divergência — e o AmaView também, sem descartar.
+        self.assertEqual((s[242087]["ult"]["pm"], s[242087]["ult"]["fl"]), (1429.8, ar.FL_AB))
+        # AirGradient: os quatro do mapa na Amazônia Legal (os "Reference" da
+        # Guiana Francesa ficam de fora), com o pm25 que o mapa mostra.
+        ag = sorted((x for x in s.values() if x["fonte"] == "airgradient"), key=lambda x: x["id"])
+        self.assertEqual(
+            [(x["id"], x["mun"], x["uf"]) for x in ag],
+            [(3011613105, "Manaus", "AM"), (3011613326, "Lábrea", "AM"), (3011613339, "Porto Velho", "RO"), (3012579403, "Imperatriz", "MA")],
+        )
+        self.assertEqual((ag[0]["ult"]["pm"], ag[0]["dono"], ag[0]["lic"]), (51.3, "Greenpeace", "CC BY-SA 4.0"))
+        self.assertEqual(ag[0]["met"], {"temp": 34.6, "ur": 39})
+        self.assertNotIn("ab", ag[0])
         # Sem chave, as fontes pagas nem são chamadas, e o painel sabe por quê.
         self.assertEqual(p["fontes"]["purpleair"]["nota"], "sem chave")
         self.assertEqual(p["fontes"]["openaq"]["nota"], "sem chave")
@@ -508,13 +516,13 @@ class TestFontesNovas(unittest.TestCase):
         # 25531 já vem pela UFAC e pela RedeAr; São Paulo está fora.
         self.assertIn("show_only=999001", consulta)
         self.assertNotIn("25531", consulta)
-        self.assertIn("fields=pm2.5_atm_a%2Cpm2.5_atm_b&", consulta)
+        self.assertIn("fields=pm2.5_10minute%2Cchannel_flags&", consulta)
         self.assertIn("max_age=600", consulta)
         s = self.sensores()
         self.assertNotIn(999002, s)
         m = s[999001]
         self.assertEqual((m["fonte"], m["dono"], m["mun"], m["tol"]), ("purpleair", "SEMA-AM", "Manaus", 135))
-        self.assertEqual(m["ult"]["pm"], 28.99)  # 0,5 × 59,3 − 0,66
+        self.assertEqual((m["ult"]["pm"], m["ult"]["fl"]), (59.3, 0))  # o pm2.5_10minute, como veio
         f = self.ler()["fontes"]["purpleair"]
         # Descoberta e consulta, 500 pontos cada, medidas pelo saldo e separadas:
         # a conta do dia (12 consultas de 2 em 2 h) é só da consulta regular.
@@ -578,7 +586,8 @@ class TestFontesNovas(unittest.TestCase):
             "locais": [
                 # O mesmo aparelho de Imperatriz, repassado pela OpenAQ (a ~50 m).
                 local_openaq(3000001, "Imperatriz", -5.5240, -47.4780, 11),
-                local_openaq(5009964, "Manaus-5009964", -3.08, -60.0, 21),
+                # Um que o mapa da AirGradient não traz.
+                local_openaq(5009964, "Manaus-5009964", -3.00, -60.0, 21),
                 local_openaq(3000002, "Lima", -12.0, -77.0, 31),
             ],
             "ultimas": {
@@ -593,26 +602,54 @@ class TestFontesNovas(unittest.TestCase):
         s = self.sensores()
         oaq = [x for x in s.values() if x["fonte"] == "openaq"]
         self.assertEqual([x["id"] for x in oaq], [920000000 + 5009964])
-        self.assertEqual(oaq[0]["ult"]["pm"], 14.34)  # 0,5 × 30 − 0,66
-        self.assertEqual(oaq[0]["ab"]["a"], 30.0)
+        self.assertEqual(oaq[0]["ult"]["pm"], 30.0)  # o `value`, como a OpenAQ publica
+        self.assertNotIn("ab", oaq[0])
         self.assertEqual(oaq[0]["tol"], 90)
         self.assertIn("AirGradient", oaq[0]["dono"])
-        self.assertIn("openaq", s[910174298]["tambem"])
+        self.assertIn("openaq", s[3012579403]["tambem"])
         self.assertTrue(all(c == {"X-API-Key": "CHAVE-DE-TESTE"} for u, c in self.api.pedidos if "openaq" in u))
 
-    def test_juntar_prefere_a_ordem_e_nunca_duplica(self):
+    def test_juntar_nunca_mistura_as_series(self):
         base = {"lat": -3.1, "lon": -60.0, "fl": [], "nome": None, "mun": None, "uf": None, "dono": None}
-        ufac = dict(base, id=1, fonte="ufac", serie=[1.0, None, None], ult={"t": 10, "pm": 1.0, "fl": 0})
-        red = dict(base, id=1, fonte="redear", serie=[9.0, 2.0, None], ult={"t": 20, "pm": 2.0, "fl": 0}, nome="x")
-        pa = dict(base, id=1, fonte="purpleair", serie=[None, None, 3.0], ult={"t": 30, "pm": None, "fl": 4})
-        out = ar.juntar_sensores({"purpleair": [pa], "redear": [red], "ufac": [ufac]})
+        h = 3600 * 1000
+        ufac = dict(base, id=1, fonte="ufac", serie=[1.0, None, None], ult={"t": 10 * h, "pm": 1.0, "fl": 0})
+        red = dict(base, id=1, fonte="redear", serie=[9.0, 2.0, None], ult={"t": 10 * h + 1, "pm": 2.0, "fl": 0}, nome="x")
+        pa = dict(base, id=1, fonte="purpleair", serie=[None, None, 3.0], ult={"t": 10 * h + 2, "pm": None, "fl": 3})
+        out = ar.juntar_sensores({"purpleair": [pa], "redear": [red], "ufac": [ufac]}, agora=10 * 3600)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["fonte"], "ufac")
-        self.assertEqual(out[0]["serie"], [1.0, 2.0, 3.0])
-        # A mais recente COM valor: a descartada da PurpleAir não apaga a da RedeAr.
-        self.assertEqual(out[0]["ult"]["pm"], 2.0)
+        # A série e o valor são só da UFAC; o da RedeAr vai à parte (a PurpleAir não tinha valor).
+        self.assertEqual(out[0]["serie"], [1.0, None, None])
+        self.assertEqual(out[0]["ult"]["pm"], 1.0)
+        self.assertEqual(out[0]["outras"], [{"fonte": "redear", "t": 10 * h + 1, "pm": 2.0}])
         self.assertEqual(out[0]["tambem"], ["redear", "purpleair"])
         self.assertEqual(out[0]["nome"], "x")
+
+    def test_juntar_prefere_a_fonte_que_leu_nas_ultimas_2_h(self):
+        base = {"lat": -3.1, "lon": -60.0, "fl": [], "nome": None, "mun": None, "uf": None, "dono": None}
+        h = 3600 * 1000
+        red = dict(base, id=7, fonte="redear", serie=[4.0, None], ult={"t": 1 * h, "pm": 4.0, "fl": 0})
+        pa = dict(base, id=7, fonte="purpleair", serie=[None, 12.0], ult={"t": 10 * h, "pm": 12.0, "fl": 0})
+        out = ar.juntar_sensores({"redear": [red], "purpleair": [pa]}, agora=10 * 3600)
+        self.assertEqual((out[0]["fonte"], out[0]["serie"], out[0]["tambem"]), ("purpleair", [None, 12.0], ["redear"]))
+
+    def test_estado_antigo_perde_as_series_corrigidas(self):
+        estado = {
+            "ufac": {"leituras": {"1": [[1, 2.0, 0]]}},
+            "redear": {"leituras": {"4": [[1, 2.0, 0]]}, "ultimas": {"4": {}}, "meta": {"4": {}}},
+            "purpleair": {"leituras": {}, "meta": {"9": {}}, "descoberto_em": 5},
+            "airgradient": {"meta": {}},
+        }
+        ar.migrar_valores(estado)
+        self.assertEqual(estado["valores"], ar.VALORES)
+        self.assertIn("leituras", estado["ufac"])
+        self.assertNotIn("leituras", estado["redear"])
+        self.assertIn("meta", estado["redear"])
+        # A descoberta paga da PurpleAir não se repete.
+        self.assertEqual(estado["purpleair"]["descoberto_em"], 5)
+        self.assertNotIn("airgradient", estado)
+        ar.migrar_valores(estado)
+        self.assertIn("meta", estado["purpleair"])
 
 
 if __name__ == "__main__":
