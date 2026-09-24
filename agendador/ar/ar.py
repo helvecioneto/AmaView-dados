@@ -109,9 +109,18 @@ MONITORAR_S = 15 * 60
 # Metadados do CAMS no Open-Meteo: uma olhada por hora.
 META_S = 55 * 60
 # Mesmo sem rodada nova, rebaixar a grade depois disto (o `meta.json` pode falhar).
-CAMS_MAX_S = 6 * 3600
-# Coordenadas por chamada ao Open-Meteo (cada uma conta como uma chamada no limite de uso).
+CAMS_MAX_S = 12 * 3600
+# Coordenadas por chamada ao Open-Meteo (cada uma conta como uma chamada no
+# limite de uso: 600 por minuto, 5.000 por hora, 10.000 por dia).
 LOTE = 100
+# Pausa entre lotes: 100 coordenadas a cada 12 s = 500 por minuto, abaixo do
+# limite. Sem ela, as 721 células saíam em segundos, o 8º lote estourava o
+# limite por minuto, a grade inteira era jogada fora e refeita 5 min depois —
+# até esgotar o limite do dia (23–24/09/2026: a grade ficou 17 h parada).
+PAUSA_LOTE_S = 12
+# Tempo máximo de download da grade numa rodada (o serviço tem 5 min): o que
+# faltar fica para a rodada seguinte, sem perder os lotes já baixados.
+CAMS_RODADA_MAX_S = 150
 PASSO_CAMS = 0.8
 VARS_CAMS = ["pm2_5", "pm10", "carbon_monoxide", "ozone", "nitrogen_dioxide", "aerosol_optical_depth"]
 
@@ -1267,34 +1276,110 @@ def url_cams(celulas) -> str:
     return f"{OPEN_METEO}/v1/air-quality?{q}"
 
 
-def baixar_grade_cams(celulas) -> dict:
-    """Todas as células, em lotes; qualquer lote falhando derruba a grade inteira (fica a anterior)."""
+class LimiteOpenMeteo(RuntimeError):
+    """HTTP 429 do Open-Meteo, com até quando esperar (epoch s)."""
+
+    def __init__(self, texto: str, ate: float):
+        super().__init__(texto)
+        self.ate = ate
+
+
+def espera_do_limite(texto: str, agora: float) -> float | None:
+    """
+    Até quando esperar depois de um 429 do Open-Meteo, pelo limite que
+    estourou: o do minuto (+1 min), o da hora (a próxima hora cheia) ou o do
+    dia (a próxima meia-noite UTC). `None` se não é 429.
+    """
+    if "HTTP 429" not in texto:
+        return None
+    if "Daily" in texto:
+        return (agora // 86400 + 1) * 86400 + 300
+    if "Hourly" in texto:
+        return (agora // 3600 + 1) * 3600 + 60
+    return agora + 90
+
+
+def ler_lote_cams(cru, n: int, i: int) -> dict:
+    """A resposta de um lote → {tempos, vals por variável (n células), unidades}."""
+    if isinstance(cru, dict):
+        cru = [cru]
+    if not isinstance(cru, list) or len(cru) != n:
+        raise ValueError(f"lote {i}: {len(cru) if isinstance(cru, list) else '?'} respostas para {n} pontos")
     tempos = None
     vals = {v: [] for v in VARS_CAMS}
     unidades = {}
+    for r in cru:
+        h = r.get("hourly") or {}
+        t = h.get("time")
+        if tempos is None:
+            tempos = t
+        elif t != tempos:
+            raise ValueError("horários diferentes entre pontos")
+        for v in VARS_CAMS:
+            vals[v].append([num(x, 3) for x in h.get(v) or [None] * len(t)])
+        unidades.update(r.get("hourly_units") or {})
+    return {"tempos": tempos or [], "vals": vals, "unidades": unidades}
+
+
+def baixar_grade_cams(celulas, run, agora: float) -> dict | None:
+    """
+    As células em lotes, com pausa entre eles, retomando de onde a rodada
+    anterior parou (os lotes prontos ficam em `CAMS_BRUTO.parcial`, da mesma
+    rodada do modelo). Devolve a grade completa, ou `None` se ainda faltam
+    lotes. Um 429 vira `LimiteOpenMeteo`, com o tempo de espera.
+    """
+    caminho = f"{CAMS_BRUTO}.parcial"
+    parcial = ler_json(caminho, None)
+    if not parcial or parcial.get("run") != run or parcial.get("celulas") != celulas:
+        parcial = {"run": run, "celulas": celulas, "lotes": {}}
+    inicio = time.time()
+    pedidos = 0
     for i in range(0, len(celulas), LOTE):
+        k = str(i // LOTE)
+        if k in parcial["lotes"]:
+            continue
+        if pedidos and time.time() - inicio > CAMS_RODADA_MAX_S:
+            break
+        if pedidos:
+            time.sleep(PAUSA_LOTE_S)
         lote = celulas[i : i + LOTE]
-        cru = baixar_json(url_cams(lote), timeout=120)
-        if isinstance(cru, dict):
-            cru = [cru]
-        if not isinstance(cru, list) or len(cru) != len(lote):
-            raise ValueError(f"lote {i // LOTE}: {len(cru) if isinstance(cru, list) else '?'} respostas para {len(lote)} pontos")
-        for r in cru:
-            h = r.get("hourly") or {}
-            t = h.get("time")
-            if tempos is None:
-                tempos = t
-            elif t != tempos:
-                raise ValueError("horários diferentes entre pontos")
-            for v in VARS_CAMS:
-                vals[v].append([num(x, 3) for x in h.get(v) or [None] * len(t)])
-            unidades.update(r.get("hourly_units") or {})
-        time.sleep(0.5)
-    return {"tempos": tempos or [], "celulas": celulas, "vals": vals, "unidades": {v: unidades.get(v, "") for v in VARS_CAMS}}
+        try:
+            cru = baixar_json(url_cams(lote), timeout=120, tentativas=1)
+        except RuntimeError as e:
+            ate = espera_do_limite(str(e), agora)
+            if ate is not None:
+                raise LimiteOpenMeteo(str(e), ate) from None
+            raise
+        finally:
+            pedidos += 1
+        parcial["lotes"][k] = ler_lote_cams(cru, len(lote), int(k))
+        escrever_atomico(caminho, json.dumps(parcial, separators=(",", ":")).encode())
+    n_lotes = (len(celulas) + LOTE - 1) // LOTE
+    if len(parcial["lotes"]) < n_lotes:
+        return None
+    lotes = [parcial["lotes"][str(k)] for k in range(n_lotes)]
+    tempos = lotes[0]["tempos"]
+    if any(lt["tempos"] != tempos for lt in lotes):
+        # Lotes de duas atualizações do Open-Meteo: começa de novo.
+        os.remove(caminho)
+        raise ValueError("lotes com horários diferentes; a grade será baixada de novo")
+    unidades = {}
+    for lt in lotes:
+        unidades.update(lt["unidades"])
+    os.remove(caminho)
+    return {
+        "tempos": tempos,
+        "celulas": celulas,
+        "vals": {v: [s for lt in lotes for s in lt["vals"][v]] for v in VARS_CAMS},
+        "unidades": {v: unidades.get(v, "") for v in VARS_CAMS},
+    }
 
 
 def atualizar_cams(estado: dict, agora: float, anel) -> str | None:
     c = estado.setdefault("cams", {})
+    # Depois de um 429, nada de Open-Meteo até o limite zerar.
+    if agora < c.get("espera_ate", 0):
+        return None
     run = c.get("run")
     if agora - c.get("meta_em", 0) >= META_S:
         try:
@@ -1302,7 +1387,7 @@ def atualizar_cams(estado: dict, agora: float, anel) -> str | None:
             c["meta_em"] = agora
             run = meta.get("last_run_initialisation_time")
             c["disponivel"] = meta.get("last_run_availability_time")
-        except Exception as e:  # noqa: BLE001 — sem meta, vale o relógio de 6 h
+        except Exception as e:  # noqa: BLE001 — sem meta, vale o relógio
             print(f"cams: meta.json falhou — {e}", file=sys.stderr)
     precisa = run != c.get("baixado_run") or agora - c.get("baixado_em", 0) >= CAMS_MAX_S or not os.path.exists(CAMS_BRUTO)
     c["run"] = run
@@ -1310,12 +1395,18 @@ def atualizar_cams(estado: dict, agora: float, anel) -> str | None:
         return None
     celulas = grade_cams(anel)
     t0 = time.time()
-    bruto = baixar_grade_cams(celulas)
+    try:
+        bruto = baixar_grade_cams(celulas, run, agora)
+    except LimiteOpenMeteo as e:
+        c["espera_ate"] = e.ate
+        raise RuntimeError(f"{e} — nova tentativa às {iso(e.ate)}") from None
+    if bruto is None:
+        return f"grade do CAMS em andamento ({time.time() - t0:.0f} s); continua na próxima rodada"
     bruto["run"] = run
     escrever_atomico(CAMS_BRUTO, json.dumps(bruto, separators=(",", ":")).encode())
     c["baixado_em"] = agora
     c["baixado_run"] = run
-    return f"grade do CAMS baixada: {len(celulas)} células, {len(bruto['tempos'])} horas ({time.time() - t0:.0f} s)"
+    return f"grade do CAMS baixada: {len(celulas)} células, {len(bruto['tempos'])} horas"
 
 
 def publicar_cams(agora: float, run) -> tuple[dict, dict] | None:

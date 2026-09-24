@@ -259,8 +259,11 @@ espelho só é mais robusto que vários servidores de terceiros.
   o de uma célula do modelo, sem interpolação): PM2,5, PM10, CO, O₃, NO₂ e
   profundidade óptica de aerossóis (AOD), horário. O modelo roda de 12 em
   12 h: o espelho lê o `meta.json` de hora em hora e só baixa a grade quando
-  há rodada nova (ou a cada 6 h, por segurança) — ~2–3 mil chamadas por dia,
-  em lotes de 100 pontos, dentro do limite não comercial. Publica só as 48 h
+  há rodada nova (ou a cada 12 h, por segurança) — ~1,5–3 mil chamadas por
+  dia, em lotes de 100 pontos com 12 s entre eles (500/min, abaixo do limite
+  de 600/min). Os lotes prontos ficam em `cams-bruto.json.parcial` e a rodada
+  seguinte retoma os que faltam; um 429 faz esperar o limite zerar (minuto,
+  hora ou dia) em vez de tentar a cada 5 min. Publica só as 48 h
   até a hora corrente: a previsão não entra na camada.
 
 Nada é corrigido, filtrado nem reclassificado; os números só perdem o

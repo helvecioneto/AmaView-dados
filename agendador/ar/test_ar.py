@@ -236,6 +236,62 @@ class TestRodada(unittest.TestCase):
         self.assertEqual(len(chamadas), len(depois))
         self.assertGreater(len(chamadas), 1)  # em lotes
 
+    def test_cams_com_pausa_entre_lotes(self):
+        with mock.patch.object(ar.time, "sleep") as dormir:
+            ar.rodada(AGORA)
+        # 721 células = 8 lotes de até 100, com 7 pausas de 12 s entre eles (500/min).
+        self.assertEqual([c.args[0] for c in dormir.call_args_list].count(ar.PAUSA_LOTE_S), 7)
+
+    def test_cams_429_guarda_os_lotes_e_espera_o_limite(self):
+        pedidos = []
+        limite = {"texto": 'HTTP 429: {"reason":"Minutely API request limit exceeded. Please try again in one minute.","error":true}'}
+
+        def api(url, **kw):
+            if "/v1/air-quality" in url:
+                pedidos.append(url)
+                if len(pedidos) == 5 and limite["texto"]:
+                    raise RuntimeError(limite["texto"])
+            return falso_baixar_json(url, **kw)
+
+        with mock.patch.object(ar, "baixar_json", side_effect=api):
+            r = ar.rodada(AGORA)
+            self.assertEqual(r["falhas"], 1)
+            p = self.ler("pontos.json")
+            self.assertIn("429", p["fontes"]["cams"]["erro"])
+            self.assertIn("nova tentativa", p["fontes"]["cams"]["erro"])
+            self.assertEqual(len(pedidos), 5)
+            # Antes do limite zerar (90 s), nenhum pedido ao Open-Meteo.
+            ar.rodada(AGORA + 60)
+            self.assertEqual(len(pedidos), 5)
+            # Depois, só os 4 lotes que faltavam (os 4 primeiros ficaram guardados).
+            limite["texto"] = None
+            r = ar.rodada(AGORA + 120)
+        self.assertEqual(len(pedidos), 9)
+        self.assertEqual(r["falhas"], 0)
+        c = self.ler("cams.json")
+        self.assertEqual(len(c["celulas"]), 721)
+        self.assertTrue(all(any(v is not None for v in s) for s in c["pm2_5"]))
+        self.assertFalse(os.path.exists(ar.CAMS_BRUTO + ".parcial"))
+
+    def test_espera_do_limite_do_open_meteo(self):
+        agora = datetime(2026, 9, 24, 12, 5, tzinfo=timezone.utc).timestamp()
+        dia = ar.espera_do_limite('HTTP 429: {"reason":"Daily API request limit exceeded. Please try again tomorrow."}', agora)
+        self.assertEqual(ar.iso(dia), "2026-09-25T00:05:00Z")
+        hora = ar.espera_do_limite('HTTP 429: {"reason":"Hourly API request limit exceeded."}', agora)
+        self.assertEqual(ar.iso(hora), "2026-09-24T13:01:00Z")
+        self.assertEqual(ar.espera_do_limite("HTTP 429: {}", agora), agora + 90)
+        self.assertIsNone(ar.espera_do_limite("HTTP 500: erro", agora))
+
+    def test_cams_retoma_em_varias_rodadas_quando_passa_do_tempo(self):
+        with mock.patch.object(ar, "CAMS_RODADA_MAX_S", -1):
+            r = ar.rodada(AGORA)  # um lote por rodada
+            self.assertEqual(r["falhas"], 0)
+            self.assertTrue(os.path.exists(ar.CAMS_BRUTO + ".parcial"))
+            for k in range(1, 8):
+                ar.rodada(AGORA + 300 * k)
+        self.assertEqual(len(self.ler("cams.json")["celulas"]), 721)
+        self.assertFalse(os.path.exists(ar.CAMS_BRUTO + ".parcial"))
+
     def test_fonte_fora_nao_derruba_as_outras(self):
         def quebrado(url, **kw):
             if "ufac" in url:
