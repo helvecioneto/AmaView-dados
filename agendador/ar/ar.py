@@ -137,8 +137,11 @@ TOL_PADRAO_MIN = 30
 # faixa própria, para nunca colidirem com ele (os ids do mapa da AirGradient
 # passam de 100 milhões: faixa a partir de 3 bilhões).
 ID_BASE = {"redear": 900_000_000, "openaq": 920_000_000, "airgradient": 3_000_000_000}
-# Prioridade quando o mesmo sensor vem de mais de uma fonte.
-PRIORIDADE = ("ufac", "redear", "purpleair", "airgradient", "openaq")
+# Prioridade quando o mesmo sensor vem de mais de uma fonte. Um aparelho
+# PurpleAir aparece como a PurpleAir o mostra (a origem do dado), antes da
+# RedeAr, que o repassa; os do Acre ficam com o valor oficial da rede dona
+# deles (UFAC/MPAC).
+PRIORIDADE = ("ufac", "purpleair", "redear", "airgradient", "openaq")
 # Códigos de `fl` (os de 0 a 3 são os `channel_flags` da PurpleAir: 1 = canal A
 # degradado, 2 = B, 3 = os dois). 4 = A e B divergem pelo critério do mapa da
 # RedeAr (|A − B| > 10 µg/m³ e ≥ 40% do maior): só aviso, o valor fica.
@@ -616,9 +619,14 @@ def mesclar(principal: dict, outro: dict) -> None:
 
 
 # A fonte principal de um sensor repetido é a de maior prioridade entre as que
-# leram nas últimas 2 h (senão, a de maior prioridade): um sensor que a RedeAr
-# deixou de trazer e a PurpleAir consulta aparece com o valor da PurpleAir.
+# leram há pouco — 2 h, ou a folga da própria fonte (`tol`: a PurpleAir é
+# consultada de 2 em 2 h) —; sem nenhuma, a de maior prioridade.
 RECENTE_MS = 2 * 3600 * 1000
+
+
+def recente(item: dict, agora_ms: int) -> bool:
+    folga = max(RECENTE_MS, (item.get("tol") or 0) * 60_000)
+    return item["ult"]["pm"] is not None and agora_ms - item["ult"]["t"] <= folga
 
 
 def juntar_sensores(por_fonte: dict, agora: float | None = None) -> list:
@@ -643,7 +651,7 @@ def juntar_sensores(por_fonte: dict, agora: float | None = None) -> list:
     saida: list = []
     for ide in ordem:
         g = grupos[ide]
-        principal = next((i for i in g if i["ult"]["pm"] is not None and agora_ms - i["ult"]["t"] <= RECENTE_MS), g[0])
+        principal = next((i for i in g if recente(i, agora_ms)), g[0])
         for outro in g:
             if outro is not principal:
                 mesclar(principal, outro)
@@ -984,9 +992,11 @@ def atualizar_purpleair(estado: dict, agora: float, anel, conf: dict, fontes: di
                        "dono": dono_por_nome(x.get("name")), "pa": True}
         p["meta"] = meta
         p["descoberto_em"] = agora
-    # Só o que as fontes sem chave não trazem (leitura nas últimas 2 h).
-    ufac, redear = estado.get("ufac", {}), estado.get("redear", {})
-    alvo = [k for k in p["meta"] if not vivo_ha(ufac, k, agora, 7200) and not vivo_ha(redear, k, agora, 7200)]
+    # Todo PurpleAir da região, menos os que a rede do Acre publica (leitura nas
+    # últimas 2 h): os que a RedeAr repassa também, para aparecerem no valor e
+    # na escala da PurpleAir (o AQI da média de 10 min), e não na da RedeAr.
+    ufac = estado.get("ufac", {})
+    alvo = [k for k in p["meta"] if not vivo_ha(ufac, k, agora, 7200)]
     p["alvo"] = len(alvo)
     novas = 0
     for i in range(0, len(alvo), 500):

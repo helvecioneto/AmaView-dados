@@ -212,8 +212,9 @@ espelho só é mais robusto que vários servidores de terceiros.
 - **PurpleAir** (opcional, chave em `/etc/amaview/purpleair-key`): 1×/dia a
   lista dos sensores externos no retângulo da Amazônia Legal
   (`/v1/sensors?fields=name,latitude,longitude&location_type=0&max_age=…&nwlng…`, mensal);
-  a cada 120 min (`PURPLEAIR_INTERVALO_MIN`), só os que **não** vieram pela
-  UFAC nem pela RedeAr nas últimas 2 h (`show_only=…&fields=pm2.5_10minute,channel_flags&max_age=600`
+  a cada 120 min (`PURPLEAIR_INTERVALO_MIN`), todos menos os que a UFAC
+  publica (leitura nas últimas 2 h) — os que a RedeAr repassa também, para
+  saírem no valor e na escala da PurpleAir (`show_only=…&fields=pm2.5_10minute,channel_flags&max_age=600`
   — `pm2.5_10minute` é a média de 10 min de A e B da qual o mapa da PurpleAir
   calcula o AQI da EPA, sem conversão; com os dois canais degradados, sem valor). O saldo (`/v1/organization`, grátis) é
   lido antes e depois de cada consulta: o gasto real vai para `fontes`, e
@@ -239,8 +240,8 @@ espelho só é mais robusto que vários servidores de terceiros.
   AmaView. O estado guarda `valores` = 2; um estado de antes tem as séries
   corrigidas apagadas na primeira rodada, para não misturar réguas.
   **Um sensor, um ponto**: o mesmo `sensor_index` em várias fontes vira um
-  item só, da fonte de maior prioridade (UFAC > RedeAr > PurpleAir) entre as
-  que leram nas últimas 2 h, com o valor e a série **só dela**; a leitura mais
+  item só, da fonte de maior prioridade (UFAC > PurpleAir > RedeAr) entre as
+  que leram há pouco (2 h, ou a folga da fonte: 135 min na PurpleAir), com o valor e a série **só dela**; a leitura mais
   recente das outras vai em `outras` (`[{fonte, t, pm}]`) e o nome delas em
   `tambem`.
 - **MonitorAr** (MMA, [monitorar.mma.gov.br](https://monitorar.mma.gov.br)):

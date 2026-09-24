@@ -276,6 +276,7 @@ PA_DESCOBERTA = {
         [25531, 1790195000, "MPAC_MNL_01_promotoria", -7.613, -72.903],  # já vem pela UFAC e pela RedeAr
         [999001, 1790195000, "SEMA_DCAM_07", -3.1, -60.02],  # Manaus: só pela PurpleAir
         [999002, 1790195000, "Sao Paulo", -23.5, -46.6],  # fora da Amazônia Legal
+        [161259, 1790195000, "UEA_EDUCAIR_2", -3.132, -60.004],  # também na RedeAr
     ],
 }
 PA_LEITURAS = {
@@ -283,7 +284,7 @@ PA_LEITURAS = {
     "time_stamp": 1790195100,
     "data_time_stamp": 1790195040,
     "fields": ["sensor_index", "pm2.5_10minute", "channel_flags"],
-    "data": [[999001, 59.3, 0]],
+    "data": [[999001, 59.3, 0], [161259, 14.6, 0]],
 }
 
 
@@ -513,8 +514,9 @@ class TestFontesNovas(unittest.TestCase):
         pa = [(u, c) for u, c in self.api.pedidos if "api.purpleair.com" in u]
         self.assertTrue(all(c == {"X-API-Key": "CHAVE-DE-TESTE"} for _, c in pa))
         consulta = next(u for u, _ in pa if "show_only=" in u)
-        # 25531 já vem pela UFAC e pela RedeAr; São Paulo está fora.
-        self.assertIn("show_only=999001", consulta)
+        # 25531 é da rede do Acre (fica com o valor dela); São Paulo está fora.
+        # O 161259 vem pela RedeAr, mas é PurpleAir: consultado também.
+        self.assertIn("show_only=999001%2C161259", consulta)
         self.assertNotIn("25531", consulta)
         self.assertIn("fields=pm2.5_10minute%2Cchannel_flags&", consulta)
         self.assertIn("max_age=600", consulta)
@@ -523,6 +525,11 @@ class TestFontesNovas(unittest.TestCase):
         m = s[999001]
         self.assertEqual((m["fonte"], m["dono"], m["mun"], m["tol"]), ("purpleair", "SEMA-AM", "Manaus", 135))
         self.assertEqual((m["ult"]["pm"], m["ult"]["fl"]), (59.3, 0))  # o pm2.5_10minute, como veio
+        # O PurpleAir que a RedeAr repassa aparece como a PurpleAir o mostra;
+        # o valor da RedeAr (leitura de 2 min, sem média) vai para a ficha.
+        uea = s[161259]
+        self.assertEqual((uea["fonte"], uea["ult"]["pm"], uea["tambem"]), ("purpleair", 14.6, ["redear"]))
+        self.assertEqual([o["fonte"] for o in uea["outras"]], ["redear"])
         f = self.ler()["fontes"]["purpleair"]
         # Descoberta e consulta, 500 pontos cada, medidas pelo saldo e separadas:
         # a conta do dia (12 consultas de 2 em 2 h) é só da consulta regular.
@@ -622,16 +629,21 @@ class TestFontesNovas(unittest.TestCase):
         self.assertEqual(out[0]["serie"], [1.0, None, None])
         self.assertEqual(out[0]["ult"]["pm"], 1.0)
         self.assertEqual(out[0]["outras"], [{"fonte": "redear", "t": 10 * h + 1, "pm": 2.0}])
-        self.assertEqual(out[0]["tambem"], ["redear", "purpleair"])
+        self.assertEqual(out[0]["tambem"], ["purpleair", "redear"])
         self.assertEqual(out[0]["nome"], "x")
 
-    def test_juntar_prefere_a_fonte_que_leu_nas_ultimas_2_h(self):
+    def test_juntar_purpleair_antes_da_redear_dentro_da_folga(self):
         base = {"lat": -3.1, "lon": -60.0, "fl": [], "nome": None, "mun": None, "uf": None, "dono": None}
         h = 3600 * 1000
-        red = dict(base, id=7, fonte="redear", serie=[4.0, None], ult={"t": 1 * h, "pm": 4.0, "fl": 0})
-        pa = dict(base, id=7, fonte="purpleair", serie=[None, 12.0], ult={"t": 10 * h, "pm": 12.0, "fl": 0})
+        red = dict(base, id=7, fonte="redear", serie=[4.0, 5.0], ult={"t": 10 * h, "pm": 5.0, "fl": 0})
+        # Consultada há 2 h 10 min: dentro da folga dela (135 min), fica a PurpleAir.
+        pa = dict(base, id=7, fonte="purpleair", serie=[12.0, None], ult={"t": 10 * h - 130 * 60_000, "pm": 12.0, "fl": 0}, tol=135)
         out = ar.juntar_sensores({"redear": [red], "purpleair": [pa]}, agora=10 * 3600)
-        self.assertEqual((out[0]["fonte"], out[0]["serie"], out[0]["tambem"]), ("purpleair", [None, 12.0], ["redear"]))
+        self.assertEqual((out[0]["fonte"], out[0]["serie"], out[0]["tambem"]), ("purpleair", [12.0, None], ["redear"]))
+        # Sem consulta há mais que a folga (chave removida, saldo baixo): a RedeAr.
+        pa_velha = dict(pa, ult={"t": 5 * h, "pm": 12.0, "fl": 0})
+        out = ar.juntar_sensores({"redear": [dict(red)], "purpleair": [pa_velha]}, agora=10 * 3600)
+        self.assertEqual(out[0]["fonte"], "redear")
 
     def test_estado_antigo_perde_as_series_corrigidas(self):
         estado = {
