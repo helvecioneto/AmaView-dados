@@ -136,13 +136,36 @@ export function arredondar(n, casas = 4) {
  * desliza a cada ciclo, e uma trilha indexada por slot andaria para trás
  * sozinha a cada publicação.
  *
- * Um ponto que mal se mexeu não vira amostra nova — só atualiza o instante da
- * última. Sem isso, um navio atracado gastaria 96 amostras idênticas.
+ * Um ponto que mal se mexeu não vira amostra nova. A parada vira um PAR de
+ * amostras no mesmo lugar: a primeira marca quando ela começou e a segunda,
+ * com o 5º campo `PARADA` (= 1), quando foi ouvida pela última vez — e só
+ * essa segunda tem o instante movido a cada ciclo. Sem isso, um navio
+ * atracado gastaria 96 amostras idênticas.
+ *
+ * A primeira versão movia o instante da ÚNICA amostra da parada, e com isso
+ * apagava o começo dela: um navio atracado desde as 6 h tinha, às 12 h, uma
+ * trilha de um ponto só, às 12 h — e sumia do mapa em qualquer quadro do loop
+ * anterior a 11h25 (tolerância de 35 min no navegador). Como ~80 % da frota
+ * publicada está parada, o loop mostrava metade dos barcos piscando.
+ *
+ * O par só se forma com escuta contínua (intervalo <= `LACUNA_MS` entre
+ * ciclos). Um barco que some por horas e reaparece no mesmo ponto ganha uma
+ * amostra comum: o navegador não afirma que ele esteve lá no silêncio.
+ * `PARADA` e `LACUNA_MS` repetem as de `AmaView/src/ships/track.ts`: mudam juntas.
  */
+export const PARADA = 1;
+
 export function mesclarTrilha(anterior, ponto, agora = Date.now()) {
-  const pontos = Array.isArray(anterior) ? anterior.filter(valida) : [];
+  const pontos = Array.isArray(anterior) ? anterior.filter(valida).sort((a, b) => a[0] - b[0]) : [];
   const corte = agora - TRILHA_MS;
-  const vivos = pontos.filter((p) => p[0] >= corte).sort((a, b) => a[0] - b[0]);
+  const vivos = pontos.filter((p) => p[0] >= corte);
+
+  // A poda cortou o começo de uma parada que continua: o começo passa a ser o
+  // limite da janela, sem a marca — a parada segue ligada ao que sobrou.
+  const primeira = vivos[0];
+  if (primeira && primeira[4] === PARADA && vivos.length < pontos.length) {
+    vivos.unshift([corte, primeira[1], primeira[2], primeira[3] ?? null]);
+  }
 
   if (!ponto || !Number.isFinite(ponto.lat) || !Number.isFinite(ponto.lon)) return vivos;
 
@@ -156,9 +179,16 @@ export function mesclarTrilha(anterior, ponto, agora = Date.now()) {
   const ultima = vivos[vivos.length - 1];
   if (ultima) {
     if (nova[0] <= ultima[0]) return vivos; // amostra repetida ou fora de ordem
-    if (distanciaM(ultima[1], ultima[2], nova[1], nova[2]) < DEDUPE_M) {
-      // Mesma posição: move o instante em vez de empilhar um ponto igual.
-      vivos[vivos.length - 1] = [nova[0], ultima[1], ultima[2], nova[3]];
+    const mesmoLugar = distanciaM(ultima[1], ultima[2], nova[1], nova[2]) < DEDUPE_M;
+    const continua = nova[0] - ultima[0] <= LACUNA_MS;
+    if (mesmoLugar && continua) {
+      if (ultima[4] === PARADA) {
+        // Parada em curso: só o fim avança.
+        vivos[vivos.length - 1] = [nova[0], ultima[1], ultima[2], nova[3], PARADA];
+      } else {
+        // Começo de parada: `ultima` fica como início, e o fim entra marcado.
+        vivos.push([nova[0], ultima[1], ultima[2], nova[3], PARADA]);
+      }
       return vivos;
     }
   }

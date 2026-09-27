@@ -14,6 +14,7 @@ import {
   CADASTRO_TTL_MS,
   DEDUPE_M,
   ESCUTA_TTL_MS,
+  PARADA,
   TRILHA_MS,
   arredondar,
   boca,
@@ -125,8 +126,49 @@ test('mesclarTrilha: um barco atracado não empilha 96 amostras iguais', () => {
     const jitter = (i % 2 ? 1 : -1) * 0.0002; // ~22 m
     t = mesclarTrilha(t, { ms, lat: -1.45 + jitter, lon: -48.5, sog: 0 }, ms);
   }
-  assert.equal(t.length, 1, 'continua sendo uma amostra só');
-  assert.equal(t[0][0], t0 + 20 * 15 * 60_000, 'mas o instante avança');
+  assert.equal(t.length, 2, 'a parada é um par: começo e fim');
+  assert.equal(t[0][0], t0, 'o começo da parada NÃO avança (senão o loop perde o barco)');
+  assert.equal(t[0][4], undefined);
+  assert.equal(t[1][0], t0 + 20 * 15 * 60_000, 'o fim avança a cada ciclo');
+  assert.equal(t[1][4], PARADA);
+  assert.deepEqual([t[1][1], t[1][2]], [t[0][1], t[0][2]], 'o par fica no mesmo ponto');
+});
+
+test('mesclarTrilha: reaparecer no mesmo ponto depois de silêncio não vira parada', () => {
+  // Três horas sem ouvir: não sabemos se ele ficou ali. Amostra comum, sem a
+  // marca — o navegador não liga as pontas.
+  const t0 = Date.parse('2026-09-20T12:00:00Z');
+  const t = mesclarTrilha([[t0, -1.45, -48.5, 0]], { ms: t0 + 3 * H, lat: -1.45, lon: -48.5, sog: 0 }, t0 + 3 * H);
+  assert.equal(t.length, 2);
+  assert.equal(t[1][4], undefined);
+});
+
+test('mesclarTrilha: a poda de 24 h não desliga a parada do resto', () => {
+  const agora = Date.parse('2026-09-21T12:00:00Z');
+  const t = mesclarTrilha(
+    [
+      [agora - 30 * H, -1.45, -48.5, 0],
+      [agora - 10 * 60_000, -1.45, -48.5, 0, PARADA],
+    ],
+    { ms: agora, lat: -1.45, lon: -48.5, sog: 0 },
+    agora,
+  );
+  assert.equal(t.length, 2);
+  assert.equal(t[0][0], agora - TRILHA_MS, 'o começo passa a ser o limite da janela');
+  assert.equal(t[1][0], agora);
+  assert.equal(t[1][4], PARADA);
+});
+
+test('mesclarTrilha: trilha antiga (parada de um ponto só) se refaz no ciclo seguinte', () => {
+  const t0 = Date.parse('2026-09-20T12:00:00Z');
+  const t = mesclarTrilha([[t0, -1.45, -48.5, 0]], { ms: t0 + 15 * 60_000, lat: -1.45, lon: -48.5, sog: 0 }, t0 + 15 * 60_000);
+  assert.deepEqual(
+    t.map((p) => [p[0], p[4]]),
+    [
+      [t0, undefined],
+      [t0 + 15 * 60_000, PARADA],
+    ],
+  );
 });
 
 test('mesclarTrilha: deriva lenta e contínua acaba virando amostra', () => {
