@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lerDadosRede, minutosAteExpirar } from './cemaden.mjs';
+import { lerDadosRede, minutosAteExpirar, tokenRecusado } from './cemaden.mjs';
 
 // Resposta real de /pcds/dados_rede, copiada dos logs do workflow.
 const CSV = `OBS.: Rede com horario UTC!
@@ -140,4 +140,87 @@ test('CSV com coluna de valor vazia não publica chuva zero', () => {
 test('inicioDaHora trunca em UTC', () => {
   assert.equal(inicioDaHora(Date.UTC(2026, 8, 20, 13, 59, 58)), Date.UTC(2026, 8, 20, 13, 0, 0));
   assert.equal(inicioDaHora(Date.UTC(2026, 8, 20, 14, 0, 2)), Date.UTC(2026, 8, 20, 14, 0, 0));
+});
+
+test('reconhece a PED recusando o token, e só isso', () => {
+  // Mensagem real do workflow (2026-09-27 02:30 UTC).
+  const real = new Error(
+    'HTTP 400 em https://sws.cemaden.gov.br/PED/rest/pcds/dados_rede?uf=MT\nAlerta\nO Token informado é inválido!',
+  );
+  assert.equal(tokenRecusado(real), true);
+  assert.equal(tokenRecusado(new Error('CEMADEN recusou a chamada (AC): O Token informado é inválido!')), true);
+  assert.equal(tokenRecusado(new Error('HTTP 401 em https://x')), true);
+  assert.equal(tokenRecusado(new Error('HTTP 400 em https://x\nParâmetro uf inválido')), false);
+  assert.equal(tokenRecusado(new Error('HTTP 503 em https://x')), false);
+});
+
+import { comRenovacao } from './cemaden.mjs';
+
+/** PED falsa: recusa os tokens da lista `mortos`, grava cada chamada. */
+function pedFalsa(mortos) {
+  const chamadas = [];
+  const chamar = async (t) => {
+    chamadas.push(t);
+    if (mortos.includes(t)) throw new Error('HTTP 400 em https://x\nO Token informado é inválido!');
+    return `dados com ${t}`;
+  };
+  return { chamar, chamadas };
+}
+const opcoes = (esperas = [1, 2, 3]) => {
+  const dormidas = [];
+  return { dormidas, o: { esperas, dormir: async (ms) => dormidas.push(ms), avisar: () => {} } };
+};
+
+test('comRenovacao: token bom não renova nem espera', async () => {
+  const ped = pedFalsa([]);
+  const { dormidas, o } = opcoes();
+  const r = await comRenovacao(ped.chamar, 'A', async () => 'B', o);
+  assert.deepEqual(r, { resultado: 'dados com A', token: 'A' });
+  assert.deepEqual(dormidas, []);
+});
+
+test('comRenovacao: token recusado é trocado na 1ª renovação e segue valendo', async () => {
+  const ped = pedFalsa(['A']);
+  const { dormidas, o } = opcoes();
+  const r = await comRenovacao(ped.chamar, 'A', async () => 'B', o);
+  assert.deepEqual(r, { resultado: 'dados com B', token: 'B' });
+  assert.deepEqual(ped.chamadas, ['A', 'B']);
+  assert.deepEqual(dormidas, [1]);
+});
+
+test('comRenovacao: SGAA devolve o mesmo token — espera sem chamar a PED até a troca', async () => {
+  const ped = pedFalsa(['A']);
+  const { dormidas, o } = opcoes();
+  const tokens = ['A', 'B'];
+  const r = await comRenovacao(ped.chamar, 'A', async () => tokens.shift(), o);
+  assert.equal(r.token, 'B');
+  assert.deepEqual(ped.chamadas, ['A', 'B']);
+  assert.deepEqual(dormidas, [1, 2]);
+});
+
+test('comRenovacao: desiste depois das esperas com o erro original', async () => {
+  const ped = pedFalsa(['A', 'B', 'C', 'D']);
+  const { dormidas, o } = opcoes();
+  const novos = ['B', 'C', 'D'];
+  await assert.rejects(comRenovacao(ped.chamar, 'A', async () => novos.shift(), o), /Token informado/);
+  assert.deepEqual(dormidas, [1, 2, 3]);
+  assert.deepEqual(ped.chamadas, ['A', 'B', 'C', 'D']);
+});
+
+test('comRenovacao: SGAA preso no token velho — desiste sem martelar a PED', async () => {
+  const ped = pedFalsa(['A']);
+  const { dormidas, o } = opcoes();
+  await assert.rejects(comRenovacao(ped.chamar, 'A', async () => 'A', o), /Token informado/);
+  assert.deepEqual(ped.chamadas, ['A']);
+  assert.deepEqual(dormidas, [1, 2, 3]);
+});
+
+test('comRenovacao: outro erro sobe na hora; sem credenciais também', async () => {
+  const { dormidas, o } = opcoes();
+  let pedidos = 0;
+  const obter = async () => (pedidos++, 'B');
+  await assert.rejects(comRenovacao(async () => { throw new Error('HTTP 503 em https://x'); }, 'A', obter, o), /503/);
+  await assert.rejects(comRenovacao(pedFalsa(['A']).chamar, 'A', null, o), /Token informado/);
+  assert.equal(pedidos, 0);
+  assert.deepEqual(dormidas, []);
 });

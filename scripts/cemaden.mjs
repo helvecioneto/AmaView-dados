@@ -242,6 +242,56 @@ export function minutosAteExpirar(token) {
   }
 }
 
+/**
+ * O erro é a PED recusando o token (e não outro 4xx qualquer)?
+ *
+ * O SGAA devolve o MESMO token em cache a cada pedido até ele morrer, 4 h após
+ * a emissão, e não desconta margem nenhuma. Um ciclo que pede o token segundos
+ * antes da virada recebe o velho, e ele morre no meio das 9 UFs:
+ * `HTTP 400 ... O Token informado é inválido!`. Medido em 2026-09-25..27: foram
+ * as 6 falhas do workflow em 200 execuções, todas no ciclo anterior à troca.
+ * O remédio é pedir outro token e repetir a UF — ver `viaToken` em build.mjs.
+ */
+export function tokenRecusado(e) {
+  const msg = String(e?.message ?? e);
+  return /token informado (é|e) inv(á|a)lido/i.test(msg) || /HTTP 401 /.test(msg);
+}
+
+/** Esperas antes de cada renovação do token: o teto soma ~100 s. */
+export const ESPERAS_RENOVACAO_MS = [10_000, 30_000, 60_000];
+
+/**
+ * `chamar(token)` com renovação quando a PED recusa o token (`tokenRecusado`).
+ * Outro erro sobe na hora; sem `obterToken` (token fixo, sem credenciais) ou
+ * depois das esperas, sobe o erro original. Se o SGAA ainda devolver o mesmo
+ * token, nem chama a PED: vai direto para a próxima espera. Devolve o
+ * resultado e o token que valeu, para as chamadas seguintes do ciclo.
+ */
+export async function comRenovacao(chamar, token, obterToken, { esperas = ESPERAS_RENOVACAO_MS, dormir = (ms) => new Promise((r) => setTimeout(r, ms)), rotulo = '', avisar = console.warn } = {}) {
+  let erro;
+  for (let i = 0; ; i++) {
+    try {
+      return { resultado: await chamar(token), token };
+    } catch (e) {
+      if (!tokenRecusado(e) || !obterToken) throw e;
+      erro = e;
+    }
+    // Renova até o SGAA trocar o token ou as esperas acabarem.
+    for (;;) {
+      if (i >= esperas.length) throw erro;
+      avisar(`  [aviso] ${rotulo}: a PED recusou o token — pedindo outro em ${esperas[i] / 1000} s`);
+      await dormir(esperas[i]);
+      const novo = await obterToken();
+      if (novo !== token) {
+        token = novo;
+        break;
+      }
+      avisar('  [aviso] o SGAA devolveu o mesmo token; esperando a troca');
+      i++;
+    }
+  }
+}
+
 /** `aaaaMMddHHmm` em UTC, formato de data da PED. */
 export function marcaPed(ms) {
   const d = new Date(ms);

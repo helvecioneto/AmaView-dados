@@ -35,6 +35,7 @@ import {
   inicioDaHora,
   instantaneoAberto,
   minutosAteExpirar,
+  comRenovacao,
   renovarToken,
   UFS_AMAZONIA,
 } from './cemaden.mjs';
@@ -153,9 +154,15 @@ async function viaToken(TOKEN, fim, anterior) {
   const { estacoes } = await instantaneoAberto();
   console.log(`  ${estacoes.length} estações no cadastro (fonte aberta)`);
 
+  // O token pode morrer NO MEIO do ciclo: o SGAA entrega o mesmo token em cache
+  // até o último segundo das ~4 h de vida (ver `tokenRecusado`). Quando a PED o
+  // recusa, pedimos outro e repetimos só a UF que falhou (`comRenovacao`).
+  let token = TOKEN;
   const leituras = [];
   for (const uf of UFS_AMAZONIA) {
-    const dados = await dadosRede(TOKEN, uf, inicio, fim);
+    const r = await comRenovacao((t) => dadosRede(t, uf, inicio, fim), token, EMAIL && SENHA ? obterToken : null, { rotulo: uf });
+    token = r.token;
+    const dados = r.resultado;
     leituras.push(...dados);
     console.log(`  ${uf}: ${dados.length} leituras`);
   }
