@@ -387,8 +387,11 @@ precisa de GDAL, geopandas e opencv), mantido no próprio repositório dele:
   0,045° ≈ 5 km); o pyFortraCC rastreia com limiares de **235 K e 210 K**
   (mínimo de 100 e 50 pixels) e mantém o `uid` de cada sistema entre ciclos e
   reinícios.
-- **Previsão por persistência**: 6 passos de 10 min (1 h), com o deslocamento
-  das últimas 3 imagens. Os primeiros quadros de um rastreio não têm previsão.
+- **Previsão por persistência**: 6 passos de 10 min (1 h). O contorno de cada
+  sistema é transladado pelo vetor médio dele nas últimas 3 imagens, vezes o
+  número de passos (`app/amaview.py` do container) — com precisão de subpixel,
+  para os sistemas lentos também andarem. Os primeiros quadros de um rastreio
+  não têm previsão.
 - **48 h, no máximo.** Quadro publicado nunca muda; o índice é refeito a cada
   ciclo. Em disco, ~125 MB; um quadro tem ~14 KB com gzip e uma previsão ~70 KB.
 - `docker ps` mostra o container `healthy` enquanto o quadro mais novo tem até
@@ -397,9 +400,9 @@ precisa de GDAL, geopandas e opencv), mantido no próprio repositório dele:
 | Peça | Onde |
 |---|---|
 | `containers/pyfortracc_IR` (repositório pyfortracc) | container `pyfortracc_ir`: baixa, rastreia, prevê e publica em `/var/cache/amaview-fortracc` |
-| `fortracc/nginx-locais.conf` | `/fortracc/v1/`: CORS `*`, gzip, quadro imutável, índice `no-cache` |
+| `fortracc/nginx-locais.conf` | `/fortracc/v2/`: CORS `*`, gzip, quadro imutável, índice `no-cache` |
 
-URLs (em `https://147.15.84.134/fortracc/v1/`), `c` = `AAAADDDHHMM` (UTC,
+URLs (em `https://147.15.84.134/fortracc/v2/`), `c` = `AAAADDDHHMM` (UTC,
 dia juliano, como na fumaça):
 
 - `indice.json`: `{"versao", "gerado", "fonte", "cadencia_min", "limiares_K",
