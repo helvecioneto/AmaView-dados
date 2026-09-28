@@ -83,6 +83,29 @@ export async function sondagem(idWmo, ms) {
   return lerPerfil(await r.text(), ms);
 }
 
+/** Nós por m/s. */
+const NOS_POR_MS = 1.943844;
+
+/**
+ * Colunas da tabela, pelo NOME do cabeçalho.
+ *
+ * A tabela é de largura fixa, alinhada à direita: cada coluna vai do fim da
+ * anterior até o fim do próprio nome. Ler por posição no texto (e não por
+ * ordem dos campos separados por espaço) é o que mantém cada valor na sua
+ * coluna quando um campo falta — uma temperatura em branco não pode puxar o
+ * ponto de orvalho para o lugar dela.
+ */
+export function colunasDe(cabecalho) {
+  const colunas = {};
+  let inicio = 0;
+  for (const m of cabecalho.matchAll(/\S+/g)) {
+    const fim = m.index + m[0].length;
+    colunas[m[0]] = [inicio, fim];
+    inicio = fim;
+  }
+  return colunas;
+}
+
 /**
  * Extrai o perfil do HTML.
  *
@@ -90,6 +113,10 @@ export async function sondagem(idWmo, ms) {
  * função devolve `null` só quando o bloco não existe (sem sondagem) e LANÇA
  * quando o bloco existe mas não dá para ler: uma mudança de formato tem que
  * aparecer como erro no manifesto, nunca como silêncio.
+ *
+ * Vento: `w` é a direção (graus, de onde o vento vem) e `s` a velocidade em
+ * NÓS. O endpoint novo publica `SPED` em m/s (a linha das unidades diz), e o
+ * antigo publicava `SKNT` em nós: a unidade é lida da tabela, não presumida.
  */
 export function lerPerfil(html, ms) {
   const bloco = /<PRE>([\s\S]*?)<\/PRE>/i.exec(html);
@@ -99,18 +126,41 @@ export function lerPerfil(html, ms) {
   const iCab = linhas.findIndex((l) => /\bPRES\b/.test(l) && /\bHGHT\b/.test(l));
   if (iCab < 0) throw new Error('bloco <PRE> sem cabeçalho PRES/HGHT — formato mudou?');
 
+  const colunas = colunasDe(linhas[iCab]);
+  const campo = (linha, nome) => {
+    const c = colunas[nome];
+    if (!c) return NaN;
+    const texto = linha.slice(c[0], c[1]).trim();
+    return texto === '' ? NaN : Number(texto);
+  };
+  const ou = (v) => (Number.isFinite(v) ? v : null);
+
+  const colVel = colunas.SPED ? 'SPED' : colunas.SKNT ? 'SKNT' : null;
+  const unidade = colVel ? (linhas[iCab + 1] ?? '').slice(...colunas[colVel]).trim().toLowerCase() : '';
+  // SKNT é nós por definição; SPED vale o que a linha das unidades disser.
+  const emNos = colVel === 'SKNT' || /^(kn|kt)/.test(unidade);
+  if (colVel === 'SPED' && !emNos && unidade !== 'm/s') {
+    throw new Error(`velocidade do vento em unidade desconhecida ("${unidade}") — formato mudou?`);
+  }
+
   const niveis = [];
   for (let i = iCab + 3; i < linhas.length; i++) {
-    const campos = linhas[i].trim().split(/\s+/);
-    if (campos.length < 3) continue;
-    const [pres, hght, temp, dwpt, relh] = campos.map(Number);
+    const linha = linhas[i];
+    if (linha.trim().split(/\s+/).length < 3) continue;
+    const pres = campo(linha, 'PRES');
+    const hght = campo(linha, 'HGHT');
     if (!Number.isFinite(pres) || !Number.isFinite(hght)) continue;
+    const drct = campo(linha, 'DRCT');
+    const vel = colVel ? campo(linha, colVel) : NaN;
+    const temVento = Number.isFinite(drct) && Number.isFinite(vel) && vel >= 0 && drct >= 0 && drct <= 360;
     niveis.push({
       p: pres,
       z: hght,
-      t: Number.isFinite(temp) ? temp : null,
-      d: Number.isFinite(dwpt) ? dwpt : null,
-      u: Number.isFinite(relh) ? relh : null,
+      t: ou(campo(linha, 'TEMP')),
+      d: ou(campo(linha, 'DWPT')),
+      u: ou(campo(linha, 'RELH')),
+      w: temVento ? Math.round(drct) % 360 : null,
+      s: temVento ? Math.round(vel * (emNos ? 1 : NOS_POR_MS) * 10) / 10 : null,
     });
   }
   if (niveis.length === 0) throw new Error('bloco <PRE> sem nenhum nível legível');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HORARIOS, instantesDeSondagem, lerIndices, lerPerfil, marcaWyoming, urlSkewT } from './wyoming.mjs';
-import { NIVEIS_PADRAO, reduzirNiveis } from './estacoes-sondagem.mjs';
+import { colunasDe, HORARIOS, instantesDeSondagem, lerIndices, lerPerfil, marcaWyoming, urlSkewT } from './wyoming.mjs';
+import { MAX_NIVEIS, NIVEIS_PADRAO, passoEm, reduzirNiveis } from './estacoes-sondagem.mjs';
 
 // Resposta real do Wyoming (Manaus, 2026-09-18 12Z), recortada.
 const HTML = `<HTML><BODY>
@@ -56,7 +56,8 @@ test('lerPerfil extrai os níveis do bloco PRE', () => {
   const p = lerPerfil(HTML, 123);
   assert.equal(p.ms, 123);
   assert.equal(p.niveis.length, 6);
-  assert.deepEqual(p.niveis[0], { p: 1005.9, z: 85, t: 29.2, d: 25.4, u: 80 });
+  // 0,5 m/s = 0,97 nó; a velocidade sai em nós.
+  assert.deepEqual(p.niveis[0], { p: 1005.9, z: 85, t: 29.2, d: 25.4, u: 80, w: 100, s: 1 });
   assert.equal(p.niveis.at(-1).p, 500);
 });
 
@@ -71,11 +72,44 @@ test('bloco PRE ilegível LANÇA — mudança de formato não pode passar calada
 });
 
 test('campos ausentes viram null, não zero', () => {
-  const html = HTML.replace(' 1000.0    137   27.9   25.4     86', ' 1000.0    137            25.4     86');
+  const html = HTML.replace(' 1000.0    137   27.9   25.4     86', ' 1000.0    137' + ' '.repeat(7) + '   25.4     86');
   const p = lerPerfil(html, 1);
   const n = p.niveis.find((x) => x.p === 1000);
-  // A linha perde uma coluna: o que não é número não pode virar 0 °C.
-  assert.ok(n === undefined || n.t === null || Number.isFinite(n.t));
+  // A tabela é de largura fixa: a temperatura em branco fica nula, e o
+  // orvalho, a umidade e o vento continuam cada um na sua coluna.
+  assert.deepEqual(n, { p: 1000, z: 137, t: null, d: 25.4, u: 86, w: 100, s: 1 });
+});
+
+test('colunasDe acha cada coluna pelo nome, até o fim do nome', () => {
+  const c = colunasDe('   PRES   HGHT   TEMP');
+  assert.deepEqual(c, { PRES: [0, 7], HGHT: [7, 14], TEMP: [14, 21] });
+});
+
+test('vento: m/s vira nós, e a direção é a de onde o vento vem', () => {
+  const p = lerPerfil(HTML, 1);
+  const n = p.niveis.find((x) => x.p === 850);
+  // 12,7 m/s × 1,943844 = 24,69 nós.
+  assert.equal(n.w, 79);
+  assert.equal(n.s, 24.7);
+});
+
+test('vento: SKNT já vem em nós e não é convertido', () => {
+  const html = HTML.replace('   SPED   THTA', '   SKNT   THTA').replace('    m/s      K', '   knot      K');
+  const n = lerPerfil(html, 1).niveis.find((x) => x.p === 850);
+  assert.equal(n.s, 12.7);
+});
+
+test('vento ausente é null, não calmaria', () => {
+  const html = HTML.replace('  850.0   1564   19.2   15.1     77  12.83     79   12.7', '  850.0   1564   19.2   15.1     77  12.83              ');
+  const n = lerPerfil(html, 1).niveis.find((x) => x.p === 850);
+  assert.equal(n.w, null);
+  assert.equal(n.s, null);
+  assert.equal(n.t, 19.2);
+});
+
+test('unidade de velocidade desconhecida LANÇA', () => {
+  const html = HTML.replace('    m/s      K', '   km/h      K');
+  assert.throws(() => lerPerfil(html, 1), /unidade desconhecida/);
 });
 
 test('lerIndices pega os índices da tabela', () => {
@@ -144,4 +178,64 @@ test('reduzirNiveis aguenta perfil vazio', () => {
 
 test('NIVEIS_PADRAO vai da superfície à estratosfera, em ordem', () => {
   for (let i = 1; i < NIVEIS_PADRAO.length; i++) assert.ok(NIVEIS_PADRAO[i] < NIVEIS_PADRAO[i - 1]);
+});
+
+// ---------------------------------------------------------------------------
+// Afinamento para o Skew-T
+// ---------------------------------------------------------------------------
+
+/** Perfil sintético denso: um nível a cada 3 hPa, da superfície a 50 hPa. */
+function denso() {
+  const niveis = [];
+  for (let p = 1004; p >= 50; p -= 3) {
+    const z = 44330 * (1 - Math.pow(p / 1013.25, 1 / 5.255));
+    const t = 29 - 0.0065 * z;
+    niveis.push({ p, z: Math.round(z), t: Math.round(t * 10) / 10, d: Math.round((t - 4) * 10) / 10, u: 70, w: 90, s: 10 });
+  }
+  return niveis;
+}
+
+test('reduzirNiveis cabe no teto e para em 100 hPa', () => {
+  const r = reduzirNiveis(denso());
+  assert.ok(r.length <= MAX_NIVEIS, `${r.length} níveis`);
+  assert.ok(r.length >= 60, `${r.length} níveis é pouco para o Skew-T`);
+  assert.ok(r.every((n) => n.p >= 100));
+  assert.equal(r[0].p, 1004);
+  // O último medido até 100 hPa.
+  assert.equal(r.at(-1).p, 101);
+});
+
+test('reduzirNiveis respeita o passo de cada faixa', () => {
+  const r = reduzirNiveis(denso());
+  for (let i = 1; i < r.length; i++) {
+    const vao = r[i - 1].p - r[i].p;
+    // Nunca deixa um buraco maior que o dobro do passo (com a folga do teto).
+    assert.ok(vao <= passoEm(r[i].p) * 2.5, `buraco de ${vao} hPa em ${r[i].p}`);
+  }
+});
+
+test('reduzirNiveis guarda a base e o topo de uma inversão', () => {
+  const niveis = denso();
+  // Inversão de 3 °C entre 940 e 928 hPa, no meio de um passo.
+  const base = niveis.findIndex((n) => n.p === 941);
+  const topo = niveis.findIndex((n) => n.p === 929);
+  for (let i = base + 1; i <= topo; i++) niveis[i].t = Math.round((niveis[base].t + ((i - base) / (topo - base)) * 3) * 10) / 10;
+  const r = reduzirNiveis(niveis).map((n) => n.p);
+  assert.ok(r.includes(941), 'base da inversão');
+  assert.ok(r.includes(929), 'topo da inversão');
+});
+
+test('reduzirNiveis leva o vento junto e não inventa nível', () => {
+  const niveis = denso();
+  const originais = new Set(niveis);
+  const r = reduzirNiveis(niveis);
+  assert.ok(r.every((n) => originais.has(n)));
+  assert.ok(r.every((n) => n.w === 90 && n.s === 10));
+  for (let i = 1; i < r.length; i++) assert.ok(r[i].p < r[i - 1].p);
+});
+
+test('reduzirNiveis aperta o passo quando o teto é menor', () => {
+  const r = reduzirNiveis(denso(), NIVEIS_PADRAO, 40);
+  assert.ok(r.length <= 40, `${r.length} níveis`);
+  for (const alvo of [925, 850, 700, 500, 300, 200]) assert.ok(r.some((n) => Math.abs(n.p - alvo) <= 2), `faltou ${alvo}`);
 });

@@ -125,18 +125,39 @@ Com só a mais recente, metade da animação ficava sem nenhuma sondagem no mapa
   "perfis": [{
     "wmo": 82193,
     "ms": 1789905600000,        // instante do lançamento (null = sem sondagem)
-    "niveis": [{ "p": 1012.8, "z": 14, "t": 28, "d": 23.5 }, …],
+    "niveis": [{ "p": 1012.8, "z": 14, "t": 28, "d": 23.5, "w": 90, "s": 7.8 }, …],
     "indices": { "PWAT": 42, "MUCAPE": 594.2, "LCLP": 948, … },
     "erro": null                // texto quando a busca falhou
   }]
 }
 ```
 
-`p` hPa, `z` metros, `t` temperatura °C, `d` ponto de orvalho °C.
+`p` hPa, `z` metros, `t` temperatura °C, `d` ponto de orvalho °C, `w` direção
+do vento (graus, **de onde** ele vem) e `s` velocidade do vento em **nós**.
+Campo não medido é `null` — vento `null` não é calmaria.
 
-O perfil bruto tem centenas de níveis (Belém veio com 4.033); guardamos os
-obrigatórios da meteorologia mais as quebras bruscas de umidade — ~13 a 24 por
-estação, **2,6 KB gzip** para a rede inteira.
+O Wyoming publica a velocidade em m/s (coluna `SPED`; a linha das unidades da
+tabela diz `m/s`) e o pipeline converte para nós, que é a unidade das barbelas
+do Skew-T. A tabela é lida pelo **nome** das colunas e pela posição no texto
+(largura fixa): um campo em branco não desloca os vizinhos.
+
+**Afinamento** (`reduzirNiveis`). O perfil bruto tem centenas de níveis (Manaus
+veio com 404, 270 deles até 100 hPa; Belém já veio com 4.033). Publicamos **até
+80 por perfil, da superfície a 100 hPa**, o bastante para um Skew-T Log-P com
+as áreas de CAPE e CIN — com os 13 a 24 da primeira versão a parcela cruzava o
+ambiente entre dois níveis distantes, e a área desenhada era outra. Entram:
+
+- sempre: a superfície, os níveis padrão que existem (1000, 925, 850, 700, 600,
+  500, 400, 300, 250, 200, 150, 100) e o último nível até 100 hPa;
+- um nível que se afastou do último mantido por 10 hPa (abaixo de 700 hPa),
+  15 hPa (de 700 a 300) ou 10 hPa (acima);
+- a base e o topo de inversão: onde a temperatura vira (e já mudou 0,5 °C) ou
+  o orvalho vira (2 °C);
+- quebras de umidade: a depressão do orvalho salta mais de 8 °C entre vizinhos.
+
+Passando de 80, o passo e os limiares das viradas crescem juntos até caber.
+Nada é interpolado: todo nível publicado foi medido. Acima de 100 hPa nada é
+publicado.
 
 `ms: null` com `erro: null` é estação calada, não falha nossa: acontece de
 verdade e com frequência. Manaus passou 55 h sem reportar durante o

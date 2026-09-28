@@ -84,6 +84,9 @@ async function main() {
             z: Math.round(n.z),
             t: n.t === null ? null : Math.round(n.t * 10) / 10,
             d: n.d === null ? null : Math.round(n.d * 10) / 10,
+            // Vento: direção (graus, de onde vem) e velocidade em nós.
+            w: n.w ?? null,
+            s: n.s ?? null,
           })),
           indices: s.indices,
           // `t` é o instante medido em cada ponto: é o que permite mostrar

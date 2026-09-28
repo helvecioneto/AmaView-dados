@@ -27,50 +27,103 @@ export const ESTACOES_SONDAGEM = [
 ];
 
 /**
- * Níveis de pressão guardados, em hPa.
- *
- * O perfil bruto tem centenas de níveis; para um gráfico de algumas centenas
- * de pixels, guardar todos é desperdício de banda de quem abre o app. Estes
- * são os obrigatórios da meteorologia — o suficiente para a forma das duas
- * curvas — e o parser ainda mantém os níveis significativos de umidade.
+ * Níveis padrão da meteorologia, em hPa: entram sempre que existem.
  */
 export const NIVEIS_PADRAO = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
 
+/** O gráfico (Skew-T Log-P) vai da superfície a 100 hPa: acima disso nada é publicado. */
+export const P_TOPO = 100;
+/** Teto de níveis por perfil. O bruto tem ~270 até 100 hPa. */
+export const MAX_NIVEIS = 80;
+
+/** Distância mínima (hPa) do último nível mantido, conforme a altura. */
+export function passoEm(p) {
+  if (p > 700) return 10;
+  if (p > 300) return 15;
+  return 10;
+}
+
+/** Quanto a temperatura e o orvalho precisam ter mudado para uma virada de tendência contar (°C). */
+const VIRADA_T = 0.5;
+const VIRADA_D = 2;
+/** Salto da depressão do orvalho (T−Td) entre níveis vizinhos que marca camada nova (°C). */
+const QUEBRA_UMIDADE = 8;
+
+/** O nível `i` é um extremo local de `campo` (a curva vira ali)? */
+function vira(niveis, i, campo) {
+  const a = niveis[i - 1]?.[campo];
+  const b = niveis[i]?.[campo];
+  const c = niveis[i + 1]?.[campo];
+  if (a == null || b == null || c == null) return false;
+  return (b - a) * (c - b) < 0;
+}
+
 /**
- * Reduz o perfil aos níveis que importam.
+ * Afina o perfil para o Skew-T: até `max` níveis entre a superfície e 100 hPa.
  *
- * Mantém: o nível de superfície (o primeiro), os padrões mais próximos, e os
- * níveis em que a umidade muda bruscamente — que é onde está a informação
- * sobre camadas secas e úmidas, justamente o que as duas curvas mostram.
+ * O bruto tem centenas de níveis; o gráfico tem algumas centenas de pixels.
+ * Mas 12–24 níveis (a primeira versão) não bastam para as áreas de CAPE e
+ * CIN: a parcela cruza o ambiente entre dois níveis, e com eles a 100 hPa um
+ * do outro a área desenhada era outra.
+ *
+ * Entram sempre: a superfície (o primeiro nível), os padrões que existem e o
+ * último nível até 100 hPa. Entre eles, um nível entra quando
+ * - se afastou do último mantido por `passoEm(p)` hPa; ou
+ * - a temperatura (ou o orvalho) vira ali — base e topo de inversão — e já
+ *   mudou `VIRADA_T` (`VIRADA_D`) °C desde o último mantido; ou
+ * - a depressão do orvalho salta mais de 8 °C de um nível para o outro.
+ *
+ * Passando de `max`, o passo e os limiares das viradas crescem juntos até
+ * caber. Nada é interpolado: todo nível publicado foi medido.
  */
-export function reduzirNiveis(niveis, padroes = NIVEIS_PADRAO) {
+export function reduzirNiveis(niveis, padroes = NIVEIS_PADRAO, max = MAX_NIVEIS) {
   if (!niveis?.length) return [];
-  const escolhidos = new Set();
+  // A superfície fica mesmo numa estação (hipotética) acima de 100 hPa.
+  const ate = niveis.filter((n, i) => i === 0 || n.p >= P_TOPO);
 
-  // Superfície sempre entra: é a base de tudo que se lê no perfil.
-  escolhidos.add(0);
-
+  const fixos = new Set([0, ate.length - 1]);
   for (const alvo of padroes) {
     let melhor = -1;
     let dist = Infinity;
-    niveis.forEach((n, i) => {
+    ate.forEach((n, i) => {
       const d = Math.abs(n.p - alvo);
       if (d < dist && d <= 15) {
         dist = d;
         melhor = i;
       }
     });
-    if (melhor >= 0) escolhidos.add(melhor);
+    if (melhor >= 0) fixos.add(melhor);
   }
-
-  // Quebras de umidade: onde a diferença T−Td muda mais de 8 °C de um nível
-  // para o outro, há uma camada nova, e omiti-la achataria o perfil.
-  for (let i = 1; i < niveis.length; i++) {
-    const a = niveis[i - 1];
-    const b = niveis[i];
+  // Quebras de umidade: camada seca ou úmida nova.
+  for (let i = 1; i < ate.length; i++) {
+    const a = ate[i - 1];
+    const b = ate[i];
     if (a.t === null || a.d === null || b.t === null || b.d === null) continue;
-    if (Math.abs(b.t - b.d - (a.t - a.d)) > 8) escolhidos.add(i);
+    if (Math.abs(b.t - b.d - (a.t - a.d)) > QUEBRA_UMIDADE) fixos.add(i);
   }
 
-  return [...escolhidos].sort((x, y) => x - y).map((i) => niveis[i]);
+  const escolher = (folga) => {
+    const out = [];
+    let ultimo = null;
+    ate.forEach((n, i) => {
+      const entra =
+        fixos.has(i) ||
+        ultimo === null ||
+        ultimo.p - n.p >= passoEm(n.p) * folga ||
+        (vira(ate, i, 't') && Math.abs(n.t - (ultimo.t ?? n.t)) >= VIRADA_T * folga) ||
+        (vira(ate, i, 'd') && Math.abs(n.d - (ultimo.d ?? n.d)) >= VIRADA_D * folga);
+      if (!entra) return;
+      out.push(n);
+      ultimo = n;
+    });
+    return out;
+  };
+
+  let folga = 1;
+  let out = escolher(folga);
+  while (out.length > max && folga < 8) {
+    folga *= 1.15;
+    out = escolher(folga);
+  }
+  return out;
 }
