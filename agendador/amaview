@@ -2,7 +2,7 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações)
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio)
 #   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar e as estações
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
@@ -90,6 +90,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/fumaca/nginx-locais.conf" /etc/nginx/snippets/amaview-fumaca.conf
   sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
   sudo install -m 644 "$DESTINO/agendador/meteo/nginx-locais.conf" /etc/nginx/snippets/amaview-meteo.conf
+  sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -268,6 +269,32 @@ for k, nome in (("i", "INMET"), ("m", "METAR")):
 PY
   journalctl -u amaview-meteo -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   echo "  em disco: $(du -sh /var/cache/amaview-meteo 2>/dev/null | cut -f1)"
+}
+
+# Rastreio de nuvens (agendador/fortracc): o container pyfortracc_ir (repositório
+# fortracc/pyfortracc, containers/pyfortracc_IR) escreve em
+# /var/cache/amaview-fortracc; aqui só o nginx e a situação.
+situacao_fortracc() {
+  titulo "Rastreio de nuvens (pyFortraCC)"
+  local saude
+  saude="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' pyfortracc_ir 2>/dev/null)"
+  case "$saude" in
+    "running healthy") verde "  container no ar" ;;
+    running*) amarelo "  container no ar ($saude)" ;;
+    *) vermelho "  container parado — rode: docker compose up -d (containers/pyfortracc_IR)" ;;
+  esac
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-fortracc"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-fortracc/fortracc/v1/indice.json"))
+q = i["quadros"]
+agora = datetime.now(timezone.utc)
+print(f"  {len(q)} quadros nas últimas 48 h (esperados 288), {sum(x['prev'] for x in q)} com previsão")
+if q:
+    t = datetime.strptime(q[-1]["c"], "%Y%j%H%M").replace(tzinfo=timezone.utc)
+    print(f"  mais novo: {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás) · {q[-1]['n']} sistemas, {q[-1]['km2']} km² abaixo de {i['limiares_K'][0]} K")
+PY
+  echo "  em disco: $(du -sh /var/cache/amaview-fortracc 2>/dev/null | cut -f1)"
 }
 
 situacao_fumaca() {
@@ -468,6 +495,7 @@ situacao() {
   situacao_fumaca
   situacao_ar
   situacao_meteo
+  situacao_fortracc
   echo
 }
 

@@ -373,6 +373,51 @@ mesmas sinóticas em texto. Logs: `journalctl -u amaview-meteo`.
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/meteo`.
 
+## Rastreio de nuvens (pyFortraCC)
+
+A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19
+(canal 13, IR 10,3 µm) com o [pyFortraCC](https://github.com/fortracc/pyfortracc).
+Diferente dos outros serviços, roda num **container Docker** (o pyFortraCC
+precisa de GDAL, geopandas e opencv), mantido no próprio repositório dele:
+`containers/pyfortracc_IR`. Aqui ficam só o nginx e a situação no `amaview`.
+
+- A cada 10 min (8 min depois de cada horário, quando o quadro chega ao balde
+  da NOAA no GCP) o [goesgcp](https://github.com/helvecioneto/goesgcp) baixa o
+  disco completo recortado na América do Sul (lat −35 a 5, lon −80 a −30,
+  0,045° ≈ 5 km); o pyFortraCC rastreia com limiares de **235 K e 210 K**
+  (mínimo de 100 e 50 pixels) e mantém o `uid` de cada sistema entre ciclos e
+  reinícios.
+- **Previsão por persistência**: 6 passos de 10 min (1 h), com o deslocamento
+  das últimas 3 imagens. Os primeiros quadros de um rastreio não têm previsão.
+- **48 h, no máximo.** Quadro publicado nunca muda; o índice é refeito a cada
+  ciclo. Em disco, ~125 MB; um quadro tem ~14 KB com gzip e uma previsão ~70 KB.
+- `docker ps` mostra o container `healthy` enquanto o quadro mais novo tem até
+  60 min.
+
+| Peça | Onde |
+|---|---|
+| `containers/pyfortracc_IR` (repositório pyfortracc) | container `pyfortracc_ir`: baixa, rastreia, prevê e publica em `/var/cache/amaview-fortracc` |
+| `fortracc/nginx-locais.conf` | `/fortracc/v1/`: CORS `*`, gzip, quadro imutável, índice `no-cache` |
+
+URLs (em `https://147.15.84.134/fortracc/v1/`), `c` = `AAAADDDHHMM` (UTC,
+dia juliano, como na fumaça):
+
+- `indice.json`: `{"versao", "gerado", "fonte", "cadencia_min", "limiares_K",
+  "previsao": {"passos", "passo_min", "metodo"}, "quadros": [{"c", "n", "km2",
+  "tmin", "prev"}]}` — `n` e `km2` no primeiro limiar (235 K), `tmin` a
+  temperatura de brilho mais fria do quadro, `prev` se a previsão existe.
+- `quadros/{c}.geojson`: contornos (`k` = `"c"`) e trajetórias (`k` = `"t"`).
+- `previsao/{c}.geojson`: contornos previstos a partir de `c` (`k` = `"p"`),
+  com `h` = antecedência em minutos (10…60).
+
+Propriedades: `uid`, `iuid` (sistema de 210 K dentro do de 235 K), `lim` (K),
+`st` (`NEW`, `CON`, `SPL`, `MRG`…), `vida` (min), `km2`, `tmin` e `tmed` (K)
+e, só nos observados, `vel` (km/h) e `rumo` (graus a partir do norte, para
+onde vai). Coordenadas em lon/lat com 3 casas, na borda dos pixels.
+
+Instalar: `docker compose up -d --build` em `containers/pyfortracc_IR` (ver o
+README de lá) e `amaview instalar` para o nginx. Logs: `docker logs pyfortracc_ir`.
+
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.
