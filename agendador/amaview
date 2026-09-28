@@ -101,8 +101,19 @@ gerar_site_blocos() {
     fi
   } | sed "s/@NOME@/$BLOCOS_NOME/g; s/@IP@/$BLOCOS_IP/g" | sudo tee "$BLOCOS_SITE" >/dev/null
   sudo ln -sf "$BLOCOS_SITE" /etc/nginx/sites-enabled/amaview-blocos
+  # Limite de arquivos abertos do nginx: só vale depois de um restart.
+  local limite=/etc/systemd/system/nginx.service.d/amaview-limite.conf reiniciar=""
+  if ! sudo cmp -s "$src/nginx-limite.conf" "$limite"; then
+    sudo install -D -m 644 "$src/nginx-limite.conf" "$limite"
+    sudo systemctl daemon-reload
+    reiniciar=1
+  fi
   if sudo nginx -t -q; then
-    sudo systemctl reload nginx && echo "  nginx: site dos blocos em dia"
+    if [ -n "$reiniciar" ]; then
+      sudo systemctl restart nginx && echo "  nginx: site dos blocos em dia (reiniciado com o limite de arquivos novo)"
+    else
+      sudo systemctl reload nginx && echo "  nginx: site dos blocos em dia"
+    fi
   else
     vermelho "  nginx recusou a configuração — nada recarregado"
     return 1
