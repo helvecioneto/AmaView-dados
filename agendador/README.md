@@ -400,9 +400,9 @@ precisa de GDAL, geopandas e opencv), mantido no próprio repositório dele:
 | Peça | Onde |
 |---|---|
 | `containers/pyfortracc_IR` (repositório pyfortracc) | container `pyfortracc_ir`: baixa, rastreia, prevê e publica em `/var/cache/amaview-fortracc` |
-| `fortracc/nginx-locais.conf` | `/fortracc/v2/`: CORS `*`, gzip, quadro imutável, índice `no-cache` |
+| `fortracc/nginx-locais.conf` | `/fortracc/v3/`: CORS `*`, gzip, quadro imutável, índice `no-cache` |
 
-URLs (em `https://147.15.84.134/fortracc/v2/`), `c` = `AAAADDDHHMM` (UTC,
+URLs (em `https://147.15.84.134/fortracc/v3/`), `c` = `AAAADDDHHMM` (UTC,
 dia juliano, como na fumaça):
 
 - `indice.json`: `{"versao", "gerado", "fonte", "cadencia_min", "limiares_K",
@@ -417,6 +417,13 @@ Propriedades: `uid`, `iuid` (sistema de 210 K dentro do de 235 K), `lim` (K),
 `st` (`NEW`, `CON`, `SPL`, `MRG`…), `vida` (min), `km2`, `tmin` e `tmed` (K)
 e, só nos observados, `vel` (km/h) e `rumo` (graus a partir do norte, para
 onde vai). Coordenadas em lon/lat com 3 casas, na borda dos pixels.
+
+Desde a `v3` cada contorno observado traz também `tmax` e `dp` (máxima e
+desvio-padrão, K), `exp` (expansão normalizada da área, 10⁻⁶ s⁻¹: positiva, o
+sistema cresce), `nuc` (núcleos dentro dele) e `hist`, a história do mesmo
+sistema nos quadros anteriores: `{dt, km2, tmin, tmed, exp}`, vetores do mesmo
+tamanho em ordem de tempo, `dt` em minutos até o quadro (o último é 0), no
+máximo 72 pontos (12 h). O `iuid` passou a ter 2 casas.
 
 Instalar: `docker compose up -d --build` em `containers/pyfortracc_IR` (ver o
 README de lá) e `amaview instalar` para o nginx. Logs: `docker logs pyfortracc_ir`.
