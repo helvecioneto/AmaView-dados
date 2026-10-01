@@ -2,12 +2,12 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar e as estações
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, busca)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações e a busca
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
-#   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
+#   amaview chave F      grava uma chave (F = purpleair | openaq | openrouter; sem eco; testa antes)
 #   amaview chave F remover   apaga a chave (a fonte sai na próxima rodada)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
@@ -74,6 +74,7 @@ instalar() {
   instalar_fumaca
   instalar_ar
   instalar_meteo
+  instalar_busca
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -91,6 +92,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
   sudo install -m 644 "$DESTINO/agendador/meteo/nginx-locais.conf" /etc/nginx/snippets/amaview-meteo.conf
   sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
+  sudo install -m 644 "$DESTINO/agendador/busca/nginx-locais.conf" /etc/nginx/snippets/amaview-busca.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -253,6 +255,42 @@ PY
 # Estações meteorológicas (agendador/meteo): timer independente do token — lê o
 # WIS2 do INMET e o METAR da NOAA AWC e escreve em /var/cache/amaview-meteo,
 # que o nginx serve. Só Python da biblioteca padrão.
+# Busca em português (agendador/busca): o único serviço com pip. O SDK da
+# TypeSafe não existe no apt, e o Python do sistema não aceita pip (PEP 668):
+# venv própria em /opt/amaview-busca, com a versão fixa do requirements.txt.
+BUSCA_VENV="/opt/amaview-busca/venv"
+instalar_busca() {
+  titulo "Busca em português"
+  getent passwd amaview-busca >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-busca
+  dpkg -s python3-venv >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+  [ -x "$BUSCA_VENV/bin/python" ] || sudo python3 -m venv "$BUSCA_VENV"
+  if sudo "$BUSCA_VENV/bin/pip" install -q --disable-pip-version-check -r "$DESTINO/agendador/busca/requirements.txt"; then
+    echo "  SDK da TypeSafe em dia na venv"
+  else
+    vermelho "  pip falhou — a busca segue com o SDK que já estava"
+  fi
+  sudo cp "$DESTINO/agendador/busca/amaview-busca.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-busca >/dev/null 2>&1
+  sudo systemctl restart amaview-busca && verde "  amaview-busca no ar"
+  sudo test -s /etc/amaview/openrouter-key || amarelo "  sem chave da OpenRouter — rode: amaview chave openrouter"
+}
+
+situacao_busca() {
+  titulo "Busca em português"
+  systemctl is-active --quiet amaview-busca \
+    && verde "  serviço no ar" || vermelho "  serviço parado — rode: amaview instalar"
+  curl -s --max-time 5 http://127.0.0.1:8091/busca/saude | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+print(f"  modelo {s["modelo"]} · chave {"presente" if s["chave"] else "AUSENTE (amaview chave openrouter)"}")
+print(f"  hoje ({s["dia"] or "-"}): {s["pedidos_dia"]} de {s["teto_dia"]} pedidos ao Jev · {s["da_memoria"]} da memória · falhas: {s["falhas"]}")
+if s["ultimo_erro"]: print(f"  último erro: {s["ultimo_erro"]}")
+' 2>/dev/null || amarelo "  sem resposta em 127.0.0.1:8091"
+}
+
 instalar_meteo() {
   titulo "Estações meteorológicas"
   getent passwd amaview-meteo >/dev/null \
@@ -392,12 +430,13 @@ gravar_token() {
   fi
 }
 
-# Chaves opcionais da qualidade do ar (PurpleAir e OpenAQ). Pedidas na tela
-# sem eco, testadas com uma chamada grátis ANTES de gravar e gravadas 640
-# root:amaview-ar — o serviço lê, ninguém mais. A chave nunca vai para a
-# linha de comando (vai ao curl pelo stdin, `-H @-`), nem para a tela.
+# Chaves: as opcionais da qualidade do ar (PurpleAir e OpenAQ) e a da OpenRouter
+# (busca em português). Pedidas na tela sem eco, testadas com uma chamada
+# grátis ANTES de gravar e gravadas 640 root:<grupo do serviço> — o serviço
+# lê, ninguém mais. A chave nunca vai para a linha de comando (vai ao curl
+# pelo stdin, `-H @-`), nem para a tela.
 gravar_chave() {
-  local fonte="${1:-}" acao="${2:-}" arq teste onde
+  local fonte="${1:-}" acao="${2:-}" arq teste onde grupo="amaview-ar" cabecalho="X-API-Key: %s"
   case "$fonte" in
     purpleair)
       arq="/etc/amaview/purpleair-key"
@@ -409,8 +448,15 @@ gravar_chave() {
       teste="https://api.openaq.org/v3/locations?limit=1"
       onde="https://explore.openaq.org/register (a chave aparece em Account → API Key)"
       ;;
+    openrouter)
+      arq="/etc/amaview/openrouter-key"
+      teste="https://openrouter.ai/api/v1/key"
+      onde="https://openrouter.ai/settings/keys (vale pôr um limite de crédito na chave)"
+      grupo="amaview-busca"
+      cabecalho="Authorization: Bearer %s"
+      ;;
     *)
-      echo "uso: amaview chave purpleair|openaq [remover]"
+      echo "uso: amaview chave purpleair|openaq|openrouter [remover]"
       return 1
       ;;
   esac
@@ -428,7 +474,7 @@ gravar_chave() {
 
   echo "  Testando (chamada grátis)…"
   local resp codigo corpo
-  resp="$(printf 'X-API-Key: %s\n' "$k" | curl -s -m 30 -H @- -w '\n%{http_code}' "$teste")"
+  resp="$(printf "$cabecalho\n" "$k" | curl -s -m 30 -H @- -w '\n%{http_code}' "$teste")"
   codigo="$(printf '%s' "$resp" | tail -n 1)"
   corpo="$(printf '%s' "$resp" | sed '$d')"
   if [ "$codigo" != "200" ]; then
@@ -438,16 +484,21 @@ gravar_chave() {
     echo
     return 1
   fi
-  if ! getent group amaview-ar >/dev/null; then
-    vermelho "  o serviço da qualidade do ar não está instalado — rode antes: amaview instalar"
+  if ! getent group "$grupo" >/dev/null; then
+    vermelho "  o serviço que usa a chave ($grupo) não está instalado — rode antes: amaview instalar"
     unset k
     return 1
   fi
   sudo mkdir -p /etc/amaview
-  sudo install -m 640 -o root -g amaview-ar /dev/null "$arq"
+  sudo install -m 640 -o root -g "$grupo" /dev/null "$arq"
   printf '%s\n' "$k" | sudo tee "$arq" >/dev/null
   unset k
-  verde "  aceita e gravada em $arq (640 root:amaview-ar)"
+  verde "  aceita e gravada em $arq (640 root:$grupo)"
+  if [ "$fonte" = "openrouter" ]; then
+    # O cliente do SDK guarda a chave ao subir: reiniciar para ler a nova.
+    sudo systemctl restart amaview-busca && situacao_busca
+    return 0
+  fi
   if [ "$fonte" = "purpleair" ]; then
     printf '%s' "$corpo" | python3 -c 'import json, sys; print("  tipo da chave:", json.load(sys.stdin).get("api_key_type", "?"))' 2>/dev/null
     sudo cat "$arq" | sed 's/^/X-API-Key: /' | curl -s -m 30 -H @- https://api.purpleair.com/v1/organization | python3 -c 'import json, sys
@@ -507,6 +558,7 @@ situacao() {
   situacao_ar
   situacao_meteo
   situacao_fortracc
+  situacao_busca
   echo
 }
 
@@ -524,11 +576,12 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-busca amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
+    sudo rm -f /etc/systemd/system/amaview-busca.service
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload
