@@ -1,3 +1,0 @@
-# Só a busca usa pip (numa venv própria, /opt/amaview-busca/venv): o SDK da
-# TypeSafe não existe no apt. Versão fixa; o `amaview instalar` atualiza.
-typesafe_sdk==0.7.2

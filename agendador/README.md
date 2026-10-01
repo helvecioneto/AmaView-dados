@@ -41,7 +41,6 @@ Tudo pelo `amaview`, que fica em `~` e em `/usr/local/bin`:
 | `amaview instalar` | clona/atualiza, instala as unidades e liga os timers |
 | `amaview token` | grava o token (pede na tela, sem eco) |
 | `amaview chave purpleair` / `amaview chave openaq` | grava a chave opcional da qualidade do ar (sem eco; testa com uma chamada grátis antes; `… remover` apaga) |
-| `amaview chave openrouter` | grava a chave da OpenRouter que a busca em português usa (sem eco; testa antes; reinicia a busca) |
 | `amaview disparar [workflow]` | dispara um ciclo agora (`chuva.yml`, ou `sondagem.yml`) |
 | `amaview logs [n]` | últimas execuções |
 | `amaview parar` | desliga os timers |
@@ -429,58 +428,6 @@ máximo 72 pontos (12 h). O `iuid` passou a ter 2 casas.
 Instalar: `docker compose up -d --build` em `containers/pyfortracc_IR` (ver o
 README de lá) e `amaview instalar` para o nginx. Logs: `docker logs pyfortracc_ir`.
 
-## Busca em português
-
-`busca/busca.py` (serviço `amaview-busca`, porta 8091 local, atrás do nginx em
-`/busca/`) transforma um pedido em linguagem comum em ajustes do mapa do
-AmaView: "focos na TI Kayapó nas últimas 24h" liga as queimadas e as terras
-indígenas, põe o período em 24 h e vai até a TI.
-
-Quem entende o pedido é o **Jev**, modelo da TypeSafe, chamado pela
-**OpenRouter** com o SDK `typesafe_sdk` (`base_url=https://openrouter.ai/api`).
-O Jev não gera texto: responde perguntas fechadas, com probabilidade. Cada
-pedido é uma chamada só, com todas as perguntas juntas:
-
-| Pergunta | Tipo | Opções |
-|---|---|---|
-| Produto | Choice | as 22 imagens do GOES-19 + "nenhum" (troca a imagem só se "nenhum" ≤ 30%) |
-| Período | Choice | 1, 3, 6, 12, 24, 48 h + "nenhum" |
-| Área | Choice | até 24 áreas do `busca.json` do AmaView pré-selecionadas pelo nome + "nenhuma" |
-| Camadas | 16 Nouls | queimadas, fumaça, radar, ar, estações, pluviômetros, nível, sondagem, barcos, rastreio, previsão, TIs, UCs, rios, rodovias, municípios (liga com ≥ 0,5; nunca desliga) |
-| Variável das estações | Choice | temperatura, umidade, vento, pressão, chuva, orvalho (só vale se as estações foram pedidas) |
-| Animar | Noul | — |
-
-- **O modelo só escolhe.** A área sai do índice (nome e chave do próprio
-  `busca.json`), os produtos e camadas são ids do app: nada que o modelo
-  escreva vai para o mapa.
-- **Resposta:** `GET /busca/v1/?q=…` → `{produto, periodo, area, camadas,
-  variavelMeteo, animar, probabilidades, modelo, segundos, tokens}`. Medido em
-  01/10/2026: 0,3–1 s e ~2.500–3.400 tokens de entrada por pedido (US$ 0,042
-  por milhão na OpenRouter: ~US$ 0,0001 cada; a saída é grátis).
-- **Gasto sob controle:** 12 pedidos por minuto por IP, teto de 3.000 por dia
-  (`BUSCA_TETO_DIA`) e memória de 1 h para o mesmo pedido. Vale também pôr um
-  limite de crédito na própria chave, na OpenRouter.
-- **Privacidade:** o texto do pedido não vai para log nenhum (o nginx grava só
-  o caminho, sem a query; o serviço, só o código de resposta).
-- **SDK por pip, numa venv:** o Python do Ubuntu não aceita `pip install`
-  (PEP 668) e o SDK não está no apt. O `amaview instalar` cria
-  `/opt/amaview-busca/venv` e instala a versão fixa de `busca/requirements.txt`.
-- Saúde: `curl -s http://127.0.0.1:8091/busca/saude` (pedidos do dia, falhas, chave).
-
-Primeira vez, depois do `amaview instalar`:
-
-```sh
-amaview chave openrouter    # cola a chave (https://openrouter.ai/settings/keys); testa e reinicia a busca
-```
-
-Interpretar um pedido na mão (sem o serviço):
-
-```sh
-sudo -u amaview-busca /opt/amaview-busca/venv/bin/python /opt/amaview/agendador/busca/busca.py "fumaça sobre Manaus"
-```
-
-Testes (sem rede): `python3 -m unittest discover -s agendador/busca`.
-
 ## Segurança
 
 - O token fica em `/etc/amaview/token`, modo **600**, lido só pelo root.
@@ -491,6 +438,4 @@ Testes (sem rede): `python3 -m unittest discover -s agendador/busca`.
   aperta este botão.
 - Se vazar, revogue em <https://github.com/settings/tokens?type=beta>. O pior
   que alguém faz com ele é disparar ciclos de dados públicos.
-- A chave da OpenRouter (busca) fica em `/etc/amaview/openrouter-key`, 640
-  root:amaview-busca, e nunca vai para o navegador: o app fala só com o
-  `/busca/v1/`. Se vazar, apague em <https://openrouter.ai/settings/keys>.
+
