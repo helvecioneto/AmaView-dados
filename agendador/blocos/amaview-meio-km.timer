@@ -1,0 +1,14 @@
+[Unit]
+Description=Banda 02 a 0,5 km a cada 2 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/blocos
+
+[Timer]
+# O CMIPF sai ~10 min depois do início da varredura e o 7200 do STAR logo
+# depois; olhar a cada 2 min põe o 14400 no ar no máximo 2 min depois dos dois.
+OnCalendar=*:0/2
+Persistent=true
+AccuracySec=10s
+Unit=amaview-meio-km.service
+
+[Install]
+WantedBy=timers.target

@@ -111,11 +111,46 @@ quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
   servidor. O pré-corte tenta de novo em 1 min.
 - **Se esta máquina cair**, o AmaView volta sozinho ao JPEG inteiro do STAR.
 
+### Banda 02 a 0,5 km (nível 14400)
+
+O STAR para em 7200 px (a grade de 1 km do ABI); a banda 02 (vermelho
+visível) é medida a 0,5 km. O `meio_km.py` (timer `amaview-meio-km`, a cada
+2 min, mesmo usuário e pasta dos blocos) faz dela o nível 14400 × 8640, só para
+o produto `02`, no mesmo esquema de blocos (512 + 16 px, JPEG progressivo,
+imutável): `/blocos/v2/nsa/02/{AAAADDDHHMM}/14400/{linha}_{coluna}.jpg`.
+
+- **Fonte:** `ABI-L2-CMIPF` canal 02 do balde público `noaa-goes19`. O arquivo
+  inteiro (~410 MB) vem em 8 byte-ranges simultâneos (~3,6 s) para a memória;
+  só as linhas do setor são descomprimidas. Ler só o setor por byte-range
+  custava ~40 s: o índice de chunks do HDF5 fica espalhado pelo arquivo e cada
+  salto é um pedido novo (120 ms de ida e volta até o S3).
+- **Geometria:** a mesma extensão do 7200 do STAR, 2×2 px por px (origem na
+  coluna 7950 e linha 6528 da grade de 0,5 km). Medido: reduzido 2×2, cai sobre
+  o 7200 do STAR com deslocamento abaixo de ¼ px de 7200.
+- **Brilho:** tabela CMI → cinza (`lut_02.json`), mediana do STAR por faixa,
+  monotônica, ajustada contra o próprio 7200 do STAR em 6 horários de 01–02/10
+  (`meio_km.py calibrar ...`). Erro de brilho (médias de 8×8 px) 0,5–1,0
+  nível de cinza, viés < 0,4.
+- **Desenho do STAR:** linhas do mapa (opacas, ~230 de cinza, tiradas de um
+  quadro de noite, `meio-km-linhas.npz`, refeito a cada semana), logotipo,
+  rodapé e o espaço fora do disco vêm do 7200 do STAR ampliado 2×: de perto,
+  nada some nem muda de lugar.
+- **Só de dia:** com o sol abaixo do horizonte em todo o setor (~01–05 UTC), o
+  quadro não é gerado (404, cache de 60 s; o AmaView fica no 7200).
+- **Custo medido:** ~16 s e ~12 s de CPU por quadro no ARM (~2% de um núcleo
+  em regime), 431 MB lidos do S3, ~38 MB em disco (~9 GB em 48 h).
+  JPEG q92 de 1 canal: é a única recompressão do satélite.
+- **Anúncio:** `/blocos/saude` traz `"niveis": {"02": [3600, 7200, 14400]}`
+  enquanto o `meio-km.json` (estado da rodada) tiver menos de 30 min; parado,
+  o AmaView volta a parar no 7200.
+
 | Peça | Onde |
 |---|---|
 | `blocos/blocos.py` | serviço (só local, porta 8090), pré-corte e limpeza (> 49 h) |
 | `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`, `MemoryMax=6G`, `MALLOC_ARENA_MAX=2`) |
 | `blocos/nginx-*.conf` | site do nginx: disco primeiro, `@blocos` no que falta; CORS e cache imutável |
+| `blocos/meio_km.py`, `blocos/tj.py`, `blocos/lut_02.json` | banda 02 a 0,5 km (nível 14400), tabela de cinza |
+| `blocos/amaview-meio-km.{service,timer}` | a cada 2 min, usuário `amaview-blocos`, `MemoryMax=2G` |
 
 URL: `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
 (dia juliano, UTC, como nos arquivos do STAR; `v1` no lugar de `v2` dá o

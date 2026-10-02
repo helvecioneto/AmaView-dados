@@ -93,7 +93,7 @@ CORTES = threading.BoundedSemaphore(8)
 
 ROTA = re.compile(
     r"^/blocos/v(?P<versao>[12])/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/"
-    r"(?P<largura>\d{4})/(?P<linha>\d{1,2})_(?P<coluna>\d{1,2})\.jpg$"
+    r"(?P<largura>\d{4,5})/(?P<linha>\d{1,2})_(?P<coluna>\d{1,2})\.jpg$"
 )
 
 
@@ -635,7 +635,26 @@ def saude() -> dict:
         "falhas": _estado["falhas"],
         "ultimo_erro": _estado["ultimo_erro"],
         "disco_livre_gb": round(uso.free / 1e9, 1) if uso else None,
+        **nivel_meio_km(agora),
     }
+
+
+# Banda 02 a 0,5 km (meio_km.py, timer próprio): o nível 14400 é anunciado
+# enquanto a rodada dele estiver em dia. Parada há mais de 30 min, o AmaView
+# volta a parar no 7200 (o que já existe no disco continua servido).
+ESTADO_MEIO_KM = os.path.join(RAIZ, "meio-km.json")
+NIVEIS_MEIO_KM = {"02": [3600, 7200, 14400]}
+
+
+def nivel_meio_km(agora: float) -> dict:
+    try:
+        with open(ESTADO_MEIO_KM) as f:
+            e = json.load(f)
+        fresco = agora - os.path.getmtime(ESTADO_MEIO_KM) < 1800 and e.get("quadros", 0) > 0
+    except (OSError, ValueError):
+        return {"niveis": {}}
+    resumo = {k: e.get(k) for k in ("atualizado", "ultimo", "quadros", "ultimo_feito")}
+    return {"niveis": NIVEIS_MEIO_KM if fresco else {}, "meio_km": resumo}
 
 
 class Pedido(http.server.BaseHTTPRequestHandler):
@@ -677,6 +696,10 @@ class Pedido(http.server.BaseHTTPRequestHandler):
             return self._erro(404, "rota desconhecida")
         produto, carimbo, versao = m["produto"], m["carimbo"], int(m["versao"])
         largura, linha, coluna = int(m["largura"]), int(m["linha"]), int(m["coluna"])
+        if produto == "02" and largura == 14400:
+            # Gerado pelo meio_km.py (o nginx serve do disco); aqui só o que falta:
+            # quadro ainda por gerar, ou de noite (o app fica no 7200).
+            return self._erro(404, "0,5 km ainda não gerado para este horário", "public, max-age=60")
         if produto not in PRODUTOS or largura not in LARGURAS:
             return self._erro(404, "produto ou largura desconhecidos")
         linhas, colunas = grade(largura)

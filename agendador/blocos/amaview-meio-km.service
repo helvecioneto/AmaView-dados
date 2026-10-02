@@ -1,0 +1,31 @@
+[Unit]
+Description=Banda 02 do GOES-19 a 0,5 km para o AmaView (nível 14400 dos blocos)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/blocos
+After=network-online.target amaview-blocos.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/blocos/meio_km.py
+# O mesmo usuário e a mesma pasta dos blocos: o nginx serve os dois juntos.
+User=amaview-blocos
+Group=amaview-blocos
+CacheDirectory=amaview-blocos
+CacheDirectoryMode=0755
+UMask=0022
+Environment=BLOCOS_RAIZ=/var/cache/amaview-blocos
+Environment=PYTHONUNBUFFERED=1
+Environment=MALLOC_ARENA_MAX=2
+# Uma rodada normal leva ~15 s por quadro novo; o preenchimento do passado
+# para em ~100 s (MEIOKM_TEMPO_RODADA_S) e continua na próxima.
+TimeoutStartSec=10min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+# O quadro inteiro na memória: ~240 MB do CMI + ~370 MB de imagens.
+MemoryMax=2G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

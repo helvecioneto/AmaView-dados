@@ -131,6 +131,13 @@ instalar_blocos() {
   sudo systemctl enable amaview-blocos >/dev/null 2>&1
   # `restart`: o serviço relê o código que o `git pull` acabou de trazer.
   sudo systemctl restart amaview-blocos && verde "  amaview-blocos no ar"
+  # Banda 02 a 0,5 km (nível 14400): timer próprio, mesmo usuário e pasta.
+  dpkg -s python3-h5py >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-numpy python3-h5py >/dev/null
+  sudo cp "$DESTINO/agendador/blocos/amaview-meio-km.service" "$DESTINO/agendador/blocos/amaview-meio-km.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-meio-km.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-meio-km.timer && verde "  amaview-meio-km.timer ligado (banda 02 a 0,5 km, a cada 2 min)"
   gerar_site_blocos
   instalar_certificado_ip
 }
@@ -350,6 +357,8 @@ s = json.load(sys.stdin)
 print(f"  {s["cortes_ultima_hora"]} quadros cortados na última hora ({s["segundos_por_corte"]} s cada)")
 print(f"  fila do pré-corte: {s["fila_pre_corte"]} · falhas: {s["falhas"]} · disco livre: {s["disco_livre_gb"]} GB")
 if s["ultimo_erro"]: print(f"  último erro: {s["ultimo_erro"]}")
+m = s.get("meio_km") or {}
+if m: print(f"  0,5 km (banda 02): {m.get("quadros")} quadros · último {m.get("ultimo")} · rodada {m.get("atualizado")}")
 ' 2>/dev/null || amarelo "  sem resposta em 127.0.0.1:8090"
   echo "  em disco: $(sudo du -sh /var/cache/amaview-blocos 2>/dev/null | cut -f1)"
   if sudo test -s "$CERT_IP"; then
