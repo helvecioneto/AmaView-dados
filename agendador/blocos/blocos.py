@@ -32,6 +32,14 @@ navegador baixa e decodifica só os da área visível.
   pedido cai aqui, o quadro é cortado na hora (~0,2 s depois do download) e o
   bloco volta na mesma resposta. Arquivo do STAR truncado (ainda sendo
   publicado): baixa de novo uma vez; se continuar, 503 com Retry-After.
+- **Espelho da base.** Os arquivos inteiros de 450, 900 e 1800 px do STAR
+  (a base do AmaView) ficam aqui também, byte a byte iguais aos da NOAA, em
+  `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}.jpg`: o STAR responde em
+  ~0,2 s com cauda de vários segundos (1% acima de 1 s, medido em 02/10/2026)
+  e travava o play do app; daqui, ~50 ms, na mesma conexão HTTP/2 dos blocos.
+  Baixados assim que o quadro de 7200 é cortado (o horário está publicado),
+  depois o resto das 48 h, do mais novo para o mais velho, 3 por vez. Ainda
+  não espelhado: 404 com cache curto, e o app pede ao STAR.
 - Só produtos, larguras e horários conhecidos (últimas 49 h); nada além do CDN
   do STAR é buscado.
 
@@ -40,10 +48,12 @@ navegador baixa e decodifica só os da área visível.
 
 URL: /blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg — é
 também o caminho no disco, abaixo de BLOCOS_RAIZ (v1: o mesmo, sem progressivo).
+Base inteira: /blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}.jpg.
 """
 import contextlib
 import ctypes
 import ctypes.util
+import http.client
 import http.server
 import json
 import math
@@ -87,14 +97,23 @@ JANELA_V1 = timedelta(hours=float(os.environ.get("BLOCOS_JANELA_V1_H", "12")))
 PRECORTE_V1 = timedelta(hours=float(os.environ.get("BLOCOS_PRECORTE_V1_H", "3")))
 # Pré-corte ligado por padrão; BLOCOS_AQUECER=0 deixa só o sob demanda.
 AQUECER = os.environ.get("BLOCOS_AQUECER", "1") != "0"
+# Espelho da base (ver espelhar_para_sempre); BLOCOS_ESPELHAR=0 desliga.
+ESPELHAR = AQUECER and os.environ.get("BLOCOS_ESPELHAR", "1") != "0"
 TRABALHADORES_AQUECER = 6
 # Cortes simultâneos no total (cada um segura ~100 MB de coeficientes).
 CORTES = threading.BoundedSemaphore(8)
+
+# Larguras da base espelhadas inteiras (o STAR publica 450/900/1800/3600/7200).
+INTEIROS = tuple(int(w) for w in os.environ.get("BLOCOS_INTEIROS", "450,900,1800").split(",") if w.strip())
+TRABALHADORES_ESPELHO = 3
 
 ROTA = re.compile(
     r"^/blocos/v(?P<versao>[12])/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/"
     r"(?P<largura>\d{4,5})/(?P<linha>\d{1,2})_(?P<coluna>\d{1,2})\.jpg$"
 )
+
+
+ROTA_INTEIRO = re.compile(r"^/blocos/v2/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/(?P<largura>\d{3,4})\.jpg$")
 
 
 def altura(largura: int) -> int:
@@ -132,6 +151,11 @@ def pasta_do_quadro(produto: str, carimbo: str, largura: int, versao: int = VERS
 
 def url_star(produto: str, carimbo: str, largura: int) -> str:
     return f"{STAR}/{produto}/{carimbo}_GOES19-ABI-nsa-{produto}-{largura}x{altura(largura)}.jpg"
+
+
+def arquivo_inteiro(produto: str, carimbo: str, largura: int) -> str:
+    """Base inteira espelhada: ao lado das pastas de blocos do mesmo horário."""
+    return os.path.join(PASTAS[VERSAO], produto, carimbo, f"{largura}.jpg")
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +401,8 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido", ver
             nomes = (f"{r}_{c}.jpg" for r in range(linhas) for c in range(colunas))
             _gravar(destino, dict(zip(nomes, blocos)))
             _estado["cortes"].append((time.time(), time.time() - t0, origem))
+        if versao == VERSAO and largura == max(LARGURAS):
+            _acordar_espelho.set()  # horário publicado: a base dele pode vir já
         return destino
 
 
@@ -552,6 +578,140 @@ def _aquecer_um(chave: tuple[str, str, int]) -> None:
         _ausentes[chave] = time.time() + 300
 
 
+# ---------------------------------------------------------------------------
+# Espelho da base: os arquivos inteiros do STAR, sem tocar num byte
+
+_acordar_espelho = threading.Event()
+_espelho = {"arquivos": deque(maxlen=5000), "falhas": 0, "ultimo_erro": None, "fila": None}
+_conexao_star = threading.local()
+
+
+def _get_star(url: str) -> tuple[int, dict[str, str], bytes]:
+    """
+    GET numa conexão HTTPS mantida por thread (keep-alive): o preenchimento das
+    48 h são ~19 mil arquivos pequenos, e um TLS novo a cada um custaria mais
+    que o próprio download. Conexão caída: abre outra e tenta uma vez.
+    """
+    host, caminho = url.split("://", 1)[1].split("/", 1)
+    for tentativa in range(2):
+        con = getattr(_conexao_star, "c", None)
+        if con is None or con.host != host:
+            con = _conexao_star.c = http.client.HTTPSConnection(host, timeout=60)
+        try:
+            con.request("GET", "/" + caminho, headers={"User-Agent": AGENTE})
+            r = con.getresponse()
+            corpo = r.read()
+            return r.status, {k.lower(): v for k, v in r.getheaders()}, corpo
+        except (http.client.HTTPException, OSError):
+            con.close()
+            _conexao_star.c = None
+            if tentativa:
+                raise
+    raise RuntimeError("inalcançável")
+
+
+def _tamanho_do_etag(etag: str | None) -> int | None:
+    """O nginx do STAR põe o tamanho do arquivo no ETag ("mtime-tamanho", hex)."""
+    m = re.fullmatch(r'(?:W/)?"[0-9a-f]+-([0-9a-f]+)"', (etag or "").strip())
+    return int(m[1], 16) if m else None
+
+
+def baixar_validado(produto: str, carimbo: str, largura: int) -> bytes:
+    """
+    O arquivo inteiro do STAR, só se veio inteiro: tamanho igual ao do
+    Content-Length e ao do ETag, termina no EOI e tem as dimensões da largura.
+    """
+    status, cab, corpo = _get_star(url_star(produto, carimbo, largura))
+    if status == 404:
+        raise Ausente(carimbo)
+    if status != 200:
+        raise RuntimeError(f"STAR respondeu {status}")
+    declarado = cab.get("content-length")
+    if declarado is not None and int(declarado) != len(corpo):
+        raise Truncado(f"{len(corpo)} de {declarado} bytes")
+    no_etag = _tamanho_do_etag(cab.get("etag"))
+    if no_etag is not None and no_etag != len(corpo):
+        raise Truncado(f"{len(corpo)} bytes, o ETag diz {no_etag}")
+    if not completo(corpo):
+        raise Truncado(f"{len(corpo)} bytes, sem o fim do JPEG")
+    if dimensoes(corpo) != (largura, altura(largura)):
+        raise ValueError(f"tamanho inesperado: {dimensoes(corpo)}")
+    return corpo
+
+
+def espelhar(produto: str, carimbo: str, largura: int) -> str:
+    """Grava a base inteira (temporário + rename: o arquivo final só existe completo)."""
+    destino = arquivo_inteiro(produto, carimbo, largura)
+    if os.path.exists(destino):
+        return destino
+    corpo = baixar_validado(produto, carimbo, largura)
+    os.makedirs(os.path.dirname(destino), mode=0o755, exist_ok=True)
+    temp = f"{destino}.parcial-{os.getpid()}-{threading.get_ident()}"
+    with open(temp, "wb") as f:
+        f.write(corpo)
+    os.rename(temp, destino)
+    _espelho["arquivos"].append((time.time(), len(corpo)))
+    return destino
+
+
+def _pendentes_inteiros(agora: datetime) -> list[tuple[str, str, int]]:
+    """Bases que faltam, do horário mais novo ao mais velho; só de horário já cortado (publicado)."""
+    base = agora.replace(minute=agora.minute - agora.minute % 10, second=0, microsecond=0)
+    fila = []
+    passos = int(JANELA.total_seconds() // 600) - 6  # 48 h
+    for k in range(passos + 1):
+        c = carimbo_de(base - timedelta(minutes=10 * k))
+        for p in PRODUTOS:
+            if not os.path.isdir(pasta_do_quadro(p, c, max(LARGURAS))):
+                continue
+            for w in INTEIROS:
+                chave = ("inteiro", p, c, w)
+                if _ausentes.get(chave, 0) > time.time():
+                    continue
+                if not os.path.exists(arquivo_inteiro(p, c, w)):
+                    fila.append((p, c, w))
+    return fila
+
+
+def _espelhar_um(item: tuple[str, str, int]) -> None:
+    p, c, w = item
+    chave = ("inteiro", p, c, w)
+    try:
+        espelhar(p, c, w)
+        _ausentes.pop(chave, None)
+    except Ausente:
+        # O 7200 do horário existe, então o STAR publicou; essa largura deve vir já.
+        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c), True)
+    except Truncado as e:
+        _espelho["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
+        _ausentes[chave] = time.time() + ESPERA_PUBLICADO_RECENTE
+    except Exception as e:  # noqa: BLE001 — o laço não pode morrer
+        _espelho["falhas"] += 1
+        _espelho["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
+        _ausentes[chave] = time.time() + 300
+
+
+def espelhar_para_sempre() -> None:
+    # Poucos por vez: o STAR é um servidor de origem só (sem CDN na frente).
+    with ThreadPoolExecutor(TRABALHADORES_ESPELHO, thread_name_prefix="espelho") as pool:
+        while True:
+            fila = _pendentes_inteiros(datetime.now(timezone.utc))
+            _espelho["fila"] = len(fila)
+            # Lote curto: um horário novo (acordado pelo corte) passa na frente do passado.
+            list(pool.map(_espelhar_um, fila[: TRABALHADORES_ESPELHO * 4]))
+            if not fila:
+                _acordar_espelho.wait(10)
+            _acordar_espelho.clear()
+
+
+def inteiros_anunciados(agora: float) -> list[int]:
+    """Larguras que o app pode pedir aqui: as espelhadas, se o espelho gravou na última meia hora."""
+    if not ESPELHAR or not INTEIROS:
+        return []
+    feitos = _espelho["arquivos"]
+    return list(INTEIROS) if feitos and agora - feitos[-1][0] < 1800 else []
+
+
 def limpar(agora: datetime) -> int:
     """
     Apaga quadros fora da janela (v2: 49 h; v1: 12 h, desde que o v2 do mesmo
@@ -581,12 +741,17 @@ def limpar(agora: datetime) -> int:
                     wp = os.path.join(cp, w)
                     if ".parcial-" in w:
                         if time.time() - os.path.getmtime(wp) > 600:
-                            shutil.rmtree(wp, ignore_errors=True)
+                            if os.path.isdir(wp):
+                                shutil.rmtree(wp, ignore_errors=True)
+                            else:
+                                with contextlib.suppress(OSError):
+                                    os.remove(wp)
                     elif v < VERSAO and t < limite_v1 and w.isdigit() and os.path.isdir(pasta_do_quadro(p, c, int(w))):
                         shutil.rmtree(wp, ignore_errors=True)
                 with contextlib.suppress(OSError):
                     os.rmdir(cp)  # só se ficou vazia
-    for chave in [k for k in _ausentes if instante(k[1]) < limite]:
+    # Chaves do corte: (produto, carimbo, largura); do espelho: ("inteiro", produto, carimbo, largura).
+    for chave in [k for k in _ausentes if instante(k[-2]) < limite]:
         _ausentes.pop(chave, None)
     for c in [c for c in _publicados if instante(c) < limite]:
         _publicados.pop(c, None)
@@ -635,6 +800,14 @@ def saude() -> dict:
         "falhas": _estado["falhas"],
         "ultimo_erro": _estado["ultimo_erro"],
         "disco_livre_gb": round(uso.free / 1e9, 1) if uso else None,
+        # Bases inteiras que o app pode pedir aqui (/{produto}/{carimbo}/{largura}.jpg).
+        "inteiros": inteiros_anunciados(agora),
+        "espelho": {
+            "arquivos_ultima_hora": sum(1 for t, _ in _espelho["arquivos"] if agora - t < 3600),
+            "fila": _espelho["fila"],
+            "falhas": _espelho["falhas"],
+            "ultimo_erro": _espelho["ultimo_erro"],
+        },
         **nivel_meio_km(agora),
     }
 
@@ -691,6 +864,12 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         if caminho in ("/blocos/v1/ultimos", "/blocos/v2/ultimos"):
             # O app pergunta a cada minuto se há quadro novo: vale mais que o latest.jpg do STAR.
             return self._responder(200, json.dumps(ultimos()).encode(), "application/json", "no-store")
+        m = ROTA_INTEIRO.match(caminho)
+        if m:
+            # O nginx serve do disco; aqui só cai a base ainda não espelhada (o app pede ao STAR).
+            if m["produto"] in PRODUTOS and int(m["largura"]) in INTEIROS:
+                return self._erro(404, "base ainda não espelhada", "public, max-age=60")
+            return self._erro(404, "produto ou largura desconhecidos")
         m = ROTA.match(caminho)
         if not m:
             return self._erro(404, "rota desconhecida")
@@ -748,9 +927,14 @@ def main() -> None:
     os.makedirs(PASTAS[VERSAO], exist_ok=True)
     if AQUECER:
         threading.Thread(target=aquecer_para_sempre, name="pre-corte", daemon=True).start()
+    if ESPELHAR:
+        threading.Thread(target=espelhar_para_sempre, name="espelho", daemon=True).start()
     servidor = http.server.ThreadingHTTPServer(("127.0.0.1", PORTA), Pedido)
     servidor.daemon_threads = True
-    print(f"blocos v{VERSAO} em 127.0.0.1:{PORTA}, disco em {PASTAS[VERSAO]}, pré-corte {'ligado' if AQUECER else 'desligado'}")
+    print(
+        f"blocos v{VERSAO} em 127.0.0.1:{PORTA}, disco em {PASTAS[VERSAO]}, "
+        f"pré-corte {'ligado' if AQUECER else 'desligado'}, espelho {list(INTEIROS) if ESPELHAR else 'desligado'}"
+    )
     servidor.serve_forever()
 
 

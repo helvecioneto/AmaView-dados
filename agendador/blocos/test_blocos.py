@@ -181,6 +181,14 @@ class Servidor(unittest.TestCase):
         self.assertEqual(cab["Cache-Control"], "public, max-age=60")
         self.assertFalse(os.path.exists(blocos.pasta_do_quadro("GEOCOLOR", c, 3600, 1)))
 
+    def test_base_ainda_nao_espelhada(self):
+        c = carimbo_recente()
+        status, cab, _ = self.pedir(f"/blocos/v2/nsa/13/{c}/900.jpg")
+        self.assertEqual((status, cab["Cache-Control"]), (404, "public, max-age=60"))
+        status, cab, _ = self.pedir(f"/blocos/v2/nsa/13/{c}/3600.jpg")
+        self.assertEqual((status, cab["Cache-Control"]), (404, "no-store"))
+        self.assertEqual(self.baixados, [])  # nunca vai ao STAR na hora do pedido
+
     def test_saude(self):
         codigo, _, corpo = self.pedir("/blocos/saude")
         self.assertEqual(codigo, 200)
@@ -353,6 +361,112 @@ class Atrasados(unittest.TestCase):
             os.makedirs(blocos.pasta_do_quadro(p, c, 7200))
         os.makedirs(blocos.pasta_do_quadro("13", "20262651230", 7200) + ".parcial-1-2")
         self.assertEqual(blocos.ultimos(), {"GEOCOLOR": "20262651220", "13": "20262650940"})
+
+
+QUADRO_450 = jpeg_sintetico(450, 270)
+
+
+class Espelho(unittest.TestCase):
+    """A base inteira do STAR, byte a byte, só se veio completa."""
+
+    def setUp(self):
+        self.raiz = tempfile.mkdtemp()
+        blocos.PASTAS = {v: os.path.join(self.raiz, "blocos", f"v{v}", "nsa") for v in blocos.VERSOES}
+        blocos.RAIZ = self.raiz
+        blocos._ausentes.clear()
+        blocos._espelho["arquivos"].clear()
+        self._get = blocos._get_star
+        self.respostas = {}
+        self.pedidos = []
+
+        def get(url):
+            self.pedidos.append(url)
+            return self.respostas.get(url, (404, {}, b"nada"))
+
+        blocos._get_star = get
+
+    def tearDown(self):
+        blocos._get_star = self._get
+        blocos._ausentes.clear()
+        blocos._espelho["arquivos"].clear()
+        shutil.rmtree(self.raiz)
+
+    def responder(self, produto, carimbo, largura, corpo, **cab):
+        cab.setdefault("content-length", str(len(corpo)))
+        cab.setdefault("etag", f'"6abfd659-{len(corpo):x}"')
+        self.respostas[blocos.url_star(produto, carimbo, largura)] = (200, cab, corpo)
+
+    def test_grava_igual_ao_star_sem_temporario(self):
+        c = carimbo_recente()
+        self.responder("13", c, 450, QUADRO_450)
+        destino = blocos.espelhar("13", c, 450)
+        self.assertEqual(destino, os.path.join(blocos.PASTAS[2], "13", c, "450.jpg"))
+        self.assertEqual(ler(destino), QUADRO_450)
+        self.assertEqual(os.listdir(os.path.dirname(destino)), ["450.jpg"])
+        # Já no disco: não baixa de novo.
+        blocos.espelhar("13", c, 450)
+        self.assertEqual(len(self.pedidos), 1)
+
+    def test_recusa_o_que_veio_incompleto(self):
+        c = carimbo_recente()
+        casos = {
+            "sem EOI": dict(corpo=QUADRO_450[:-2]),
+            "Content-Length maior": dict(corpo=QUADRO_450, cab={"content-length": str(len(QUADRO_450) + 10)}),
+            "ETag de outro tamanho": dict(corpo=QUADRO_450, cab={"etag": f'"6abfd659-{len(QUADRO_450) + 1:x}"'}),
+        }
+        for nome, caso in casos.items():
+            with self.subTest(nome):
+                self.responder("13", c, 450, caso["corpo"], **caso.get("cab", {}))
+                with self.assertRaises(blocos.Truncado):
+                    blocos.espelhar("13", c, 450)
+                self.assertFalse(os.path.exists(blocos.arquivo_inteiro("13", c, 450)))
+
+    def test_largura_errada_nao_grava(self):
+        c = carimbo_recente()
+        self.responder("13", c, 900, QUADRO_450)
+        with self.assertRaises(ValueError):
+            blocos.espelhar("13", c, 900)
+
+    def test_pendentes_so_de_horario_cortado_do_mais_novo_ao_mais_velho(self):
+        agora = datetime.now(timezone.utc)
+        novo, velho, sem_corte = carimbo_recente(20), carimbo_recente(120), carimbo_recente(60)
+        for c in (velho, novo):
+            os.makedirs(blocos.pasta_do_quadro("13", c, 7200))
+        os.makedirs(blocos.pasta_do_quadro("GEOCOLOR", sem_corte, 3600))
+        fila = blocos._pendentes_inteiros(agora)
+        self.assertEqual(fila, [("13", novo, w) for w in blocos.INTEIROS] + [("13", velho, w) for w in blocos.INTEIROS])
+        # 404 (largura que o STAR ainda não soltou): espera antes de tentar de novo.
+        blocos._espelhar_um(("13", novo, 450))
+        self.assertNotIn(("13", novo, 450), blocos._pendentes_inteiros(agora))
+        # Espelhado: sai da fila.
+        self.responder("13", novo, 900, jpeg_sintetico(900, 540))
+        blocos._espelhar_um(("13", novo, 900))
+        self.assertNotIn(("13", novo, 900), blocos._pendentes_inteiros(agora))
+        self.assertEqual(blocos.inteiros_anunciados(time.time()), list(blocos.INTEIROS) if blocos.ESPELHAR else [])
+
+    def test_limpeza_com_bases_e_temporarios(self):
+        velho = blocos.carimbo_de(datetime.now(timezone.utc) - timedelta(hours=50))
+        novo = carimbo_recente()
+        for c in (velho, novo):
+            os.makedirs(blocos.pasta_do_quadro("13", c, 7200))
+            with open(blocos.arquivo_inteiro("13", c, 900), "wb") as f:
+                f.write(b"x")
+        temp = blocos.arquivo_inteiro("13", novo, 450) + ".parcial-1-2"
+        with open(temp, "wb") as f:
+            f.write(b"x")
+        antigo = datetime.now().timestamp() - 3600
+        os.utime(temp, (antigo, antigo))
+        blocos._ausentes[("inteiro", "13", velho, 900)] = time.time() + 60
+        blocos.limpar(datetime.now(timezone.utc))
+        self.assertEqual(os.listdir(os.path.join(blocos.PASTAS[2], "13")), [novo])
+        self.assertEqual(sorted(os.listdir(os.path.join(blocos.PASTAS[2], "13", novo))), ["7200", "900.jpg"])
+        self.assertEqual(blocos._ausentes, {})
+
+    def test_etag_do_nginx(self):
+        self.assertEqual(blocos._tamanho_do_etag('"6abfd65a-1b05c9"'), 0x1B05C9)
+        self.assertEqual(blocos._tamanho_do_etag('W/"6abfd65a-10"'), 16)
+        self.assertIsNone(blocos._tamanho_do_etag(None))
+        self.assertIsNone(blocos._tamanho_do_etag('"abc"'))
 
 
 if __name__ == "__main__":

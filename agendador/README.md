@@ -109,6 +109,21 @@ quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
   do STAR vier truncado (ainda sendo publicado), baixa de novo uma vez; se
   continuar, responde **503 com `Retry-After: 30`** — não é falha deste
   servidor. O pré-corte tenta de novo em 1 min.
+- **Espelho da base** (desde 02/10/2026). Os arquivos inteiros de 450, 900 e
+  1800 px do STAR — a base do AmaView, por baixo dos blocos — ficam aqui
+  também, **byte a byte iguais** aos da NOAA (o tamanho tem de bater com o
+  `Content-Length` e com o `ETag` do STAR, e o JPEG tem de terminar no EOI;
+  grava em temporário e renomeia), em
+  `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}.jpg`. Motivo: o STAR não
+  tem CDN na frente e tem cauda (1% das respostas acima de 1 s, máximo ~11 s),
+  que travava o play do app; daqui são ~50 ms, na mesma conexão HTTP/2 dos
+  blocos. Cada horário é baixado assim que o 7200 dele é cortado (o corte
+  acorda o espelho), depois o resto das 48 h do mais novo para o mais velho,
+  3 por vez, numa conexão mantida por trabalhador. Ainda não espelhado: 404
+  com `max-age=60` (nunca vai ao STAR na hora do pedido) e o app pede ao STAR.
+  A `/blocos/saude` anuncia `"inteiros": [450, 900, 1800]` enquanto o espelho
+  gravou na última meia hora (e `espelho: {fila, falhas, ...}`).
+  `BLOCOS_ESPELHAR=0` desliga; `BLOCOS_INTEIROS` troca as larguras.
 - **Se esta máquina cair**, o AmaView volta sozinho ao JPEG inteiro do STAR.
 
 ### Banda 02 a 0,5 km (nível 14400)
@@ -146,7 +161,7 @@ imutável): `/blocos/v2/nsa/02/{AAAADDDHHMM}/14400/{linha}_{coluna}.jpg`.
 
 | Peça | Onde |
 |---|---|
-| `blocos/blocos.py` | serviço (só local, porta 8090), pré-corte e limpeza (> 49 h) |
+| `blocos/blocos.py` | serviço (só local, porta 8090), pré-corte, espelho da base e limpeza (> 49 h) |
 | `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`, `MemoryMax=6G`, `MALLOC_ARENA_MAX=2`) |
 | `blocos/nginx-*.conf` | site do nginx: disco primeiro, `@blocos` no que falta; CORS e cache imutável |
 | `blocos/meio_km.py`, `blocos/tj.py`, `blocos/lut_02.json` | banda 02 a 0,5 km (nível 14400), tabela de cinza |
@@ -154,7 +169,9 @@ imutável): `/blocos/v2/nsa/02/{AAAADDDHHMM}/14400/{linha}_{coluna}.jpg`.
 
 URL: `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
 (dia juliano, UTC, como nos arquivos do STAR; `v1` no lugar de `v2` dá o
-baseline). Saúde: `/blocos/saude`.
+baseline). Base inteira (espelho do STAR):
+`/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}.jpg`, larguras 450/900/1800.
+Saúde: `/blocos/saude`.
 
 O `amaview instalar` instala e atualiza tudo; `amaview` mostra a situação. O
 HTTPS (o AmaView é servido por HTTPS e o navegador recusa blocos por HTTP) tem
