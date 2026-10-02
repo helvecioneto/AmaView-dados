@@ -150,7 +150,7 @@ imutável): `/blocos/v2/nsa/02/{AAAADDDHHMM}/14400/{linha}_{coluna}.jpg`.
 | `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`, `MemoryMax=6G`, `MALLOC_ARENA_MAX=2`) |
 | `blocos/nginx-*.conf` | site do nginx: disco primeiro, `@blocos` no que falta; CORS e cache imutável |
 | `blocos/meio_km.py`, `blocos/tj.py`, `blocos/lut_02.json` | banda 02 a 0,5 km (nível 14400), tabela de cinza |
-| `blocos/amaview-meio-km.{service,timer}` | a cada 2 min, usuário `amaview-blocos`, `MemoryMax=2G` |
+| `blocos/amaview-meio-km.{service,timer}` | a cada 2 min, usuário `amaview-blocos`, `MemoryMax=3G` |
 
 URL: `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
 (dia juliano, UTC, como nos arquivos do STAR; `v1` no lugar de `v2` dá o

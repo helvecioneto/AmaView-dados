@@ -21,8 +21,9 @@ Environment=MALLOC_ARENA_MAX=2
 TimeoutStartSec=10min
 # Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
 Nice=10
-# O quadro inteiro na memória: ~240 MB do CMI + ~370 MB de imagens.
-MemoryMax=2G
+# O netCDF (~430 MB) e o quadro (~240 MB do CMI + ~250 MB de imagens) na
+# memória; o cgroup também conta o cache dos blocos recém-gravados.
+MemoryMax=3G
 
 NoNewPrivileges=true
 ProtectSystem=strict

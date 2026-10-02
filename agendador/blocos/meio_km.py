@@ -40,6 +40,7 @@ import json
 import math
 import os
 import re
+import resource
 import shutil
 import sys
 import time
@@ -279,7 +280,11 @@ def reduzir(cmi: np.ndarray) -> np.ndarray:
         soma += v
         validos &= v >= 0
     out = np.full((ALTURA // 2, LARGURA // 2), np.nan, np.float32)
-    out[:, : n // 2] = np.where(validos, soma / np.float32(4), np.nan)
+    media = soma.astype(np.float32)
+    del soma
+    media *= 0.25
+    media[~validos] = np.nan
+    out[:, : n // 2] = media
     return out
 
 
@@ -331,7 +336,8 @@ def compor(cmi: np.ndarray, star: np.ndarray, lut: np.ndarray, linhas: tuple[np.
     n = cmi.shape[1]
     for y in range(0, ALTURA, 1024):  # em faixas: o índice da tabela não dobra a memória
         out[y : y + 1024, :n] = lut[np.clip(cmi[y : y + 1024], 0, 4095)]
-    previsto = np.interp(reduzir(cmi), np.arange(4096), lut.astype(np.float32)).astype(np.float32)
+    # Só onde o dado existe importa (o resto vem do STAR): basta saber onde é NaN.
+    previsto = reduzir(cmi)
     mascara, cinza = linhas
     m = mascara_do_star(previsto, mascara)
     # As linhas no cinza delas (sem o ruído do JPEG do dia); o resto, do quadro do STAR.
@@ -389,6 +395,8 @@ def gerar(carimbo: str, chave: str, tamanho: int, lut: np.ndarray, linhas: tuple
         "cpu_s": round(time.process_time() - c0, 1),
         "s3_mb": meta["baixado_mb"],
         "disco_mb": round(sum(len(b) for b in blocos.values()) / 1e6, 1),
+        # Pico do processo até aqui (KB no Linux).
+        "rss_max_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024),
     }
 
 
