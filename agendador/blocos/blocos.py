@@ -566,8 +566,8 @@ def _pendentes(agora: datetime) -> list[tuple[str, str, int]]:
         for p in PRODUTOS:
             for w in LARGURAS:
                 chave = (p, c, w)
-                if _ausentes.get(chave, 0) > time.time():
-                    continue
+                if _ausentes.get(chave, 0) > time.time() or chave in _em_curso:
+                    continue  # (em curso: a frente já está cortando, só o v2)
                 if not os.path.isdir(pasta_do_quadro(p, c, w)):
                     fila.append(chave)
     return fila
@@ -808,12 +808,16 @@ def chaves_do_novo(novo: str) -> list[tuple[str, str, int]]:
 def cortar_novo(chave: tuple[str, str, int], espera=time.sleep) -> bool:
     """Corta o quadro recém-publicado, insistindo enquanto o STAR termina de soltar o arquivo."""
     p, c, w = chave
-    prazo = time.time() + NOVO_POR_ATE
+    t0 = time.time()
+    prazo = t0 + NOVO_POR_ATE
+    tentativas = 0
     try:
         while True:
+            tentativas += 1
             try:
                 cortar(p, c, w, origem="novo")
                 _ausentes.pop(chave, None)
+                print(f"novo {p} {c} {w}: pronto em {time.time() - t0:.1f} s ({tentativas} tentativa(s))", flush=True)
                 return True
             except (Ausente, Truncado):
                 if time.time() + NOVO_A_CADA > prazo:
@@ -851,7 +855,10 @@ def frente_para_sempre() -> None:
 def sondar_para_sempre() -> None:
     while True:
         try:
-            enfileirar_novos(sondar_publicados(datetime.now(timezone.utc)))
+            novos = sondar_publicados(datetime.now(timezone.utc))
+            if novos:
+                print(f"sonda: publicado {' '.join(novos)}", flush=True)
+            enfileirar_novos(novos)
         except Exception as e:  # noqa: BLE001 — a sonda não pode morrer
             _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} sonda: {e}"
         time.sleep(SONDA_LACO)
