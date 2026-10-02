@@ -401,6 +401,9 @@ ESPERA_PUBLICADO = 60
 # Até onde procurar horários publicados atrasados, e de quanto em quanto.
 JANELA_ATRASADOS = timedelta(hours=6)
 SONDA_A_CADA = 60
+# Na última hora (sonda por produto, um HEAD de 450 px): de 20 em 20 s, para o
+# quadro novo ficar pronto ~30 s depois de o STAR publicar.
+SONDA_RECENTE_A_CADA = 20
 # O arquivo que diz se um horário saiu: o menor do produto padrão.
 PRODUTO_SONDA = "GEOCOLOR"
 
@@ -458,7 +461,7 @@ def sondar_publicados(agora: datetime) -> list[str]:
             for p in PRODUTOS:
                 if (p, c) in _publicados_produto or os.path.isdir(pasta_do_quadro(p, c, 7200)):
                     continue
-                if time.time() - _sondados.get((p, c), 0) < SONDA_A_CADA:
+                if time.time() - _sondados.get((p, c), 0) < SONDA_RECENTE_A_CADA:
                     continue
                 _sondados[(p, c)] = time.time()
                 sondas.append((c, p))
@@ -604,8 +607,11 @@ def aquecer_para_sempre() -> None:
             fila = _pendentes(agora)
             _estado["fila"] = len(fila)
             # Lote pequeno: o quadro novo nunca espera o preenchimento do passado.
-            list(pool.map(_aquecer_um, fila[:66]))
-            time.sleep(10 if fila else 30)
+            # 24 = 4 por trabalhador: com o passado ainda por preencher (ou a
+            # transição v1 → v2), a volta leva ~15 s e não ~1 min (com 66, o
+            # GEOCOLOR novo esperava ~60 s em vez de ~15 s).
+            list(pool.map(_aquecer_um, fila[:24]))
+            time.sleep(2 if fila else 10)
 
 
 # ---------------------------------------------------------------------------
