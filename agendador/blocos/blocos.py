@@ -398,6 +398,9 @@ ESPERA_LACUNA = 3 * 3600
 # Horário já publicado, produto que ainda não chegou: os produtos saem com
 # minutos de diferença (em 22/09/2026 o GEOCOLOR voltou antes das bandas).
 ESPERA_PUBLICADO = 60
+# O mesmo, na última hora: o arquivo de 450 px (o da sonda) sai segundos antes
+# do de 7200, e esperar 60 s deixava o quadro novo ~90 s atrás do STAR.
+ESPERA_PUBLICADO_RECENTE = 15
 # Até onde procurar horários publicados atrasados, e de quanto em quanto.
 JANELA_ATRASADOS = timedelta(hours=6)
 SONDA_A_CADA = 60
@@ -411,7 +414,7 @@ PRODUTO_SONDA = "GEOCOLOR"
 def espera_ausente(idade: timedelta, publicado: bool = False) -> int:
     """Segundos até tentar de novo um horário ausente dessa idade."""
     if publicado:
-        return ESPERA_PUBLICADO
+        return ESPERA_PUBLICADO_RECENTE if idade < JANELA_SONDA_PRODUTO else ESPERA_PUBLICADO
     for ate, segundos in ESPERA_AUSENTE:
         if idade < ate:
             return segundos

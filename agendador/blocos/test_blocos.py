@@ -299,6 +299,8 @@ class Atrasados(unittest.TestCase):
         self.assertEqual(blocos.espera_ausente(timedelta(hours=10)), 3 * 3600)
         # Horário já publicado: o produto que falta chega em minutos.
         self.assertEqual(blocos.espera_ausente(timedelta(hours=3), publicado=True), 60)
+        # Na última hora, o 7200 sai segundos depois do 450 da sonda.
+        self.assertEqual(blocos.espera_ausente(timedelta(minutes=12), publicado=True), 15)
 
     def test_horario_atrasado_publicado_libera_todos_os_produtos(self):
         agora = datetime.now(timezone.utc)
