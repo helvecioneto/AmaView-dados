@@ -276,10 +276,23 @@ _travas: dict[tuple, list] = {}  # chave → [Lock, usuários]
 _travas_lock = threading.Lock()
 _estado = {
     "inicio": time.time(),
-    "cortes": deque(maxlen=2000),  # (instante, segundos, origem)
+    "cortes": deque(),  # (instante, segundos, origem) da última hora (ver _registrar)
     "falhas": 0,
     "ultimo_erro": None,
 }
+
+
+# Janela dos contadores da saúde. Por tempo, não por quantidade: com maxlen
+# fixo, o preenchimento das 48 h saturava a conta da "última hora" (5000).
+JANELA_CONTADORES = 3600
+
+
+def _registrar(fila: deque, item: tuple, agora: float | None = None) -> None:
+    """Acrescenta (instante, ...) e solta o que passou da janela (append/popleft são atômicos)."""
+    agora = time.time() if agora is None else agora
+    fila.append(item)
+    while fila and agora - fila[0][0] > JANELA_CONTADORES:
+        fila.popleft()
 
 
 @contextlib.contextmanager
@@ -364,7 +377,7 @@ def _de_v1(anterior: str, destino: str, origem: str) -> str:
             w, h = dimensoes(bloco)
             saida[nome] = recortar(bloco, [(0, 0, w, h)], progressivo=True)[0]
         _gravar(destino, saida)
-        _estado["cortes"].append((time.time(), time.time() - t0, f"{origem}-v1"))
+        _registrar(_estado["cortes"], (time.time(), time.time() - t0, f"{origem}-v1"))
     carimbo = os.path.basename(os.path.dirname(anterior))
     with contextlib.suppress(ValueError):
         if instante(carimbo) < datetime.now(timezone.utc) - JANELA_V1:
@@ -400,7 +413,7 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido", ver
             del jpeg
             nomes = (f"{r}_{c}.jpg" for r in range(linhas) for c in range(colunas))
             _gravar(destino, dict(zip(nomes, blocos)))
-            _estado["cortes"].append((time.time(), time.time() - t0, origem))
+            _registrar(_estado["cortes"], (time.time(), time.time() - t0, origem))
         if versao == VERSAO and largura == max(LARGURAS):
             _acordar_espelho.set()  # horário publicado: a base dele pode vir já
         return destino
@@ -430,9 +443,12 @@ ESPERA_PUBLICADO_RECENTE = 15
 # Até onde procurar horários publicados atrasados, e de quanto em quanto.
 JANELA_ATRASADOS = timedelta(hours=6)
 SONDA_A_CADA = 60
-# Na última hora (sonda por produto, um HEAD de 450 px): de 20 em 20 s, para o
-# quadro novo ficar pronto ~30 s depois de o STAR publicar.
-SONDA_RECENTE_A_CADA = 20
+# Na última hora (sonda por produto, um HEAD de 450 px): de 10 em 10 s. A sonda
+# tem thread própria e o que ela acha é cortado na hora (frente_para_sempre):
+# o quadro novo fica pronto ~10–15 s depois de o STAR publicar.
+SONDA_RECENTE_A_CADA = 10
+# Pausa entre voltas da sonda (cada horário/produto tem o próprio intervalo acima).
+SONDA_LACO = 3
 # O arquivo que diz se um horário saiu: o menor do produto padrão.
 PRODUTO_SONDA = "GEOCOLOR"
 
@@ -509,13 +525,13 @@ def sondar_publicados(agora: datetime) -> list[str]:
             _publicados[c] = time.time()
             _sondados.pop(c, None)
             novos.append(c)
-            for chave in [k2 for k2 in _ausentes if k2[1] == c]:
+            for chave in [k2 for k2 in list(_ausentes) if k2[1] == c]:
                 _ausentes.pop(chave, None)
         else:
             _publicados_produto[(p, c)] = time.time()
             _sondados.pop((p, c), None)
             novos.append(f"{p}/{c}")
-            for chave in [k2 for k2 in _ausentes if k2[0] == p and k2[1] == c]:
+            for chave in [k2 for k2 in list(_ausentes) if k2[0] == p and k2[1] == c]:
                 _ausentes.pop(chave, None)
     return novos
 
@@ -582,7 +598,7 @@ def _aquecer_um(chave: tuple[str, str, int]) -> None:
 # Espelho da base: os arquivos inteiros do STAR, sem tocar num byte
 
 _acordar_espelho = threading.Event()
-_espelho = {"arquivos": deque(maxlen=5000), "falhas": 0, "ultimo_erro": None, "fila": None}
+_espelho = {"arquivos": deque(), "falhas": 0, "ultimo_erro": None, "fila": None}  # arquivos: última hora
 _conexao_star = threading.local()
 
 
@@ -650,7 +666,7 @@ def espelhar(produto: str, carimbo: str, largura: int) -> str:
     with open(temp, "wb") as f:
         f.write(corpo)
     os.rename(temp, destino)
-    _espelho["arquivos"].append((time.time(), len(corpo)))
+    _registrar(_espelho["arquivos"], (time.time(), len(corpo)))
     return destino
 
 
@@ -751,15 +767,94 @@ def limpar(agora: datetime) -> int:
                 with contextlib.suppress(OSError):
                     os.rmdir(cp)  # só se ficou vazia
     # Chaves do corte: (produto, carimbo, largura); do espelho: ("inteiro", produto, carimbo, largura).
-    for chave in [k for k in _ausentes if instante(k[-2]) < limite]:
+    for chave in [k for k in list(_ausentes) if instante(k[-2]) < limite]:
         _ausentes.pop(chave, None)
-    for c in [c for c in _publicados if instante(c) < limite]:
+    for c in [c for c in list(_publicados) if instante(c) < limite]:
         _publicados.pop(c, None)
-    for chave in [k for k in _publicados_produto if instante(k[1]) < limite]:
+    for chave in [k for k in list(_publicados_produto) if instante(k[1]) < limite]:
         _publicados_produto.pop(chave, None)
-    for chave in [k for k in _sondados if instante(k[1] if isinstance(k, tuple) else k) < limite]:
+    for chave in [k for k in list(_sondados) if instante(k[1] if isinstance(k, tuple) else k) < limite]:
         _sondados.pop(chave, None)
     return removidos
+
+
+# ---------------------------------------------------------------------------
+# Frente: o horário (ou produto) que a sonda acabou de ver publicado é cortado
+# na hora, por trabalhadores próprios — sem esperar o lote do preenchimento das
+# 48 h (antes a sonda morava no laço do pré-corte e só rodava entre lotes; com
+# a pausa de 10 s e o lote em andamento, o GEOCOLOR novo levava 18–80 s).
+
+_frente: deque = deque()  # "carimbo" (horário todo) ou "produto/carimbo"
+_acordar_frente = threading.Event()
+_em_curso: set = set()
+_em_curso_lock = threading.Lock()
+TRABALHADORES_FRENTE = 4
+# O 450 da sonda sai segundos antes do 7200: tentar de 3 em 3 s por até 2 min;
+# depois disso o laço normal (com as esperas de espera_ausente) assume.
+NOVO_A_CADA = 3
+NOVO_POR_ATE = 120
+
+
+def chaves_do_novo(novo: str) -> list[tuple[str, str, int]]:
+    """Cortes que faltam de um achado da sonda, maior largura primeiro (a que o desktop pede)."""
+    if "/" in novo:
+        p, c = novo.split("/", 1)
+        produtos: tuple = (p,)
+    else:
+        c, produtos = novo, PRODUTOS
+    return [(p, c, w) for p in produtos for w in sorted(LARGURAS, reverse=True) if not os.path.isdir(pasta_do_quadro(p, c, w))]
+
+
+def cortar_novo(chave: tuple[str, str, int], espera=time.sleep) -> bool:
+    """Corta o quadro recém-publicado, insistindo enquanto o STAR termina de soltar o arquivo."""
+    p, c, w = chave
+    prazo = time.time() + NOVO_POR_ATE
+    try:
+        while True:
+            try:
+                cortar(p, c, w, origem="novo")
+                _ausentes.pop(chave, None)
+                return True
+            except (Ausente, Truncado):
+                if time.time() + NOVO_A_CADA > prazo:
+                    return False
+                espera(NOVO_A_CADA)
+            except Exception as e:  # noqa: BLE001 — o trabalhador não pode morrer
+                _estado["falhas"] += 1
+                _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
+                return False
+    finally:
+        with _em_curso_lock:
+            _em_curso.discard(chave)
+
+
+def enfileirar_novos(novos: list[str]) -> None:
+    if novos:
+        _frente.extend(novos)
+        _acordar_frente.set()
+
+
+def frente_para_sempre() -> None:
+    with ThreadPoolExecutor(TRABALHADORES_FRENTE, thread_name_prefix="novo") as pool:
+        while True:
+            _acordar_frente.wait()
+            _acordar_frente.clear()
+            while _frente:
+                for chave in chaves_do_novo(_frente.popleft()):
+                    with _em_curso_lock:
+                        if chave in _em_curso:
+                            continue
+                        _em_curso.add(chave)
+                    pool.submit(cortar_novo, chave)
+
+
+def sondar_para_sempre() -> None:
+    while True:
+        try:
+            enfileirar_novos(sondar_publicados(datetime.now(timezone.utc)))
+        except Exception as e:  # noqa: BLE001 — a sonda não pode morrer
+            _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} sonda: {e}"
+        time.sleep(SONDA_LACO)
 
 
 def aquecer_para_sempre() -> None:
@@ -771,7 +866,6 @@ def aquecer_para_sempre() -> None:
             if time.time() - ultima_limpeza > 600:
                 limpar(agora)
                 ultima_limpeza = time.time()
-            sondar_publicados(agora)
             fila = _pendentes(agora)
             _estado["fila"] = len(fila)
             # Lote pequeno: o quadro novo nunca espera o preenchimento do passado.
@@ -788,7 +882,7 @@ def aquecer_para_sempre() -> None:
 
 def saude() -> dict:
     agora = time.time()
-    ultima_hora = [c for c in _estado["cortes"] if agora - c[0] < 3600]
+    ultima_hora = [c for c in list(_estado["cortes"]) if agora - c[0] < 3600]
     uso = shutil.disk_usage(RAIZ) if os.path.isdir(RAIZ) else None
     return {
         "ok": True,
@@ -803,7 +897,7 @@ def saude() -> dict:
         # Bases inteiras que o app pode pedir aqui (/{produto}/{carimbo}/{largura}.jpg).
         "inteiros": inteiros_anunciados(agora),
         "espelho": {
-            "arquivos_ultima_hora": sum(1 for t, _ in _espelho["arquivos"] if agora - t < 3600),
+            "arquivos_ultima_hora": sum(1 for t, _ in list(_espelho["arquivos"]) if agora - t < 3600),
             "fila": _espelho["fila"],
             "falhas": _espelho["falhas"],
             "ultimo_erro": _espelho["ultimo_erro"],
@@ -927,6 +1021,8 @@ def main() -> None:
     os.makedirs(PASTAS[VERSAO], exist_ok=True)
     if AQUECER:
         threading.Thread(target=aquecer_para_sempre, name="pre-corte", daemon=True).start()
+        threading.Thread(target=sondar_para_sempre, name="sonda", daemon=True).start()
+        threading.Thread(target=frente_para_sempre, name="frente", daemon=True).start()
     if ESPELHAR:
         threading.Thread(target=espelhar_para_sempre, name="espelho", daemon=True).start()
     servidor = http.server.ThreadingHTTPServer(("127.0.0.1", PORTA), Pedido)

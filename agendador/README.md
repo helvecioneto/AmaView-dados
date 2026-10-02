@@ -90,10 +90,13 @@ quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
   que falta nas últimas 6 h (grade de 10 min, sem baixar a listagem de 1,1 MB)
   diz se o STAR o publicou; publicado, todos os produtos dele são cortados na
   hora, e o produto que ainda não chegou é tentado de novo a cada minuto. Na
-  última hora a sonda é por produto, de 20 em 20 s: o GEOCOLOR é o último que
+  última hora a sonda é por produto, de 10 em 10 s: o GEOCOLOR é o último que
   o STAR solta (as bandas saem 3–5 min antes), e esperar por ele segurava as
-  bandas. Medido em 02/10/2026: banda 13 pronta 11–17 s depois do STAR (antes
-  3–5 min), banda 02 ~40 s (antes ~3 min). O
+  bandas. A sonda roda numa thread própria e o que ela acha vai para a
+  **frente**: 4 trabalhadores cortam o horário novo na hora (tentando de 3 em
+  3 s por até 2 min, enquanto o STAR termina de soltar o 7200), sem esperar o
+  lote do preenchimento das 48 h. Só o v2: o v1 desse horário, se algum app
+  antigo pedir, sai sob demanda. O
   `latest.jpg` do STAR não serve de sinal: em 22/09/2026 o GOES-19 parou das
   09:50 às 13h (manutenção no solo da NOAA) e voltou soltando os quadros das
   12:00–12:20 sem mexer nele. O resto das últimas 48 h é preenchido do mais

@@ -363,6 +363,103 @@ class Atrasados(unittest.TestCase):
         self.assertEqual(blocos.ultimos(), {"GEOCOLOR": "20262651220", "13": "20262650940"})
 
 
+class Frente(unittest.TestCase):
+    """O que a sonda acha é cortado na hora, sem esperar o lote do preenchimento."""
+
+    def setUp(self):
+        self.raiz = tempfile.mkdtemp()
+        blocos.PASTAS = {v: os.path.join(self.raiz, "blocos", f"v{v}", "nsa") for v in blocos.VERSOES}
+        self._cortar = blocos.cortar
+        blocos._ausentes.clear()
+        blocos._em_curso.clear()
+
+    def tearDown(self):
+        blocos.cortar = self._cortar
+        blocos._ausentes.clear()
+        blocos._em_curso.clear()
+        shutil.rmtree(self.raiz)
+
+    def test_chaves_do_horario_e_do_produto(self):
+        c = "20262751600"
+        os.makedirs(blocos.pasta_do_quadro("13", c, 7200))
+        todas = blocos.chaves_do_novo(c)
+        self.assertNotIn(("13", c, 7200), todas)
+        self.assertIn(("13", c, 3600), todas)
+        self.assertEqual(len(todas), len(blocos.PRODUTOS) * len(blocos.LARGURAS) - 1)
+        # Maior largura primeiro.
+        self.assertEqual(blocos.chaves_do_novo(f"GEOCOLOR/{c}"), [("GEOCOLOR", c, 7200), ("GEOCOLOR", c, 3600)])
+
+    def test_insiste_enquanto_o_star_termina_de_publicar(self):
+        tentativas = []
+
+        def cortar(p, c, w, origem="pedido", versao=blocos.VERSAO):
+            tentativas.append(origem)
+            if len(tentativas) < 3:
+                raise blocos.Ausente("ainda não")
+            return "ok"
+
+        blocos.cortar = cortar
+        chave = ("GEOCOLOR", "20262751600", 7200)
+        blocos._ausentes[chave] = time.time() + 300
+        blocos._em_curso.add(chave)
+        esperas = []
+        self.assertTrue(blocos.cortar_novo(chave, espera=esperas.append))
+        self.assertEqual(tentativas, ["novo"] * 3)
+        self.assertEqual(esperas, [blocos.NOVO_A_CADA] * 2)
+        self.assertNotIn(chave, blocos._ausentes)
+        self.assertNotIn(chave, blocos._em_curso)
+
+    def test_desiste_depois_do_prazo(self):
+        def cortar(*a, **k):
+            raise blocos.Truncado("curto")
+
+        blocos.cortar = cortar
+        relogio = [time.time()]
+        esperas = []
+
+        def espera(s):
+            esperas.append(s)
+            relogio[0] += s
+
+        t = blocos.time.time
+        blocos.time.time = lambda: relogio[0]
+        try:
+            self.assertFalse(blocos.cortar_novo(("13", "20262751600", 7200), espera=espera))
+        finally:
+            blocos.time.time = t
+        self.assertLessEqual(sum(esperas), blocos.NOVO_POR_ATE)
+        self.assertGreater(len(esperas), 10)
+
+    def test_frente_corta_sem_esperar_o_laco(self):
+        feitos = []
+        pronto = threading.Event()
+
+        def cortar(p, c, w, origem="pedido", versao=blocos.VERSAO):
+            feitos.append((p, c, w, origem))
+            if len(feitos) == 2:
+                pronto.set()
+            return "ok"
+
+        blocos.cortar = cortar
+        threading.Thread(target=blocos.frente_para_sempre, daemon=True).start()
+        blocos.enfileirar_novos(["13/20262751600"])
+        self.assertTrue(pronto.wait(5))
+        self.assertEqual(sorted(feitos), sorted([("13", "20262751600", 7200, "novo"), ("13", "20262751600", 3600, "novo")]))
+
+
+class Contadores(unittest.TestCase):
+    def test_janela_por_tempo_nao_por_quantidade(self):
+        from collections import deque
+
+        fila = deque()
+        agora = 1_000_000.0
+        for k in range(8000):  # mais que o antigo maxlen de 5000, tudo na última hora
+            blocos._registrar(fila, (agora - 3000 + k * 0.1, 1), agora=agora)
+        self.assertEqual(len(fila), 8000)
+        blocos._registrar(fila, (agora + 3700, 1), agora=agora + 3700)
+        self.assertTrue(all(agora + 3700 - t <= blocos.JANELA_CONTADORES for t, _ in fila))
+
+
 QUADRO_450 = jpeg_sintetico(450, 270)
 
 
