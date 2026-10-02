@@ -44,6 +44,34 @@ def jpeg_sintetico(largura: int, altura: int) -> bytes:
         lib.tjDestroy(h)
 
 
+def decodificar(jpeg: bytes) -> bytes:
+    """Pixels RGB do JPEG (pela TurboJPEG): para comparar v1 e v2 pixel a pixel."""
+    lib = blocos._carregar_turbojpeg()
+    lib.tjInitDecompress.restype = ctypes.c_void_p
+    lib.tjDecompress2.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ]
+    w, h = blocos.dimensoes(jpeg)
+    saida = ctypes.create_string_buffer(w * h * 3)
+    d = lib.tjInitDecompress()
+    try:
+        assert lib.tjDecompress2(d, jpeg, len(jpeg), saida, w, 0, h, 0, 0) == 0
+        return saida.raw
+    finally:
+        lib.tjDestroy(d)
+
+
+def ler(caminho: str) -> bytes:
+    with open(caminho, "rb") as f:
+        return f.read()
+
+
+def progressivo(jpeg: bytes) -> bool:
+    """SOF2 (progressivo) em vez de SOF0 (baseline)."""
+    return b"\xff\xc2" in jpeg[: jpeg.find(b"\xff\xda")] and b"\xff\xc0" not in jpeg[: jpeg.find(b"\xff\xda")]
+
+
 QUADRO_3600 = jpeg_sintetico(3600, 2160)
 
 
@@ -81,7 +109,7 @@ class Grade(unittest.TestCase):
 class Servidor(unittest.TestCase):
     def setUp(self):
         self.raiz = tempfile.mkdtemp()
-        blocos.PASTA = os.path.join(self.raiz, "blocos", "v1", "nsa")
+        blocos.PASTAS = {v: os.path.join(self.raiz, "blocos", f"v{v}", "nsa") for v in blocos.VERSOES}
         blocos.RAIZ = self.raiz
         self.baixados = []
         self.ausentes = set()
@@ -93,6 +121,7 @@ class Servidor(unittest.TestCase):
             return QUADRO_3600
 
         self._baixar = blocos.baixar
+        self._espera_truncado = blocos.ESPERA_TRUNCADO
         blocos.baixar = baixar
         self.srv = blocos.http.server.ThreadingHTTPServer(("127.0.0.1", 0), blocos.Pedido)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -102,6 +131,7 @@ class Servidor(unittest.TestCase):
         self.srv.shutdown()
         self.srv.server_close()
         blocos.baixar = self._baixar
+        blocos.ESPERA_TRUNCADO = self._espera_truncado
         shutil.rmtree(self.raiz)
 
     def pedir(self, caminho):
@@ -118,7 +148,7 @@ class Servidor(unittest.TestCase):
         self.assertEqual(cab["Access-Control-Allow-Origin"], "*")
         self.assertIn("immutable", cab["Cache-Control"])
         self.assertEqual(blocos.dimensoes(corpo), (544, 544))
-        self.assertEqual(len(os.listdir(blocos.pasta_do_quadro("13", c, 3600))), 40)
+        self.assertEqual(len(os.listdir(blocos.pasta_do_quadro("13", c, 3600, 1))), 40)
         self.assertTrue(self.baixados[0].endswith(f"/13/{c}_GOES19-ABI-nsa-13-3600x2160.jpg"))
         codigo, _, corpo = self.pedir(f"/blocos/v1/nsa/13/{c}/3600/4_7.jpg")
         self.assertEqual((codigo, blocos.dimensoes(corpo)), (200, (32, 128)))
@@ -149,12 +179,92 @@ class Servidor(unittest.TestCase):
         codigo, cab, _ = self.pedir(f"/blocos/v1/nsa/GEOCOLOR/{c}/3600/0_0.jpg")
         self.assertEqual(codigo, 404)
         self.assertEqual(cab["Cache-Control"], "public, max-age=60")
-        self.assertFalse(os.path.exists(blocos.pasta_do_quadro("GEOCOLOR", c, 3600)))
+        self.assertFalse(os.path.exists(blocos.pasta_do_quadro("GEOCOLOR", c, 3600, 1)))
 
     def test_saude(self):
         codigo, _, corpo = self.pedir("/blocos/saude")
         self.assertEqual(codigo, 200)
         self.assertTrue(json.loads(corpo)["ok"])
+
+    def test_v2_progressivo_com_os_mesmos_pixels_do_v1(self):
+        c = carimbo_recente()
+        for bloco in ("0_0", "2_3", "4_7"):
+            _, _, v1 = self.pedir(f"/blocos/v1/nsa/13/{c}/3600/{bloco}.jpg")
+            codigo, cab, v2 = self.pedir(f"/blocos/v2/nsa/13/{c}/3600/{bloco}.jpg")
+            self.assertEqual(codigo, 200)
+            self.assertIn("immutable", cab["Cache-Control"])
+            self.assertFalse(progressivo(v1))
+            self.assertTrue(progressivo(v2))
+            self.assertEqual(decodificar(v1), decodificar(v2), bloco)
+        # O v2 sai do v1 já cortado: o quadro do STAR foi baixado uma vez só.
+        self.assertEqual(len(self.baixados), 1)
+
+    def test_transicao_do_v1_sem_baixar_e_v1_velho_sai(self):
+        velho = blocos.carimbo_de((datetime.now(timezone.utc) - timedelta(hours=20)).replace(minute=0))
+        blocos.cortar("13", velho, 3600, versao=1)
+        self.assertEqual(len(self.baixados), 1)
+        v1 = {n: ler(os.path.join(blocos.pasta_do_quadro("13", velho, 3600, 1), n)) for n in ("0_0.jpg", "4_7.jpg")}
+        pasta = blocos.cortar("13", velho, 3600, origem="pre")
+        self.assertEqual(len(self.baixados), 1, "a transição não baixa de novo")
+        for n, corpo in v1.items():
+            self.assertEqual(decodificar(ler(os.path.join(pasta, n))), decodificar(corpo))
+        self.assertFalse(os.path.exists(blocos.pasta_do_quadro("13", velho, 3600, 1)), "v1 com mais de 12 h sai")
+        self.assertEqual(blocos._travas, {}, "nenhuma trava fica para trás")
+
+    def test_pre_corte_recente_faz_v1_e_v2_com_um_download(self):
+        recente, velho = carimbo_recente(), blocos.carimbo_de((datetime.now(timezone.utc) - timedelta(hours=8)).replace(minute=0))
+        blocos._aquecer_um(("13", recente, 3600))
+        blocos._aquecer_um(("13", velho, 3600))
+        self.assertEqual(len(self.baixados), 2)
+        self.assertTrue(os.path.isdir(blocos.pasta_do_quadro("13", recente, 3600, 1)))
+        self.assertTrue(os.path.isdir(blocos.pasta_do_quadro("13", recente, 3600, 2)))
+        self.assertFalse(os.path.isdir(blocos.pasta_do_quadro("13", velho, 3600, 1)), "fora das 3 h, só o v2")
+        self.assertTrue(os.path.isdir(blocos.pasta_do_quadro("13", velho, 3600, 2)))
+
+    def test_arquivo_truncado_tenta_de_novo_e_responde_503(self):
+        c = carimbo_recente()
+        blocos.ESPERA_TRUNCADO = 0
+        tentativas = []
+
+        def truncado(url):
+            tentativas.append(url)
+            return QUADRO_3600[: len(QUADRO_3600) // 2]
+
+        blocos.baixar = truncado
+        codigo, cab, _ = self.pedir(f"/blocos/v2/nsa/13/{c}/3600/0_0.jpg")
+        self.assertEqual(codigo, 503)
+        self.assertEqual(cab["Retry-After"], "30")
+        self.assertEqual(len(tentativas), 2)
+        self.assertFalse(os.path.exists(blocos.pasta_do_quadro("13", c, 3600)))
+
+    def test_truncado_na_primeira_inteiro_na_segunda(self):
+        c = carimbo_recente()
+        blocos.ESPERA_TRUNCADO = 0
+        respostas = [QUADRO_3600[:-5000], QUADRO_3600]
+        blocos.baixar = lambda url: respostas.pop(0)
+        self.assertEqual(self.pedir(f"/blocos/v2/nsa/13/{c}/3600/0_0.jpg")[0], 200)
+
+    def test_ultimos_nas_duas_versoes(self):
+        c = carimbo_recente()
+        os.makedirs(blocos.pasta_do_quadro("13", c, 7200))
+        for v in (1, 2):
+            codigo, _, corpo = self.pedir(f"/blocos/v{v}/ultimos")
+            self.assertEqual((codigo, json.loads(corpo)), (200, {"13": c}))
+
+    def test_cliente_que_desiste_nao_vira_traceback(self):
+        class Quebrado:
+            def write(self, _):
+                raise BrokenPipeError
+
+        p = blocos.Pedido.__new__(blocos.Pedido)
+        p.wfile = Quebrado()
+        p.request_version = "HTTP/1.1"
+        p.requestline = "GET /x HTTP/1.1"
+        p.command = "GET"
+        p.client_address = ("127.0.0.1", 1)
+        p._headers_buffer = []
+        p._responder(200, b"x", "image/jpeg", "no-store")  # não levanta
+        self.assertTrue(p.close_connection)
 
     def test_limpeza_tira_o_que_saiu_da_janela(self):
         velho = blocos.carimbo_de(datetime.now(timezone.utc) - timedelta(hours=50))
@@ -165,21 +275,21 @@ class Servidor(unittest.TestCase):
         antigo = datetime.now().timestamp() - 3600
         os.utime(blocos.pasta_do_quadro("13", novo, 7200) + ".parcial-1-2", (antigo, antigo))
         self.assertEqual(blocos.limpar(datetime.now(timezone.utc)), 1)
-        self.assertEqual(os.listdir(os.path.join(blocos.PASTA, "13")), [novo])
-        self.assertEqual(os.listdir(os.path.join(blocos.PASTA, "13", novo)), ["3600"])
+        self.assertEqual(os.listdir(os.path.join(blocos.PASTAS[2], "13")), [novo])
+        self.assertEqual(os.listdir(os.path.join(blocos.PASTAS[2], "13", novo)), ["3600"])
 
 
 class Atrasados(unittest.TestCase):
     def setUp(self):
         self.raiz = tempfile.mkdtemp()
-        blocos.PASTA = os.path.join(self.raiz, "blocos", "v1", "nsa")
-        for m in (blocos._ausentes, blocos._publicados, blocos._sondados):
+        blocos.PASTAS = {v: os.path.join(self.raiz, "blocos", f"v{v}", "nsa") for v in blocos.VERSOES}
+        for m in (blocos._ausentes, blocos._publicados, blocos._publicados_produto, blocos._sondados):
             m.clear()
         self._existe = blocos._existe_no_star
 
     def tearDown(self):
         blocos._existe_no_star = self._existe
-        for m in (blocos._ausentes, blocos._publicados, blocos._sondados):
+        for m in (blocos._ausentes, blocos._publicados, blocos._publicados_produto, blocos._sondados):
             m.clear()
         shutil.rmtree(self.raiz)
 
@@ -198,7 +308,7 @@ class Atrasados(unittest.TestCase):
             blocos._ausentes[chave] = time.time() + 3600
         sondados = []
         publicados = {atrasado}
-        blocos._existe_no_star = lambda c: sondados.append(c) or c in publicados
+        blocos._existe_no_star = lambda c, p=blocos.PRODUTO_SONDA: sondados.append((c, p)) or c in publicados
         self.assertEqual(blocos.sondar_publicados(agora), [atrasado])
         self.assertNotIn(("13", atrasado, 7200), blocos._ausentes)
         self.assertNotIn(("AirMass", atrasado, 3600), blocos._ausentes)
@@ -207,7 +317,34 @@ class Atrasados(unittest.TestCase):
         n = len(sondados)
         blocos.sondar_publicados(agora)
         self.assertEqual(len(sondados), n)
-        self.assertLessEqual(n, 37)
+        # 31 horários de 1–6 h (um HEAD cada) + 6 da última hora (um por produto).
+        self.assertLessEqual(n, 31 + 7 * len(blocos.PRODUTOS))
+
+    def test_na_ultima_hora_a_sonda_e_por_produto(self):
+        agora = datetime.now(timezone.utc)
+        recente = blocos.carimbo_de((agora - timedelta(minutes=20)).replace(second=0, microsecond=0, minute=(agora - timedelta(minutes=20)).minute // 10 * 10))
+        for chave in (("13", recente, 7200), ("13", recente, 3600), ("GEOCOLOR", recente, 7200)):
+            blocos._ausentes[chave] = time.time() + 300
+        # A banda 13 já saiu; o GEOCOLOR (o último) ainda não.
+        blocos._existe_no_star = lambda c, p=blocos.PRODUTO_SONDA: c == recente and p == "13"
+        self.assertIn(f"13/{recente}", blocos.sondar_publicados(agora))
+        self.assertNotIn(("13", recente, 7200), blocos._ausentes)
+        self.assertNotIn(("13", recente, 3600), blocos._ausentes)
+        self.assertIn(("GEOCOLOR", recente, 7200), blocos._ausentes)
+        self.assertNotIn(recente, blocos._publicados)
+
+    def test_v1_velho_sai_so_depois_de_existir_o_v2(self):
+        agora = datetime.now(timezone.utc)
+        velho = blocos.carimbo_de((agora - timedelta(hours=20)).replace(minute=0))
+        sem_v2 = blocos.carimbo_de((agora - timedelta(hours=21)).replace(minute=0))
+        novo = blocos.carimbo_de((agora - timedelta(hours=2)).replace(minute=0))
+        for c in (velho, sem_v2, novo):
+            os.makedirs(blocos.pasta_do_quadro("13", c, 7200, 1))
+        for c in (velho, novo):
+            os.makedirs(blocos.pasta_do_quadro("13", c, 7200, 2))
+        blocos.limpar(agora)
+        self.assertEqual(sorted(os.listdir(os.path.join(blocos.PASTAS[1], "13"))), sorted([sem_v2, novo]))
+        self.assertEqual(sorted(os.listdir(os.path.join(blocos.PASTAS[2], "13"))), sorted([velho, novo]))
 
     def test_ultimos_por_produto(self):
         for p, c in (("GEOCOLOR", "20262651200"), ("GEOCOLOR", "20262651220"), ("13", "20262650940")):

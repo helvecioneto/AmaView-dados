@@ -14,25 +14,34 @@ navegador baixa e decodifica só os da área visível.
   vizinho). O navegador desenha só o miolo de 512 px, e a suavização ao ampliar
   lê a sobra — sem emendas visíveis entre blocos; e a cor da borda, que a
   decodificação suaviza olhando o vizinho, sai igual à do arquivo inteiro.
+- **Progressivo (v2).** Os blocos do v2 saem em JPEG progressivo, também nos
+  coeficientes (`TJXOPT_PROGRESSIVE`, o `jpegtran -progressive`): os mesmos
+  pixels, ~24% menos bytes (a codificação de Huffman do progressivo é
+  otimizada). O v1, igual ao arquivo do STAR, só é cortado sob demanda, para
+  quem ainda tem o app antigo, e fica no disco só 12 h.
 - **Pré-corte.** A cada minuto, um HEAD no arquivo de 450 px de cada horário
   que falta nas últimas 6 h diz se o STAR o publicou — inclusive atrasado,
   depois de uma pane; publicado, todos os produtos dele são cortados na hora.
-  Os horários seguem a grade de 10 min (sem baixar a listagem de 1,1 MB), e o
-  resto das últimas 48 h é preenchido do mais novo para o mais velho.
-- `/blocos/v1/ultimos`: o horário mais recente já cortado de cada produto — o
-  app pergunta a cada minuto e recarrega quando há quadro novo.
+  Na última hora a sonda é por produto: as bandas saem minutos antes do
+  GEOCOLOR e são cortadas assim que aparecem. Os horários seguem a grade de
+  10 min (sem baixar a listagem de 1,1 MB), e o resto das últimas 48 h é
+  preenchido do mais novo para o mais velho.
+- `/blocos/v{1,2}/ultimos`: o horário mais recente já cortado (v2) de cada
+  produto — o app pergunta a cada minuto e recarrega quando há quadro novo.
 - **Sob demanda.** O nginx serve o bloco do disco; se ele ainda não existe, o
   pedido cai aqui, o quadro é cortado na hora (~0,2 s depois do download) e o
-  bloco volta na mesma resposta.
+  bloco volta na mesma resposta. Arquivo do STAR truncado (ainda sendo
+  publicado): baixa de novo uma vez; se continuar, 503 com Retry-After.
 - Só produtos, larguras e horários conhecidos (últimas 49 h); nada além do CDN
   do STAR é buscado.
 
   blocos.py                  serviço (porta 8090, só local; o nginx fica na frente)
   blocos.py cortar P C L     corta um quadro e sai (teste)
 
-URL: /blocos/v1/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg — é
-também o caminho no disco, abaixo de BLOCOS_RAIZ.
+URL: /blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg — é
+também o caminho no disco, abaixo de BLOCOS_RAIZ (v1: o mesmo, sem progressivo).
 """
+import contextlib
 import ctypes
 import ctypes.util
 import http.server
@@ -50,9 +59,11 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-VERSAO = 1
+# Versão pré-cortada (progressiva). A 1 (baseline, igual ao STAR) só sob demanda.
+VERSAO = 2
+VERSOES = (1, 2)
 RAIZ = os.environ.get("BLOCOS_RAIZ", "/var/cache/amaview-blocos")
-PASTA = os.path.join(RAIZ, "blocos", f"v{VERSAO}", "nsa")
+PASTAS = {v: os.path.join(RAIZ, "blocos", f"v{v}", "nsa") for v in VERSOES}
 PORTA = int(os.environ.get("BLOCOS_PORTA", "8090"))
 STAR = "https://cdn.star.nesdis.noaa.gov/GOES19/ABI/SECTOR/nsa"
 AGENTE = "AmaView-blocos (+https://helvecioneto.github.io/AmaView/)"
@@ -66,6 +77,14 @@ BLOCO = 512
 # Múltiplo do MCU (16 px no 4:2:0 do STAR): o corte continua sem perda.
 SOBRA = 16
 JANELA = timedelta(hours=49)
+# O v1 só serve o app antigo (sob demanda): 12 h bastam, e o disco não leva as
+# duas versões inteiras ao mesmo tempo (~93 GB + ~70 GB num disco de 193 GB).
+JANELA_V1 = timedelta(hours=float(os.environ.get("BLOCOS_JANELA_V1_H", "12")))
+# Transição: as últimas horas também são pré-cortadas no v1, para o app antigo
+# (em cache nos navegadores) não cair no corte sob demanda a cada quadro novo.
+# O v2 sai do v1 sem baixar de novo, então custa só ~0,4 s de CPU por quadro.
+# BLOCOS_PRECORTE_V1_H=0 desliga, quando ninguém mais pedir o v1.
+PRECORTE_V1 = timedelta(hours=float(os.environ.get("BLOCOS_PRECORTE_V1_H", "3")))
 # Pré-corte ligado por padrão; BLOCOS_AQUECER=0 deixa só o sob demanda.
 AQUECER = os.environ.get("BLOCOS_AQUECER", "1") != "0"
 TRABALHADORES_AQUECER = 6
@@ -73,7 +92,7 @@ TRABALHADORES_AQUECER = 6
 CORTES = threading.BoundedSemaphore(8)
 
 ROTA = re.compile(
-    r"^/blocos/v1/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/"
+    r"^/blocos/v(?P<versao>[12])/nsa/(?P<produto>[A-Za-z0-9]{2,24})/(?P<carimbo>\d{11})/"
     r"(?P<largura>\d{4})/(?P<linha>\d{1,2})_(?P<coluna>\d{1,2})\.jpg$"
 )
 
@@ -107,8 +126,8 @@ def carimbo_de(t: datetime) -> str:
     return f"{t.year:04d}{t.timetuple().tm_yday:03d}{t.hour:02d}{t.minute:02d}"
 
 
-def pasta_do_quadro(produto: str, carimbo: str, largura: int) -> str:
-    return os.path.join(PASTA, produto, carimbo, str(largura))
+def pasta_do_quadro(produto: str, carimbo: str, largura: int, versao: int = VERSAO) -> str:
+    return os.path.join(PASTAS[versao], produto, carimbo, str(largura))
 
 
 def url_star(produto: str, carimbo: str, largura: int) -> str:
@@ -141,6 +160,7 @@ class _Transformacao(ctypes.Structure):
 
 
 TJXOPT_CROP = 4
+TJXOPT_PROGRESSIVE = 32
 TJXOPT_COPYNONE = 64
 
 
@@ -169,19 +189,25 @@ def _carregar_turbojpeg():
 _tj = None
 
 
-def recortar(jpeg: bytes, regioes: list[tuple[int, int, int, int]]) -> list[bytes]:
-    """Recortes sem perda (x e y múltiplos do MCU; 512 serve para 4:4:4 a 4:2:0)."""
+def recortar(jpeg: bytes, regioes: list[tuple[int, int, int, int]], progressivo: bool = False) -> list[bytes]:
+    """
+    Recortes sem perda (x e y múltiplos do MCU; 512 serve para 4:4:4 a 4:2:0).
+    `progressivo`: reescreve os mesmos coeficientes em JPEG progressivo.
+    """
     global _tj
     if _tj is None:
         _tj = _carregar_turbojpeg()
     n = len(regioes)
     trans = (_Transformacao * n)()
+    opcoes = TJXOPT_CROP | TJXOPT_COPYNONE | (TJXOPT_PROGRESSIVE if progressivo else 0)
     for i, (x, y, w, h) in enumerate(regioes):
         trans[i].r = _Regiao(x, y, w, h)
-        trans[i].options = TJXOPT_CROP | TJXOPT_COPYNONE
+        trans[i].options = opcoes
     saidas = (ctypes.POINTER(ctypes.c_ubyte) * n)()
     tamanhos = (ctypes.c_ulong * n)()
-    origem = (ctypes.c_ubyte * len(jpeg)).from_buffer_copy(jpeg)
+    # Aponta para o próprio buffer do `bytes` (só leitura para a TurboJPEG), sem
+    # copiar os ~17 MB do quadro; `jpeg` segue vivo até o fim da chamada.
+    origem = ctypes.cast(ctypes.c_char_p(jpeg), ctypes.POINTER(ctypes.c_ubyte))
     h = _tj.tjInitTransform()
     try:
         if _tj.tjTransform(h, origem, len(jpeg), n, saidas, tamanhos, trans, 0) != 0:
@@ -216,7 +242,13 @@ class Ausente(Exception):
     """O STAR não tem (ainda) este quadro."""
 
 
-_travas: dict[tuple, threading.Lock] = {}
+class Truncado(Exception):
+    """O arquivo do STAR veio incompleto duas vezes (provavelmente ainda sendo publicado)."""
+
+
+# Trava por quadro, com contagem de quem a usa: some quando ninguém mais espera
+# (antes, uma por quadro cortado em 48 h ficava para sempre no dicionário).
+_travas: dict[tuple, list] = {}  # chave → [Lock, usuários]
 _travas_lock = threading.Lock()
 _estado = {
     "inicio": time.time(),
@@ -226,12 +258,26 @@ _estado = {
 }
 
 
-def _trava(chave: tuple) -> threading.Lock:
+@contextlib.contextmanager
+def _travado(chave: tuple):
     with _travas_lock:
         t = _travas.get(chave)
         if t is None:
-            t = _travas[chave] = threading.Lock()
-        return t
+            t = _travas[chave] = [threading.Lock(), 0]
+        t[1] += 1
+    try:
+        with t[0]:
+            yield
+    finally:
+        with _travas_lock:
+            t[1] -= 1
+            if t[1] == 0 and _travas.get(chave) is t:
+                del _travas[chave]
+
+
+def completo(jpeg: bytes) -> bool:
+    """Termina no marcador EOI? (o STAR às vezes serve o arquivo ainda sendo escrito)"""
+    return jpeg.rstrip(b"\0")[-2:] == b"\xff\xd9"
 
 
 def baixar(url: str) -> bytes:
@@ -252,32 +298,84 @@ def baixar(url: str) -> bytes:
     raise RuntimeError("inalcançável")
 
 
-def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido") -> str:
+# Espera antes de baixar de novo um arquivo do STAR que veio truncado.
+ESPERA_TRUNCADO = 3
+
+
+def baixar_inteiro(url: str) -> bytes:
+    """Baixa o JPEG; truncado (sem EOI), tenta mais uma vez e depois desiste (Truncado)."""
+    for tentativa in range(2):
+        jpeg = baixar(url)
+        if completo(jpeg):
+            return jpeg
+        if tentativa == 0:
+            time.sleep(ESPERA_TRUNCADO)
+    raise Truncado(f"{url}: {len(jpeg)} bytes, sem o fim do JPEG")
+
+
+def _gravar(destino: str, blocos: dict[str, bytes]) -> None:
+    """Escreve numa pasta temporária e renomeia: a pasta final só existe completa."""
+    temp = f"{destino}.parcial-{os.getpid()}-{threading.get_ident()}"
+    os.makedirs(temp, mode=0o755)
+    for nome, corpo in blocos.items():
+        with open(os.path.join(temp, nome), "wb") as f:
+            f.write(corpo)
+    os.rename(temp, destino)
+
+
+def _de_v1(anterior: str, destino: str, origem: str) -> str:
+    """
+    Transição v1 → v2: o quadro já cortado no v1 vira progressivo bloco a bloco,
+    sem baixar de novo do STAR (os coeficientes são os mesmos). Se o quadro já
+    passou da janela do v1, o v1 dele sai do disco na hora.
+    """
+    with CORTES:
+        t0 = time.time()
+        saida = {}
+        for nome in os.listdir(anterior):
+            if not nome.endswith(".jpg"):
+                continue
+            with open(os.path.join(anterior, nome), "rb") as f:
+                bloco = f.read()
+            w, h = dimensoes(bloco)
+            saida[nome] = recortar(bloco, [(0, 0, w, h)], progressivo=True)[0]
+        _gravar(destino, saida)
+        _estado["cortes"].append((time.time(), time.time() - t0, f"{origem}-v1"))
+    carimbo = os.path.basename(os.path.dirname(anterior))
+    with contextlib.suppress(ValueError):
+        if instante(carimbo) < datetime.now(timezone.utc) - JANELA_V1:
+            shutil.rmtree(anterior, ignore_errors=True)
+    return destino
+
+
+def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido", versao: int = VERSAO) -> str:
     """Garante os blocos do quadro no disco e devolve a pasta. Ausente se o STAR não tem."""
-    destino = pasta_do_quadro(produto, carimbo, largura)
+    destino = pasta_do_quadro(produto, carimbo, largura, versao)
     if os.path.isdir(destino):
         return destino
-    with _trava((produto, carimbo, largura)):
+    with _travado((versao, produto, carimbo, largura)):
         if os.path.isdir(destino):
             return destino
+        anterior = pasta_do_quadro(produto, carimbo, largura, 1)
+        if versao >= 2 and os.path.isdir(anterior):
+            return _de_v1(anterior, destino, origem)
         with CORTES:
             t0 = time.time()
-            jpeg = baixar(url_star(produto, carimbo, largura))
+            jpeg = baixar_inteiro(url_star(produto, carimbo, largura))
             if dimensoes(jpeg) != (largura, altura(largura)):
                 raise ValueError(f"tamanho inesperado em {produto} {carimbo} {largura}: {dimensoes(jpeg)}")
             linhas, colunas = grade(largura)
             regioes = [regiao(largura, r, c) for r in range(linhas) for c in range(colunas)]
-            blocos = recortar(jpeg, regioes)
-            # Escreve numa pasta temporária e renomeia: a pasta final só existe completa.
-            temp = f"{destino}.parcial-{os.getpid()}-{threading.get_ident()}"
-            os.makedirs(temp, mode=0o755)
-            i = 0
-            for r in range(linhas):
-                for c in range(colunas):
-                    with open(os.path.join(temp, f"{r}_{c}.jpg"), "wb") as f:
-                        f.write(blocos[i])
-                    i += 1
-            os.rename(temp, destino)
+            try:
+                blocos = recortar(jpeg, regioes, progressivo=versao >= 2)
+            except RuntimeError as e:
+                # A TurboJPEG ainda achou o arquivo curto (EOI no lugar mas dados faltando).
+                if "Premature end" in str(e):
+                    raise Truncado(str(e)) from None
+                raise
+            del jpeg
+            nomes = (f"{r}_{c}.jpg" for r in range(linhas) for c in range(colunas))
+            _gravar(destino, dict(zip(nomes, blocos)))
             _estado["cortes"].append((time.time(), time.time() - t0, origem))
         return destino
 
@@ -288,8 +386,10 @@ def cortar(produto: str, carimbo: str, largura: int, origem: str = "pedido") -> 
 _ausentes: dict[tuple, float] = {}  # (produto, carimbo, largura) → quando tentar de novo
 # Horários que a NOAA já publicou (vistos no STAR), com quando foram vistos.
 _publicados: dict[str, float] = {}
-# Última sonda de cada horário ainda não publicado.
-_sondados: dict[str, float] = {}
+# Produtos já vistos no STAR num horário ainda sem o produto padrão (última hora).
+_publicados_produto: dict[tuple[str, str], float] = {}
+# Última sonda de cada horário (ou (produto, horário)) ainda não publicado.
+_sondados: dict = {}
 
 # Sem publicação confirmada, quando tentar de novo um horário que o STAR não
 # tem: 5 min até 1 h de idade, 30 min até 6 h, depois 3 h (lacuna de verdade).
@@ -315,9 +415,15 @@ def espera_ausente(idade: timedelta, publicado: bool = False) -> int:
     return ESPERA_LACUNA
 
 
-def _existe_no_star(carimbo: str) -> bool:
-    """O STAR tem esse horário? Um HEAD no arquivo de 450 px do produto padrão."""
-    url = f"{STAR}/{PRODUTO_SONDA}/{carimbo}_GOES19-ABI-nsa-{PRODUTO_SONDA}-450x270.jpg"
+# Na última hora a sonda é por produto: o GEOCOLOR é o último que o STAR solta
+# (medido em 02/10/2026: banda 13 às 14:01, GEOCOLOR às 14:05), e esperar por
+# ele segurava as bandas 3–5 min. ~22 HEADs por horário faltante por minuto.
+JANELA_SONDA_PRODUTO = timedelta(hours=1)
+
+
+def _existe_no_star(carimbo: str, produto: str = PRODUTO_SONDA) -> bool:
+    """O STAR tem esse horário? Um HEAD no arquivo de 450 px do produto."""
+    url = f"{STAR}/{produto}/{carimbo}_GOES19-ABI-nsa-{produto}-450x270.jpg"
     pedido = urllib.request.Request(url, method="HEAD", headers={"User-Agent": AGENTE})
     try:
         with urllib.request.urlopen(pedido, timeout=15) as r:
@@ -329,44 +435,76 @@ def _existe_no_star(carimbo: str) -> bool:
 def sondar_publicados(agora: datetime) -> list[str]:
     """
     Horários da grade (últimas 6 h) que o STAR passou a ter desde a última
-    olhada: todos os produtos deles voltam para a fila já.
+    olhada: todos os produtos deles voltam para a fila já. Devolve os horários
+    (ou "produto/horário", na última hora) que acabaram de aparecer.
 
     Em 22/09/2026 o GOES-19 parou às 09:50 UTC (manutenção no solo da NOAA) e
     voltou às 13h soltando os quadros das 12:00–12:20 de uma vez — sem mexer
     no `latest.jpg`, que ficou em 09:55. Sondar o próprio horário é o único
     sinal que enxerga quadro atrasado. Custo: um HEAD por horário faltante por
-    minuto (1–2 em regime, ~36 durante uma pane de 6 h).
+    minuto (1–2 em regime, ~36 durante uma pane de 6 h); na última hora, um por
+    produto ainda faltante (as bandas saem antes do GEOCOLOR).
     """
     base = agora.replace(minute=agora.minute - agora.minute % 10, second=0, microsecond=0)
     novos = []
+    sondas: list[tuple[str, str | None]] = []  # (horário, produto | None = o horário todo)
     passos = int(JANELA_ATRASADOS.total_seconds() // 600)
     for k in range(passos + 1):
-        c = carimbo_de(base - timedelta(minutes=10 * k))
+        t = base - timedelta(minutes=10 * k)
+        c = carimbo_de(t)
         if c in _publicados or os.path.isdir(pasta_do_quadro(PRODUTO_SONDA, c, 7200)):
             continue
-        if time.time() - _sondados.get(c, 0) < SONDA_A_CADA:
+        if agora - t < JANELA_SONDA_PRODUTO:
+            for p in PRODUTOS:
+                if (p, c) in _publicados_produto or os.path.isdir(pasta_do_quadro(p, c, 7200)):
+                    continue
+                if time.time() - _sondados.get((p, c), 0) < SONDA_A_CADA:
+                    continue
+                _sondados[(p, c)] = time.time()
+                sondas.append((c, p))
+        elif time.time() - _sondados.get(c, 0) >= SONDA_A_CADA:
+            _sondados[c] = time.time()
+            sondas.append((c, None))
+    if not sondas:
+        return novos
+    with ThreadPoolExecutor(8, thread_name_prefix="sonda") as pool:
+        achados = list(pool.map(lambda s: _existe_no_star(s[0]) if s[1] is None else _existe_no_star(s[0], s[1]), sondas))
+    for (c, p), existe in zip(sondas, achados):
+        if not existe:
             continue
-        _sondados[c] = time.time()
-        if _existe_no_star(c):
+        if p is None or p == PRODUTO_SONDA:
+            # O produto padrão (o último a sair) apareceu: o horário todo está publicado.
             _publicados[c] = time.time()
             _sondados.pop(c, None)
             novos.append(c)
             for chave in [k2 for k2 in _ausentes if k2[1] == c]:
                 _ausentes.pop(chave, None)
+        else:
+            _publicados_produto[(p, c)] = time.time()
+            _sondados.pop((p, c), None)
+            novos.append(f"{p}/{c}")
+            for chave in [k2 for k2 in _ausentes if k2[0] == p and k2[1] == c]:
+                _ausentes.pop(chave, None)
     return novos
 
 
 def ultimos() -> dict[str, str]:
-    """Horário mais recente já cortado de cada produto (o app usa para saber que há quadro novo)."""
+    """
+    Horário mais recente já cortado de cada produto (o app usa para saber que
+    há quadro novo). Conta o v2 (pré-cortado); o v1 só entra na transição, para
+    produto que ainda não tenha nada no v2.
+    """
     out = {}
     for p in PRODUTOS:
-        pasta = os.path.join(PASTA, p)
-        try:
-            prontos = [c for c in os.listdir(pasta) if len(c) == 11 and c.isdigit() and os.path.isdir(os.path.join(pasta, c, "7200"))]
-        except FileNotFoundError:
-            continue
-        if prontos:
-            out[p] = max(prontos)
+        for v in sorted(VERSOES, reverse=True):
+            pasta = os.path.join(PASTAS[v], p)
+            try:
+                prontos = [c for c in os.listdir(pasta) if len(c) == 11 and c.isdigit() and os.path.isdir(os.path.join(pasta, c, "7200"))]
+            except FileNotFoundError:
+                continue
+            if prontos:
+                out[p] = max(prontos)
+                break
     return out
 
 
@@ -390,11 +528,18 @@ def _pendentes(agora: datetime) -> list[tuple[str, str, int]]:
 def _aquecer_um(chave: tuple[str, str, int]) -> None:
     p, c, w = chave
     try:
+        if datetime.now(timezone.utc) - instante(c) < PRECORTE_V1:
+            cortar(p, c, w, origem="pre", versao=1)
         cortar(p, c, w, origem="pre")
         _ausentes.pop(chave, None)
     except Ausente:
         # O sinal principal é a sonda do horário (sondar_publicados); isto é a rede de segurança.
-        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c), c in _publicados)
+        publicado = c in _publicados or (p, c) in _publicados_produto
+        _ausentes[chave] = time.time() + espera_ausente(datetime.now(timezone.utc) - instante(c), publicado)
+    except Truncado as e:
+        # O STAR ainda está escrevendo o arquivo: daqui a um minuto ele está inteiro.
+        _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
+        _ausentes[chave] = time.time() + ESPERA_PUBLICADO
     except Exception as e:  # noqa: BLE001 — o laço não pode morrer
         _estado["falhas"] += 1
         _estado["ultimo_erro"] = f"{datetime.now(timezone.utc):%H:%M:%S} {p} {c} {w}: {e}"
@@ -402,31 +547,47 @@ def _aquecer_um(chave: tuple[str, str, int]) -> None:
 
 
 def limpar(agora: datetime) -> int:
-    """Apaga quadros fora da janela e restos de cortes interrompidos."""
+    """
+    Apaga quadros fora da janela (v2: 49 h; v1: 12 h, desde que o v2 do mesmo
+    quadro já exista) e restos de cortes interrompidos.
+    """
     removidos = 0
     limite = agora - JANELA
-    if not os.path.isdir(PASTA):
-        return 0
-    for p in os.listdir(PASTA):
-        pp = os.path.join(PASTA, p)
-        for c in os.listdir(pp):
-            cp = os.path.join(pp, c)
-            try:
-                velho = instante(c) < limite
-            except ValueError:
-                velho = True
-            if velho:
-                shutil.rmtree(cp, ignore_errors=True)
-                removidos += 1
-                continue
-            for w in os.listdir(cp):
-                if ".parcial-" in w and time.time() - os.path.getmtime(os.path.join(cp, w)) > 600:
-                    shutil.rmtree(os.path.join(cp, w), ignore_errors=True)
+    limite_v1 = agora - JANELA_V1
+    for v in VERSOES:
+        raiz = PASTAS[v]
+        if not os.path.isdir(raiz):
+            continue
+        for p in os.listdir(raiz):
+            pp = os.path.join(raiz, p)
+            for c in os.listdir(pp):
+                cp = os.path.join(pp, c)
+                try:
+                    t = instante(c)
+                    velho = t < limite
+                except ValueError:
+                    velho = True
+                if velho:
+                    shutil.rmtree(cp, ignore_errors=True)
+                    removidos += 1
+                    continue
+                for w in os.listdir(cp):
+                    wp = os.path.join(cp, w)
+                    if ".parcial-" in w:
+                        if time.time() - os.path.getmtime(wp) > 600:
+                            shutil.rmtree(wp, ignore_errors=True)
+                    elif v < VERSAO and t < limite_v1 and w.isdigit() and os.path.isdir(pasta_do_quadro(p, c, int(w))):
+                        shutil.rmtree(wp, ignore_errors=True)
+                with contextlib.suppress(OSError):
+                    os.rmdir(cp)  # só se ficou vazia
     for chave in [k for k in _ausentes if instante(k[1]) < limite]:
         _ausentes.pop(chave, None)
-    for mapa in (_publicados, _sondados):
-        for c in [c for c in mapa if instante(c) < limite]:
-            mapa.pop(c, None)
+    for c in [c for c in _publicados if instante(c) < limite]:
+        _publicados.pop(c, None)
+    for chave in [k for k in _publicados_produto if instante(k[1]) < limite]:
+        _publicados_produto.pop(chave, None)
+    for chave in [k for k in _sondados if instante(k[1] if isinstance(k, tuple) else k) < limite]:
+        _sondados.pop(chave, None)
     return removidos
 
 
@@ -435,7 +596,8 @@ def aquecer_para_sempre() -> None:
         ultima_limpeza = 0.0
         while True:
             agora = datetime.now(timezone.utc)
-            if time.time() - ultima_limpeza > 1800:
+            # A cada 10 min: na transição v1 → v2, o v1 já convertido sai logo do disco.
+            if time.time() - ultima_limpeza > 600:
                 limpar(agora)
                 ultima_limpeza = time.time()
             sondar_publicados(agora)
@@ -470,19 +632,26 @@ def saude() -> dict:
 class Pedido(http.server.BaseHTTPRequestHandler):
     server_version = "AmaView-blocos"
 
-    def _responder(self, codigo: int, corpo: bytes, tipo: str, cache: str) -> None:
-        self.send_response(codigo)
-        self.send_header("Content-Type", tipo)
-        self.send_header("Content-Length", str(len(corpo)))
-        self.send_header("Cache-Control", cache)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Timing-Allow-Origin", "*")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(corpo)
+    def _responder(self, codigo: int, corpo: bytes, tipo: str, cache: str, extras: dict | None = None) -> None:
+        try:
+            self.send_response(codigo)
+            self.send_header("Content-Type", tipo)
+            self.send_header("Content-Length", str(len(corpo)))
+            self.send_header("Cache-Control", cache)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Timing-Allow-Origin", "*")
+            for nome, valor in (extras or {}).items():
+                self.send_header(nome, valor)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(corpo)
+        except (BrokenPipeError, ConnectionResetError):
+            # O navegador desistiu (mexeu no mapa) enquanto o quadro era cortado: normal.
+            self.close_connection = True
+            sys.stderr.write(f"{self.address_string()} \"{self.requestline}\" cancelado pelo cliente\n")
 
-    def _erro(self, codigo: int, texto: str, cache: str = "no-store") -> None:
-        self._responder(codigo, texto.encode(), "text/plain; charset=utf-8", cache)
+    def _erro(self, codigo: int, texto: str, cache: str = "no-store", extras: dict | None = None) -> None:
+        self._responder(codigo, texto.encode(), "text/plain; charset=utf-8", cache, extras)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
@@ -491,13 +660,13 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         caminho = self.path.split("?", 1)[0]
         if caminho == "/blocos/saude":
             return self._responder(200, json.dumps(saude()).encode(), "application/json", "no-store")
-        if caminho == "/blocos/v1/ultimos":
+        if caminho in ("/blocos/v1/ultimos", "/blocos/v2/ultimos"):
             # O app pergunta a cada minuto se há quadro novo: vale mais que o latest.jpg do STAR.
             return self._responder(200, json.dumps(ultimos()).encode(), "application/json", "no-store")
         m = ROTA.match(caminho)
         if not m:
             return self._erro(404, "rota desconhecida")
-        produto, carimbo = m["produto"], m["carimbo"]
+        produto, carimbo, versao = m["produto"], m["carimbo"], int(m["versao"])
         largura, linha, coluna = int(m["largura"]), int(m["linha"]), int(m["coluna"])
         if produto not in PRODUTOS or largura not in LARGURAS:
             return self._erro(404, "produto ou largura desconhecidos")
@@ -512,10 +681,14 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         if not (agora - JANELA <= t <= agora + timedelta(minutes=10)):
             return self._erro(404, "fora das últimas 48 h")
         try:
-            pasta = cortar(produto, carimbo, largura)
+            pasta = cortar(produto, carimbo, largura, versao=versao)
         except Ausente:
             # Pode sair daqui a pouco: cache curto, para o navegador tentar de novo.
             return self._erro(404, "o STAR ainda não publicou este quadro", "public, max-age=60")
+        except Truncado as e:
+            # O STAR ainda está escrevendo o arquivo: não é falha deste servidor.
+            _estado["ultimo_erro"] = f"{agora:%H:%M:%S} {produto} {carimbo} {largura}: {e}"
+            return self._erro(503, "o STAR ainda está publicando este quadro", "no-store", {"Retry-After": "30"})
         except Exception as e:  # noqa: BLE001
             _estado["falhas"] += 1
             _estado["ultimo_erro"] = f"{agora:%H:%M:%S} {produto} {carimbo} {largura}: {e}"
@@ -523,6 +696,11 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         with open(os.path.join(pasta, f"{linha}_{coluna}.jpg"), "rb") as f:
             corpo = f.read()
         self._responder(200, corpo, "image/jpeg", "public, max-age=31536000, immutable")
+
+    def handle(self) -> None:
+        # A conexão caída depois da resposta (no flush final) também não vira traceback.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            super().handle()
 
     def log_message(self, formato: str, *args) -> None:
         # Só o que passou pelo corte sob demanda chega aqui; uma linha curta basta.
@@ -535,12 +713,12 @@ def main() -> None:
         pasta = cortar(sys.argv[2], sys.argv[3], int(sys.argv[4]))
         print(f"{pasta}: {len(os.listdir(pasta))} blocos em {time.time() - t0:.2f} s")
         return
-    os.makedirs(PASTA, exist_ok=True)
+    os.makedirs(PASTAS[VERSAO], exist_ok=True)
     if AQUECER:
         threading.Thread(target=aquecer_para_sempre, name="pre-corte", daemon=True).start()
     servidor = http.server.ThreadingHTTPServer(("127.0.0.1", PORTA), Pedido)
     servidor.daemon_threads = True
-    print(f"blocos v{VERSAO} em 127.0.0.1:{PORTA}, disco em {PASTA}, pré-corte {'ligado' if AQUECER else 'desligado'}")
+    print(f"blocos v{VERSAO} em 127.0.0.1:{PORTA}, disco em {PASTAS[VERSAO]}, pré-corte {'ligado' if AQUECER else 'desligado'}")
     servidor.serve_forever()
 
 

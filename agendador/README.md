@@ -75,31 +75,49 @@ quadro de 7200 px: ~0,4 MB em blocos contra 7,3 MB do arquivo inteiro.
 - **Sobra de 16 px** do vizinho em cada lado do bloco (múltiplo do MCU, então
   ainda sem perda). O AmaView desenha só o miolo de 512 px; a suavização ao
   ampliar lê a sobra e não aparecem emendas. Custa ~13% a mais de bytes.
+- **JPEG progressivo (v2, desde 02/10/2026).** Os blocos do `/blocos/v2/` são
+  reescritos em progressivo, também nos coeficientes (`TJXOPT_PROGRESSIVE`, o
+  `jpegtran -progressive`): decodificam pixel a pixel iguais aos do v1 e pesam
+  menos, porque a codificação de Huffman do progressivo é otimizada. Medido num
+  quadro de 7200 px de dia: GEOCOLOR 19,8 → 15,1 MB (−24%), banda 02 19,1 →
+  13,8 MB (−28%), banda 13 10,4 → 8,3 MB (−20%). Custo: ~1 s de CPU por quadro
+  de 7200 px no ARM (antes 0,4 s). O `/blocos/v1/` (baseline, igual ao arquivo
+  do STAR) segue para o app antigo: as últimas 3 h são pré-cortadas nele
+  (`BLOCOS_PRECORTE_V1_H`), o resto é cortado sob demanda, e o disco guarda só
+  12 h dele (`BLOCOS_JANELA_V1_H`). O v2 de um quadro que já existe no v1 sai
+  dele, sem baixar de novo do STAR.
 - **Pré-corte.** A cada minuto, um HEAD no arquivo de 450 px de cada horário
   que falta nas últimas 6 h (grade de 10 min, sem baixar a listagem de 1,1 MB)
   diz se o STAR o publicou; publicado, todos os produtos dele são cortados na
-  hora, e o produto que ainda não chegou é tentado de novo a cada minuto. O
+  hora, e o produto que ainda não chegou é tentado de novo a cada minuto. Na
+  última hora a sonda é por produto: o GEOCOLOR é o último que o STAR solta
+  (as bandas saem 3–5 min antes), e esperar por ele segurava as bandas. O
   `latest.jpg` do STAR não serve de sinal: em 22/09/2026 o GOES-19 parou das
   09:50 às 13h (manutenção no solo da NOAA) e voltou soltando os quadros das
   12:00–12:20 sem mexer nele. O resto das últimas 48 h é preenchido do mais
   novo para o mais velho. Em regime: ~240 MB baixados do STAR a cada 10 min,
-  ~85 GB em disco.
-- **`/blocos/v1/ultimos`**: o horário mais recente já cortado de cada produto.
+  ~70 GB em disco (v2) mais ~25 GB das 12 h do v1.
+- **`/blocos/v2/ultimos`** (e `/blocos/v1/ultimos`, o mesmo conteúdo): o
+  horário mais recente já cortado de cada produto.
   O AmaView pergunta a cada minuto e recarrega as listagens quando há quadro
   novo — sem depender do `latest.jpg`.
 - **Sob demanda.** O nginx serve o bloco do disco; se ainda não existe (horário
   fora da grade, pré-corte atrasado), o pedido cai no `blocos.py`, que corta o
-  quadro na hora e devolve o bloco (~2 s, quase tudo download).
+  quadro na hora e devolve o bloco (~2 s, quase tudo download). Se o arquivo
+  do STAR vier truncado (ainda sendo publicado), baixa de novo uma vez; se
+  continuar, responde **503 com `Retry-After: 30`** — não é falha deste
+  servidor. O pré-corte tenta de novo em 1 min.
 - **Se esta máquina cair**, o AmaView volta sozinho ao JPEG inteiro do STAR.
 
 | Peça | Onde |
 |---|---|
 | `blocos/blocos.py` | serviço (só local, porta 8090), pré-corte e limpeza (> 49 h) |
-| `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`) |
+| `blocos/amaview-blocos.service` | unidade systemd (usuário `amaview-blocos`, `/var/cache/amaview-blocos`, `MemoryMax=6G`, `MALLOC_ARENA_MAX=2`) |
 | `blocos/nginx-*.conf` | site do nginx: disco primeiro, `@blocos` no que falta; CORS e cache imutável |
 
-URL: `/blocos/v1/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
-(dia juliano, UTC, como nos arquivos do STAR). Saúde: `/blocos/saude`.
+URL: `/blocos/v2/nsa/{produto}/{AAAADDDHHMM}/{largura}/{linha}_{coluna}.jpg`
+(dia juliano, UTC, como nos arquivos do STAR; `v1` no lugar de `v2` dá o
+baseline). Saúde: `/blocos/saude`.
 
 O `amaview instalar` instala e atualiza tudo; `amaview` mostra a situação. O
 HTTPS (o AmaView é servido por HTTPS e o navegador recusa blocos por HTTP) tem

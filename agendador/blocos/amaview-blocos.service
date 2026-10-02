@@ -14,11 +14,16 @@ CacheDirectoryMode=0755
 UMask=0022
 Environment=BLOCOS_RAIZ=/var/cache/amaview-blocos
 Environment=PYTHONUNBUFFERED=1
+# Poucas arenas do malloc: com uma por thread (pré-corte, sonda, pedidos), a
+# memória presa crescia até o teto do cgroup.
+Environment=MALLOC_ARENA_MAX=2
 Restart=always
 RestartSec=5
 # O corte é trabalho de fundo: o agendador e o nginx vêm primeiro.
 Nice=5
-MemoryMax=4G
+# Em 02/10/2026 o serviço vivia no teto de 4G (1,8 GB do processo + cache de
+# arquivos), com o kernel recuperando memória o tempo todo. A VM tem 23 GB.
+MemoryMax=6G
 
 NoNewPrivileges=true
 ProtectSystem=strict
