@@ -57,7 +57,18 @@ jobs:
       - name: Testes
         run: node --test scripts/serie.test.mjs scripts/cemaden.test.mjs scripts/navios.test.mjs scripts/rios.test.mjs scripts/radar.test.mjs
 
+      # `continue-on-error` (09/10/2026): este passo abortava o job, e com ele
+      # o radar, os rios e as embarcações, que vêm depois — a PED do CEMADEN
+      # respondendo 500 por horas deixou o radar parado no ar. Agora uma UF
+      # fora não derruba o script (as estações herdam o ciclo anterior), e se
+      # ele falhar mesmo assim, o passo "Preservar o CEMADEN" põe de volta a
+      # grade que está no ar e o resto do ciclo publica normalmente.
       - name: Buscar o CEMADEN e montar a grade
+        id: cemaden
+        continue-on-error: true
+        # Normal: ~20 s. Com a PED lenta, 9 UFs × 3 tentativas a 12 req/min
+        # chegam a ~3 min; acima disso, é melhor publicar a grade do ar.
+        timeout-minutes: 8
         env:
           # O JWT da PED é de vida curta e o `exp` não é confiável, então o que
           # fica guardado são as credenciais: cada ciclo pede um token novo.
@@ -66,9 +77,12 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
         run: node scripts/build.mjs
 
-      # Se o passo acima falhar, o job para aqui e NADA é publicado: a versão
-      # anterior continua no ar.
+      # Grade inválida conta como falha do CEMADEN: o passo seguinte a troca
+      # pela que está no ar.
       - name: Conferir a grade
+        id: conferir
+        if: steps.cemaden.outcome == 'success'
+        continue-on-error: true
         run: |
           set -e
           for f in site/cemaden/estacoes.json site/cemaden/serie.json site/cemaden/manifest.json; do
@@ -80,6 +94,18 @@ jobs:
             if (j.v.some((l) => l.length !== j.slots)) throw new Error("linha com tamanho errado");
             console.log(`grade validada: ${j.v.length} x ${j.slots}`);
           '
+
+      # Sem `continue-on-error`, pela regra dos vizinhos: publicar sem a pasta
+      # apagaria a chuva do ar; falhar mantém a publicação anterior. A pasta
+      # sai antes, para o preservar não manter um arquivo pela metade.
+      - name: Preservar o CEMADEN
+        if: steps.cemaden.outcome != 'success' || steps.conferir.outcome != 'success'
+        env:
+          BASE_URL: ${{ vars.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados' }}
+        run: |
+          echo "::warning title=CEMADEN::ciclo sem grade nova; publicando a que está no ar"
+          rm -rf site/cemaden
+          node scripts/preservar.mjs cemaden
 
       # As embarcações rodam DENTRO deste ciclo, e não num workflow próprio.
       #

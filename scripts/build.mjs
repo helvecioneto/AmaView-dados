@@ -159,13 +159,28 @@ async function viaToken(TOKEN, fim, anterior) {
   // recusa, pedimos outro e repetimos só a UF que falhou (`comRenovacao`).
   let token = TOKEN;
   const leituras = [];
+  // Uma UF que falha mesmo depois das tentativas (a PED responde "HTTP 500 — Falha na comunicação
+  // com o servidor" por horas, uma UF de cada vez, como em 09/10/2026) NÃO derruba o ciclo: antes,
+  // o erro abortava o job inteiro e nada era publicado — nem a chuva das outras UFs, nem o radar,
+  // os rios e as embarcações, que vêm depois no mesmo workflow. As estações dela ficam sem leitura
+  // e herdam a linha do ciclo anterior (`herdarVazias`, abaixo). Só com TODAS as UFs fora o ciclo
+  // falha (aí é a PED inteira, ou a credencial).
+  const falharam = [];
   for (const uf of UFS_AMAZONIA) {
-    const r = await comRenovacao((t) => dadosRede(t, uf, inicio, fim), token, EMAIL && SENHA ? obterToken : null, { rotulo: uf });
-    token = r.token;
-    const dados = r.resultado;
-    leituras.push(...dados);
-    console.log(`  ${uf}: ${dados.length} leituras`);
+    try {
+      const r = await comRenovacao((t) => dadosRede(t, uf, inicio, fim), token, EMAIL && SENHA ? obterToken : null, { rotulo: uf });
+      token = r.token;
+      const dados = r.resultado;
+      leituras.push(...dados);
+      console.log(`  ${uf}: ${dados.length} leituras`);
+    } catch (e) {
+      falharam.push(uf);
+      const motivo = String(e.message).split('\n')[0];
+      console.warn(`  ${uf}: FALHOU (${motivo}) — as estações herdam o ciclo anterior`);
+      if (process.env.GITHUB_ACTIONS) console.log(`::warning title=CEMADEN ${uf}::${motivo}`);
+    }
   }
+  if (falharam.length === UFS_AMAZONIA.length) throw new Error(`nenhuma UF respondeu (${falharam.join(', ')})`);
 
   const codigos = estacoes.map((e) => e.cod);
   const grade = gradeDeLeituras(codigos, leituras, fim);
@@ -178,7 +193,7 @@ async function viaToken(TOKEN, fim, anterior) {
   const { herdadas, v } = herdarVazias(grade, codigos, anterior);
   if (herdadas > 0) console.log(`  ${herdadas} estações herdaram a linha do ciclo anterior`);
 
-  return { estacoes, codigos, t0: grade.t0, v, grandeza: 'chuva10min', modo: 'ped' };
+  return { estacoes, codigos, t0: grade.t0, v, grandeza: 'chuva10min', modo: 'ped', ufsSemResposta: falharam };
 }
 
 /**
@@ -309,6 +324,8 @@ async function main() {
     medidas: stats.com,
     comChuva: stats.chuva,
     ufs: UFS_AMAZONIA,
+    // As UFs que a PED não respondeu neste ciclo (estações com a linha do ciclo anterior).
+    ...(r.ufsSemResposta?.length ? { ufsSemResposta: r.ufsSemResposta } : {}),
     duracaoMs: Date.now() - inicioExec,
   });
 
@@ -332,6 +349,7 @@ async function main() {
         `| | |`,
         `|---|---|`,
         `| Modo | \`${r.modo}\` (${r.grandeza}) |`,
+        ...(r.ufsSemResposta?.length ? [`| UFs sem resposta | ${r.ufsSemResposta.join(', ')} (herdaram o ciclo anterior) |`] : []),
         `| Estações | ${r.codigos.length} |`,
         `| Células com medição | ${stats.com} de ${stats.total} (${cobertura}%) |`,
         `| Células com chuva | ${stats.chuva} |`,
