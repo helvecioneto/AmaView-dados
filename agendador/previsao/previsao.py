@@ -421,8 +421,13 @@ def ifs_pronta(t: datetime) -> bool:
     try:
         baixar(ifs_base(t, IFS_PASSOS[-1]) + ".index", metodo="HEAD", tentativas=1)
         return True
-    except urllib.error.HTTPError:
-        return False
+    except urllib.error.HTTPError as e:
+        # 404/403: ainda não publicada. Qualquer outra coisa (429 que não passou
+        # com as esperas, erro do servidor) não diz nada sobre a rodada: sobe, e
+        # a execução tenta de novo daqui a 20 min — sem pular para uma mais velha.
+        if e.code in (403, 404):
+            return False
+        raise
 
 
 def ifs_rodada(t: datetime, ec: Eccodes) -> tuple[list[int], dict]:

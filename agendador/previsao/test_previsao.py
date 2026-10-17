@@ -358,6 +358,17 @@ class Ifs(Temp):
         ):
             self.assertEqual(previsao.ifs_andar(st, datetime(2026, 10, 17, 15, tzinfo=UTC), None), "em dia")
 
+    def test_429_na_conferencia_nao_pula_para_a_mais_velha(self):
+        st = {}
+
+        def pronta(t):
+            raise previsao.urllib.error.HTTPError("u", 429, "x", {}, None)
+
+        with mock.patch.object(previsao, "ifs_pronta", pronta), mock.patch.object(previsao, "ifs_rodada", side_effect=AssertionError("não devia baixar")):
+            with self.assertRaises(previsao.urllib.error.HTTPError):
+                previsao.ifs_andar(st, datetime(2026, 10, 17, 15, tzinfo=UTC), None)
+        self.assertNotIn("feitas", st)
+
     def test_falha_marca_a_rodada(self):
         st = {}
         with mock.patch.object(previsao, "ifs_pronta", lambda t: True), mock.patch.object(
