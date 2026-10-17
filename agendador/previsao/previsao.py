@@ -69,7 +69,9 @@ ESPERA_FALHA_S = 1800
 IFS_URL = "https://data.ecmwf.int/forecasts"
 IFS_PASSOS = list(range(0, 145, 3)) + list(range(150, 361, 6))
 # Downloads simultâneos (intervalos de bytes) no servidor de dados abertos.
-IFS_PARALELO = 4
+IFS_PARALELO = 2
+# Esperas seguidas por um 429 antes de desistir do arquivo (e da rodada).
+TENTATIVAS_429 = 5
 ADS_URL = "https://ads.atmosphere.copernicus.eu/api/retrieve/v1"
 ADS_CONJUNTO = "cams-global-atmospheric-composition-forecasts"
 CAMS_PASSOS = list(range(0, 121, 3))
@@ -360,20 +362,36 @@ def limpar(modelo: str) -> None:
 # Rede
 
 
+def espera_429(e: urllib.error.HTTPError, i: int) -> float:
+    """Quanto esperar depois de um 429: o `Retry-After` do servidor (até 2 min) ou 15 s, 30 s, 60 s…"""
+    try:
+        return min(120.0, max(1.0, float(e.headers.get("Retry-After", ""))))
+    except (TypeError, ValueError):
+        return min(120.0, 15.0 * 2**i)
+
+
 def baixar(url: str, cabecalhos: dict | None = None, dados: bytes | None = None, tentativas: int = 3, metodo: str | None = None) -> bytes:
     pedido = urllib.request.Request(url, data=dados, headers={"User-Agent": AGENTE, **(cabecalhos or {})}, method=metodo)
-    for i in range(tentativas):
+    # "Too Many Requests" (o servidor aberto do ECMWF limita; medido em 17/10/2026,
+    # depois de ~1.800 pedidos em pouco tempo): espera e tenta de novo, mais vezes
+    # que os erros do servidor.
+    i = limite = 0
+    while True:
         try:
             with urllib.request.urlopen(pedido, timeout=120) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
+            if e.code == 429 and limite < TENTATIVAS_429:
+                time.sleep(espera_429(e, limite))
+                limite += 1
+                continue
             if e.code < 500 or i == tentativas - 1:
                 raise
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             if i == tentativas - 1:
                 raise
         time.sleep(2 + 4 * i)
-    raise RuntimeError("inalcançável")
+        i += 1
 
 
 def rodadas_candidatas(agora: datetime, n: int = 4) -> list[datetime]:
@@ -504,23 +522,29 @@ def cams_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = 
         print(f"cams {pedido['rodada']}: {CAMS_DESISTIR_S // 3600} h na fila do ADS — refazendo", file=sys.stderr)
         pedido = None
     if not pedido:
+        falhas = estado.setdefault("falhas", {})
         if forcar:
-            alvo = forcar
+            alvos = [forcar]
         else:
-            falhas = estado.get("falhas", {})
-            # A mais nova ainda não feita, que não falhou há pouco; nunca volta para trás da última feita.
+            # Da mais nova para a mais velha, as ainda não feitas que não falharam
+            # há pouco; nunca volta para trás da última feita.
             ultima = max(feitas) if feitas else ""
-            alvo = next(
-                (
-                    n
-                    for n in map(nome_rodada, rodadas_candidatas(agora, 2))
-                    if n > ultima and time.time() - falhas.get(n, 0) > ESPERA_FALHA_S
-                ),
-                None,
-            )
-        if not alvo:
-            return "em dia"
-        r = ads(f"/processes/{ADS_CONJUNTO}/execution", chave, cams_pedido(instante_rodada(alvo)))
+            alvos = [n for n in map(nome_rodada, rodadas_candidatas(agora, 2)) if n > ultima and time.time() - falhas.get(n, 0) > ESPERA_FALHA_S]
+        r = None
+        for alvo in alvos:
+            try:
+                r = ads(f"/processes/{ADS_CONJUNTO}/execution", chave, cams_pedido(instante_rodada(alvo)))
+                break
+            except urllib.error.HTTPError as e:
+                # 400: a rodada ainda não está no ADS (a de 12 UTC só entra à noite) —
+                # marca e pede a anterior nesta mesma execução.
+                if e.code not in (400, 404):
+                    raise
+                falhas[alvo] = time.time()
+                estado["erro"] = f"{alvo}: {e.code} {e.read().decode(errors='replace')[:200]}"
+                print(f"cams {alvo}: recusada pelo ADS ({e.code}) — tentando a anterior", file=sys.stderr)
+        if r is None:
+            return "em dia" if not alvos else "nenhuma rodada disponível no ADS"
         pedido = {"rodada": alvo, "job": r["jobID"], "desde": time.time()}
         estado["pedido"] = pedido
         print(f"cams {alvo}: pedido {r['jobID']} ({r.get('status')})")

@@ -4,6 +4,7 @@ ADS e o ECMWF são trocados por funções.
 
   python3 -m unittest discover -s agendador/previsao
 """
+import io
 import json
 import os
 import shutil
@@ -244,6 +245,25 @@ class Cams(Temp):
         with mock.patch.object(previsao, "ads", side_effect=AssertionError("não devia chamar")):
             self.assertEqual(previsao.cams_andar(st, self.agora, None), "em dia")
 
+    def test_rodada_ainda_fora_do_ads_pede_a_anterior(self):
+        st = {}
+        tentadas = []
+
+        def ads(caminho, chave, corpo=None):
+            if caminho.endswith("/execution"):
+                tentadas.append(corpo["inputs"]["time"][0])
+                if corpo["inputs"]["time"] == ["12:00"]:
+                    raise previsao.urllib.error.HTTPError(caminho, 400, "x", {}, io.BytesIO(b"date not available"))
+                return {"jobID": "j00", "status": "accepted"}
+            return {"status": "accepted"}
+
+        with mock.patch.object(previsao, "ads", ads):
+            r = previsao.cams_andar(st, self.agora, None)
+        self.assertEqual(tentadas, ["12:00", "00:00"])
+        self.assertIn("2026101700 na fila", r)
+        self.assertIn("2026101712", st["falhas"])
+        self.assertIn("date not available", st["erro"])
+
     def test_falha_espera_antes_de_tentar_de_novo(self):
         st = {"pedido": {"rodada": "2026101712", "job": "j9", "desde": time.time()}}
 
@@ -281,6 +301,42 @@ class Cams(Temp):
         with mock.patch.object(previsao, "ads", ads):
             previsao.cams_andar(st, self.agora, None)
         self.assertEqual(st["pedido"]["job"], "novo")
+
+
+class Rede(unittest.TestCase):
+    def test_429_espera_e_tenta_de_novo(self):
+        respostas = [
+            previsao.urllib.error.HTTPError("u", 429, "x", {"Retry-After": "3"}, None),
+            previsao.urllib.error.HTTPError("u", 429, "x", {}, None),
+        ]
+
+        class Ok:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"dado"
+
+        def urlopen(pedido, timeout):
+            if respostas:
+                raise respostas.pop(0)
+            return Ok()
+
+        esperas = []
+        with mock.patch.object(previsao.urllib.request, "urlopen", urlopen), mock.patch.object(previsao.time, "sleep", esperas.append):
+            self.assertEqual(previsao.baixar("https://x"), b"dado")
+        self.assertEqual(esperas, [3.0, 30.0])
+
+    def test_400_nao_insiste(self):
+        def urlopen(pedido, timeout):
+            raise previsao.urllib.error.HTTPError("u", 400, "x", {}, None)
+
+        with mock.patch.object(previsao.urllib.request, "urlopen", urlopen), mock.patch.object(previsao.time, "sleep", lambda s: None):
+            with self.assertRaises(previsao.urllib.error.HTTPError):
+                previsao.baixar("https://x")
 
 
 class Ifs(Temp):
