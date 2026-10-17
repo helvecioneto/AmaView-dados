@@ -1,0 +1,29 @@
+[Unit]
+Description=Previsão do ECMWF (IFS, dados abertos) e do CAMS (aerossol de queimadas) para o AmaView
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/previsao
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/previsao/previsao.py
+User=amaview-previsao
+Group=amaview-previsao
+# /var/cache/amaview-previsao, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-previsao
+CacheDirectoryMode=0755
+UMask=0022
+Environment=PREVISAO_RAIZ=/var/cache/amaview-previsao
+Environment=PYTHONUNBUFFERED=1
+# Uma rodada do IFS são ~600 pedidos por intervalo de bytes; com a rede lenta
+# do ECMWF, pode passar de meia hora. O CAMS só pede e confere a fila.
+TimeoutStartSec=90min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

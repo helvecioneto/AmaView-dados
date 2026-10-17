@@ -1,0 +1,16 @@
+[Unit]
+Description=Previsão do ECMWF e do CAMS a cada 20 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/previsao
+
+[Timer]
+# Rodadas de 00 e 12 UTC. O IFS aberto sai inteiro ~8–9 h depois da rodada; o
+# CAMS fica pronto no ADS algumas horas depois e o pedido leva de segundos a
+# horas na fila. Cada olhada sem novidade custa um HEAD no ECMWF e uma consulta
+# ao ADS; com o IFS em andamento, o systemd não sobrepõe execuções.
+OnCalendar=*:0/20
+Persistent=true
+AccuracySec=1min
+Unit=amaview-previsao.service
+
+[Install]
+WantedBy=timers.target

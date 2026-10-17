@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar e as estações
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações e a previsão
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -74,6 +74,7 @@ instalar() {
   instalar_fumaca
   instalar_ar
   instalar_meteo
+  instalar_previsao
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -91,6 +92,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
   sudo install -m 644 "$DESTINO/agendador/meteo/nginx-locais.conf" /etc/nginx/snippets/amaview-meteo.conf
   sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
+  sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -287,6 +289,56 @@ for k, nome in (("i", "INMET"), ("m", "METAR")):
 PY
   journalctl -u amaview-meteo -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   echo "  em disco: $(du -sh /var/cache/amaview-meteo 2>/dev/null | cut -f1)"
+}
+
+# Previsão do ECMWF e do CAMS (agendador/previsao): timer independente do token —
+# lê os dados abertos do IFS e, com a chave do ADS em /etc/amaview/ads-key, o
+# CAMS; escreve em /var/cache/amaview-previsao, que o nginx serve. O GRIB é lido
+# pela libeccodes (apt), por ctypes.
+instalar_previsao() {
+  titulo "Previsão (ECMWF e CAMS)"
+  getent passwd amaview-previsao >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-previsao
+  local falta=""
+  for p in python3-numpy libeccodes0; do
+    dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
+  done
+  [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null
+  # A chave do ADS: legível só pelo root e pelo serviço.
+  if sudo test -s /etc/amaview/ads-key; then
+    sudo chown root:amaview-previsao /etc/amaview/ads-key && sudo chmod 640 /etc/amaview/ads-key
+  else
+    amarelo "  sem chave do ADS em /etc/amaview/ads-key — o CAMS fica de fora (o IFS segue)"
+  fi
+  sudo cp "$DESTINO/agendador/previsao/amaview-previsao.service" "$DESTINO/agendador/previsao/amaview-previsao.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-previsao.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-previsao.timer && verde "  amaview-previsao.timer ligado (a cada 20 min)"
+}
+
+situacao_previsao() {
+  titulo "Previsão (ECMWF e CAMS)"
+  systemctl is-active --quiet amaview-previsao.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem indice.json ainda em /var/cache/amaview-previsao"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-previsao/previsao/v1/indice.json"))
+agora = datetime.now(timezone.utc)
+for nome, m in i["modelos"].items():
+    if m["rodadas"]:
+        r = datetime.strptime(m["rodadas"][0], "%Y%m%d%H").replace(tzinfo=timezone.utc)
+        txt = f"rodada {r:%d/%m %H} UTC ({(agora - r).total_seconds() / 3600:.0f} h atrás), {len(m['rodadas'])} no disco"
+    else:
+        txt = "nenhuma rodada ainda"
+    if m.get("fila"):
+        txt += f" · {m['fila']} na fila do ADS"
+    if m.get("erro"):
+        txt += f" · erro: {m['erro'][:120]}"
+    print(f"  {nome:5} {txt}")
+PY
+  journalctl -u amaview-previsao -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-previsao 2>/dev/null | cut -f1)"
 }
 
 # Rastreio de nuvens (agendador/fortracc): o container pyfortracc_ir (repositório
@@ -515,6 +567,7 @@ situacao() {
   situacao_fumaca
   situacao_ar
   situacao_meteo
+  situacao_previsao
   situacao_fortracc
   echo
 }
@@ -533,11 +586,12 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
+    sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload
