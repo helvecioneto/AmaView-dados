@@ -314,6 +314,32 @@ instalar_previsao() {
   sudo systemctl daemon-reload
   sudo systemctl enable amaview-previsao.timer >/dev/null 2>&1
   sudo systemctl restart amaview-previsao.timer && verde "  amaview-previsao.timer ligado (a cada 20 min)"
+  instalar_previsao_wn2
+}
+
+# Cenários do Google WeatherNext 2 (agendador/previsao/wn2.py): ACESSO RESTRITO —
+# os termos do Google só permitem a distribuição controlada a pessoas
+# identificadas. Lê o Icechunk do dynamical.org pelo venv /opt/amaview/venv-wn2;
+# o nginx só serve /previsao/v1/wn2/ com usuário e senha (/etc/amaview/wn2.htpasswd,
+# criado à mão: ver o README). Sem a senha, o timer nem liga.
+instalar_previsao_wn2() {
+  local venv=/opt/amaview/venv-wn2
+  dpkg -s python3-venv >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+  [ -x "$venv/bin/python" ] || sudo python3 -m venv "$venv"
+  sudo "$venv/bin/pip" install -q --disable-pip-version-check -r "$DESTINO/agendador/previsao/requisitos-wn2.txt" \
+    || { vermelho "  venv do WeatherNext 2 não instalou"; return; }
+  sudo cp "$DESTINO/agendador/previsao/amaview-previsao-wn2.service" "$DESTINO/agendador/previsao/amaview-previsao-wn2.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  if ! sudo test -s /etc/amaview/wn2.htpasswd; then
+    sudo systemctl disable --now amaview-previsao-wn2.timer >/dev/null 2>&1
+    amarelo "  sem /etc/amaview/wn2.htpasswd — o WeatherNext 2 (acesso restrito) fica desligado"
+    return
+  fi
+  # Legível pelo nginx (www-data) e por mais ninguém.
+  sudo chown root:www-data /etc/amaview/wn2.htpasswd && sudo chmod 640 /etc/amaview/wn2.htpasswd
+  sudo systemctl enable amaview-previsao-wn2.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-previsao-wn2.timer && verde "  amaview-previsao-wn2.timer ligado (a cada 20 min, acesso restrito)"
 }
 
 situacao_previsao() {
@@ -338,6 +364,25 @@ for nome, m in i["modelos"].items():
     print(f"  {nome:5} {txt}")
 PY
   journalctl -u amaview-previsao -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  if systemctl is-enabled --quiet amaview-previsao-wn2.timer 2>/dev/null; then
+    python3 - <<'PY' 2>/dev/null || amarelo "  wn2   sem indice.json ainda"
+import json
+from datetime import datetime, timezone
+m = json.load(open("/var/cache/amaview-previsao/previsao/v1/wn2/indice.json"))["modelos"]["wn2"]
+agora = datetime.now(timezone.utc)
+if m["rodadas"]:
+    r = datetime.strptime(m["rodadas"][0], "%Y%m%d%H").replace(tzinfo=timezone.utc)
+    txt = f"rodada {r:%d/%m %H} UTC ({(agora - r).total_seconds() / 3600:.0f} h atrás), {len(m['rodadas'])} no disco (acesso restrito)"
+else:
+    txt = "nenhuma rodada ainda"
+if m.get("erro"):
+    txt += f" · erro: {m['erro'][:120]}"
+print(f"  wn2   {txt}")
+PY
+    journalctl -u amaview-previsao-wn2 -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  else
+    echo "  wn2   desligado (sem /etc/amaview/wn2.htpasswd)"
+  fi
   echo "  em disco: $(du -sh /var/cache/amaview-previsao 2>/dev/null | cut -f1)"
 }
 
@@ -586,12 +631,12 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
-    sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer
+    sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer /etc/systemd/system/amaview-previsao-wn2.service /etc/systemd/system/amaview-previsao-wn2.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload

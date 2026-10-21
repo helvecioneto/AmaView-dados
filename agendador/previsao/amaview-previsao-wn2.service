@@ -1,0 +1,28 @@
+[Unit]
+Description=Cenários do Google WeatherNext 2 para o AmaView (acesso restrito)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/previsao
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# O venv (icechunk, zarr, numcodecs, numpy) é criado pelo `amaview instalar`.
+ExecStart=/opt/amaview/venv-wn2/bin/python /opt/amaview/agendador/previsao/wn2.py
+User=amaview-previsao
+Group=amaview-previsao
+# A mesma pasta da previsão do ECMWF; a subpasta wn2/ fica atrás de senha no nginx.
+CacheDirectory=amaview-previsao
+CacheDirectoryMode=0755
+UMask=0022
+Environment=PREVISAO_RAIZ=/var/cache/amaview-previsao
+Environment=PYTHONUNBUFFERED=1
+# Uma rodada: ~7.700 pedaços parciais (~6 GB) do dynamical.org, ~7 min medidos.
+TimeoutStartSec=60min
+Nice=10
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

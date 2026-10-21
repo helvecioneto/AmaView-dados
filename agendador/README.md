@@ -490,6 +490,44 @@ URLs (em `https://147.15.84.134/previsao/v1/`):
 Instalar: `amaview instalar`. Logs: `journalctl -u amaview-previsao`.
 Testes (sem rede): `python3 -m unittest discover -s agendador/previsao`.
 
+### Cenários do WeatherNext 2 (acesso restrito)
+
+`previsao/wn2.py` (timer `amaview-previsao-wn2`, a cada 20 min) publica, na
+mesma grade do IFS, produtos dos **64 cenários** do Google WeatherNext 2
+(rodadas de 00 e 12 UTC, de 6 em 6 h até +360 h): `chance` (% com ≥ 1 mm em
+6 h), `forte` (≥ 10 mm em 6 h), `chance24` (≥ 1 mm em 24 h), `t10` e `t90`
+(percentis 10 e 90 da temperatura a 2 m).
+
+- **Licença**: a previsão do futuro do WeatherNext 2 segue os
+  [termos do Google](https://storage.googleapis.com/weathernext-public/terms-of-use.pdf)
+  para dados experimentais em tempo real — uso interno e, para fins
+  educacionais, distribuição controlada a pessoas identificadas. Por isso
+  `/previsao/v1/wn2/` só abre com usuário e senha, e o `indice.json` público
+  não fala dele. Junto vão a cópia dos termos (`terms-of-use.pdf`) e o aviso
+  que eles pedem (`termos.txt`).
+- **Fonte**: a cópia Icechunk do dynamical.org
+  (`google-weathernext2-forecast-operational-virtual`). Cada pedaço é o globo
+  de um cenário, passo e variável (blosc em 8 blocos de 512 KiB); a Amazônia
+  cai em 2 blocos, e só eles descem (cabeçalho + intervalos de bytes):
+  ~7.700 pedaços, ~6 GB e ~7 min por rodada.
+- **venv** `/opt/amaview/venv-wn2` (`previsao/requisitos-wn2.txt`), criado pelo
+  `amaview instalar`; o `wn2.py` reaproveita a escrita de `previsao.py`.
+- **Senha**, fora do repositório, criada uma vez na máquina:
+
+  ```sh
+  printf 'USUARIO:%s\n' "$(openssl passwd -apr1)" | sudo tee /etc/amaview/wn2.htpasswd >/dev/null
+  amaview instalar   # ajusta o dono (root:www-data, 640) e liga o timer
+  ```
+
+  Sem o arquivo, o timer fica desligado. Mais pessoas: uma linha por usuário.
+
+URLs (com senha): `wn2/indice.json` (o mesmo formato do índice público, só
+com o modelo `wn2`, mais `termos`), `wn2/<AAAAMMDDHH>/mapa/<var>/<hhh>.bin` e
+`wn2/<AAAAMMDDHH>/serie/<bi>_<bj>.bin` (blocos de 8×8 pontos), `wn2/termos.txt`.
+
+Logs: `journalctl -u amaview-previsao-wn2`. Testes (sem rede, no venv):
+`/opt/amaview/venv-wn2/bin/python -m unittest discover -s agendador/previsao`.
+
 ## Rastreio de nuvens (pyFortraCC)
 
 A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19

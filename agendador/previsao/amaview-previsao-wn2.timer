@@ -1,0 +1,14 @@
+[Unit]
+Description=Cenários do WeatherNext 2 a cada 20 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/previsao
+
+[Timer]
+# Rodadas de 00 e 12 UTC; o dynamical.org as completa ~8–10 h depois. Sem
+# rodada nova, cada olhada só lê o índice do repositório (alguns segundos).
+OnCalendar=*:5/20
+Persistent=true
+AccuracySec=1min
+Unit=amaview-previsao-wn2.service
+
+[Install]
+WantedBy=timers.target

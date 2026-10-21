@@ -1,0 +1,5 @@
+# Venv do coletor do WeatherNext 2 (/opt/amaview/venv-wn2), instalado pelo `amaview instalar`.
+icechunk==2.3.0
+zarr==3.4.1
+numcodecs==0.17.1
+numpy==2.5.4
