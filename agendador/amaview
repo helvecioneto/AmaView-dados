@@ -368,7 +368,7 @@ PY
     python3 - <<'PY' 2>/dev/null || amarelo "  wn2   sem indice.json ainda"
 import json
 from datetime import datetime, timezone
-m = json.load(open("/var/cache/amaview-previsao/previsao/v1/wn2/indice.json"))["modelos"]["wn2"]
+m = json.load(open("/var/cache/amaview-previsao/restrito/previsao/v1/wn2/indice.json"))["modelos"]["wn2"]
 agora = datetime.now(timezone.utc)
 if m["rodadas"]:
     r = datetime.strptime(m["rodadas"][0], "%Y%m%d%H").replace(tzinfo=timezone.utc)

@@ -310,12 +310,12 @@ def ler_json(caminho: str, padrao):
         return padrao
 
 
-def publicar(modelo: str, rodada: str, passos: list[int], dados: dict) -> dict:
-    """Escreve a rodada (mapa e blocos) numa pasta temporária e troca de uma vez."""
+def publicar(modelo: str, rodada: str, passos: list[int], dados: dict, pasta_modelo: str | None = None) -> dict:
+    """Escreve a rodada (mapa e blocos) numa pasta temporária e troca de uma vez (`pasta_modelo`: outra que não a pública)."""
     import numpy as np
 
     ni, nj, b = dimensoes(modelo)
-    final = os.path.join(PASTA, modelo, rodada)
+    final = os.path.join(pasta_modelo or os.path.join(PASTA, modelo), rodada)
     temp = f"{final}.parcial"
     shutil.rmtree(temp, ignore_errors=True)
     variaveis = list(VARS[modelo])
@@ -346,8 +346,8 @@ def publicar(modelo: str, rodada: str, passos: list[int], dados: dict) -> dict:
     return faixa
 
 
-def limpar(modelo: str) -> None:
-    pasta = os.path.join(PASTA, modelo)
+def limpar(modelo: str, pasta_modelo: str | None = None) -> None:
+    pasta = pasta_modelo or os.path.join(PASTA, modelo)
     if not os.path.isdir(pasta):
         return
     rodadas = sorted(n for n in os.listdir(pasta) if n.isdigit())

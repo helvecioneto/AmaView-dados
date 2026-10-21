@@ -65,6 +65,18 @@ class TestWn2(unittest.TestCase):
         self.assertEqual(wn2.pedidos(trechos), [(300, 500), (700, 800)])
         self.assertEqual(wn2.pedidos([(300, 500), (500, 600)]), [(300, 600)])
 
+    def test_cabecalho_grande_demais_e_ultimo_bloco_recusados(self):
+        i0, i1, _, _ = wn2.linhas_colunas()
+        nbytes = wn2.NY * wn2.NX * 4
+        # Blocos de 32 KiB: 127 inícios não cabem nos 80 bytes lidos → erro claro, não leitura errada.
+        cab = bytes([2, 1, 0x21, 4]) + nbytes.to_bytes(4, "little") + (32768).to_bytes(4, "little") + (10**6).to_bytes(4, "little")
+        with self.assertRaisesRegex(ValueError, "não coube"):
+            wn2.blocos_do_recorte(cab + bytes(64), i0, i1)
+        # Um recorte que chegasse ao último bloco (parcial, comprimido diferente): recusado, não lido errado.
+        quadro = Blosc(cname="lz4", shuffle=Blosc.SHUFFLE).encode(np.zeros((wn2.NY, wn2.NX), "<f4"))
+        with self.assertRaisesRegex(ValueError, "último bloco"):
+            wn2.blocos_do_recorte(quadro[:80], wn2.NY - 3, wn2.NY)
+
     def test_escala_da_chuva(self):
         # scale_offset do Zarr: guardado / escala + offset (a chuva vem em m × 1000 → mm).
         campo = np.full((wn2.NY, wn2.NX), 0.0025, "<f4")

@@ -17,9 +17,11 @@ só produtos derivados dos 64 cenários:
 para dados experimentais em tempo real
 (https://storage.googleapis.com/weathernext-public/terms-of-use.pdf): uso
 interno e, para fins educacionais, distribuição controlada a pessoas
-identificadas. Por isso a pasta `wn2/` fica atrás de senha no nginx
-(`/etc/amaview/wn2.htpasswd`, fora do repositório) e não entra no
-`indice.json` público. Junto da rodada vão a cópia dos termos e o aviso que
+identificadas. Por isso o dado fica FORA da pasta pública
+(`RAIZ/restrito/previsao/v1/wn2`, que a `location /previsao/` não alcança) e o
+nginx só o serve em `/previsao/v1/wn2/`, atrás de senha
+(`/etc/amaview/wn2.htpasswd`, fora do repositório): sem aquele trecho do nginx,
+o caminho dá 404 em vez de abrir. Também não entra no `indice.json` público. Junto da rodada vão a cópia dos termos e o aviso que
 eles pedem (`termos.txt`).
 
 **Download.** Cada pedaço do Zarr é o globo inteiro de um cenário, passo e
@@ -39,6 +41,7 @@ numpy), criado pelo `amaview instalar`; reaproveita a escrita de `previsao.py`
 import asyncio
 import json
 import os
+import shutil
 import struct
 import sys
 import time
@@ -49,7 +52,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import previsao as P  # noqa: E402
 
 MODELO = "wn2"
-PASTA = os.path.join(P.PASTA, MODELO)
+# Fora de RAIZ/previsao (a árvore pública): falha fechada se o nginx não tiver a location com senha.
+PASTA = os.path.join(P.RAIZ, "restrito", "previsao", f"v{P.VERSAO}", MODELO)
+# Onde a primeira versão gravava (dentro da árvore pública): apagado ao rodar.
+PASTA_ANTIGA = os.path.join(P.PASTA, MODELO)
 ESTADO = os.path.join(P.RAIZ, "estado-wn2.json")
 
 REPO_URL = "https://google-weathernext2.r2.dynamical.org/google-weathernext2-forecast-operational-virtual/v0.1.0.icechunk"
@@ -66,6 +72,10 @@ PASSOS = list(range(0, 361, 6))
 # Pedidos simultâneos ao dynamical.org (medido: 32 → ~12 MB/s na máquina Oracle).
 PARALELO = 32
 TENTATIVAS = 4
+# Cada pedido (cabeçalho ou blocos, ≤ 1 MB): travado mais que isto, tenta de novo.
+TEMPO_PEDIDO_S = 60
+# O cabeçalho do blosc lido de uma vez: 16 bytes + o início de até 64 blocos.
+MAX_BLOCOS = 64
 
 LIMIAR_CHANCE_MM = 1.0
 LIMIAR_FORTE_MM = 10.0
@@ -123,9 +133,15 @@ def blocos_do_recorte(cabecalho: bytes, i0: int, i1: int) -> tuple[bytes, int, l
     if flags & 0x02:
         raise ValueError("pedaço sem compressão (memcpy): não previsto")
     nb = (nbytes + bs - 1) // bs
+    if len(cabecalho) < 16 + 4 * nb:
+        raise ValueError(f"cabeçalho do blosc com {nb} blocos não coube em {len(cabecalho)} bytes")
     inicios = struct.unpack(f"<{nb}i", cabecalho[16 : 16 + 4 * nb])
     b0 = (i0 * NX * 4) // bs
     b1 = (i1 * NX * 4 - 1) // bs
+    # O último bloco, quando parcial, o blosc comprime diferente e ele não se remonta sozinho; o recorte da
+    # Amazônia (blocos 3 e 4 de 8) nunca chega lá — se um dia chegar, erro claro em vez de dado errado.
+    if b1 == nb - 1 and nbytes % bs:
+        raise ValueError("o recorte chega ao último bloco (parcial) do blosc: não previsto")
     posicoes = sorted(inicios) + [cbytes]
     trechos = [(inicios[b], posicoes[posicoes.index(inicios[b]) + 1]) for b in range(b0, b1 + 1)]
     return cabecalho[:16], b0, trechos
@@ -143,7 +159,7 @@ def pedidos(trechos: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def montar_quadro(fixo: bytes, trechos: list[tuple[int, int]], baixados: dict[tuple[int, int], bytes]) -> bytes:
-    """Um blosc válido só com os blocos do recorte (cada bloco é independente: o embaralhamento é por bloco)."""
+    """Um blosc válido só com os blocos (inteiros) do recorte: cada bloco é independente, o embaralhamento é por bloco."""
     ver, verlz, flags, typesize, _, bs, _ = struct.unpack("<BBBBiii", fixo)
     corpos = []
     for ini, fim in trechos:
@@ -217,7 +233,12 @@ def coordenadas(store) -> tuple[list[datetime], list[int], dict]:
         raise ValueError("grade do WeatherNext 2 mudou de orientação")
     escalas = {}
     for nome, zv in VAR_ZARR.items():
-        cfg = next((c.get("configuration", {}) for c in g[zv].metadata.to_dict()["codecs"] if c["name"] == "scale_offset"), {})
+        md = g[zv].metadata.to_dict()
+        codecs = md["codecs"]
+        # A leitura parcial supõe float32 guardado como float32 (scale_offset é só aritmética), com o blosc no fim.
+        if str(md.get("data_type")) != "float32" or [c["name"] for c in codecs if c["name"] != "scale_offset"] != ["bytes", "blosc"]:
+            raise ValueError(f"{zv}: tipo {md.get('data_type')} ou codecs {[c['name'] for c in codecs]} inesperados")
+        cfg = next((c.get("configuration", {}) for c in codecs if c["name"] == "scale_offset"), {})
         escalas[nome] = (float(cfg.get("scale", 1.0)), float(cfg.get("offset", 0.0)))
     return inits, leads, escalas
 
@@ -248,14 +269,14 @@ async def ler_recortes(store, i_init: int, leads: list[int], escalas: dict, ao_t
         for tentativa in range(TENTATIVAS):
             try:
                 async with sem:
-                    cab = await store.get(chave, prototype=prot, byte_range=RangeByteRequest(0, 16 + 4 * 16))
+                    cab = await asyncio.wait_for(store.get(chave, prototype=prot, byte_range=RangeByteRequest(0, 16 + 4 * MAX_BLOCOS)), TEMPO_PEDIDO_S)
                     if cab is None:
                         raise FileNotFoundError(chave)
                     cab = cab.to_bytes()
                     fixo, b0, trechos = blocos_do_recorte(cab, i0, i1)
                     baixados = {}
                     for ini, fim in pedidos(trechos):
-                        corpo = await store.get(chave, prototype=prot, byte_range=RangeByteRequest(ini, fim))
+                        corpo = await asyncio.wait_for(store.get(chave, prototype=prot, byte_range=RangeByteRequest(ini, fim)), TEMPO_PEDIDO_S)
                         if corpo is None:
                             raise FileNotFoundError(chave)
                         baixados[(ini, fim)] = corpo.to_bytes()
@@ -263,7 +284,7 @@ async def ler_recortes(store, i_init: int, leads: list[int], escalas: dict, ao_t
                 bs = struct.unpack("<i", fixo[8:12])[0]
                 esc, off = escalas[nome]
                 return recorte_do_quadro(montar_quadro(fixo, trechos, baixados), b0, bs, i0, i1, j0, j1, esc, off)
-            except FileNotFoundError:
+            except (FileNotFoundError, ValueError):
                 raise
             except Exception:  # noqa: BLE001 — rede: tenta de novo
                 if tentativa == TENTATIVAS - 1:
@@ -358,7 +379,12 @@ def rodadas_alvo(inits: list[datetime], feitas: set, falhas: dict, forcar: str |
 def rodada(forcar: str | None = None) -> str:
     agora = datetime.now(timezone.utc)
     os.makedirs(PASTA, exist_ok=True)
+    # A primeira versão gravava dentro da árvore pública: some de lá.
+    shutil.rmtree(PASTA_ANTIGA, ignore_errors=True)
     estado = P.ler_json(ESTADO, {})
+    # Rodada "feita" que não está mais no disco (a pasta mudou): pode ser refeita.
+    feitas_no_disco = {n for n in estado.get("feitas", []) if os.path.isdir(os.path.join(PASTA, n))}
+    estado["feitas"] = sorted(feitas_no_disco)
     feitas = set(estado.get("feitas", []))
     falhas = estado.get("falhas", {})
     resultado = "em dia"
@@ -373,7 +399,7 @@ def rodada(forcar: str | None = None) -> str:
             inicio = time.time()
             try:
                 dados = baixar_rodada(store, i, leads, escalas)
-                faixa = P.publicar(MODELO, n, PASSOS, dados)
+                faixa = P.publicar(MODELO, n, PASSOS, dados, PASTA)
             except Exception as e:  # noqa: BLE001
                 falhas[n] = time.time()
                 estado["falhas"] = {k: v for k, v in falhas.items() if time.time() - v < 86400}
@@ -388,7 +414,7 @@ def rodada(forcar: str | None = None) -> str:
     finally:
         estado["faixas"] = {k: v for k, v in estado.get("faixas", {}).items() if k in estado.get("feitas", [])}
         P.escrever_atomico(ESTADO, json.dumps(estado).encode())
-        P.limpar(MODELO)
+        P.limpar(MODELO, PASTA)
         P.escrever_atomico(os.path.join(PASTA, "indice.json"), json.dumps(montar_indice(estado, agora), separators=(",", ":"), ensure_ascii=False).encode())
     return resultado
 

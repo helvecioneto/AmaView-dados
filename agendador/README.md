@@ -501,9 +501,10 @@ mesma grade do IFS, produtos dos **64 cenários** do Google WeatherNext 2
 - **Licença**: a previsão do futuro do WeatherNext 2 segue os
   [termos do Google](https://storage.googleapis.com/weathernext-public/terms-of-use.pdf)
   para dados experimentais em tempo real — uso interno e, para fins
-  educacionais, distribuição controlada a pessoas identificadas. Por isso
-  `/previsao/v1/wn2/` só abre com usuário e senha, e o `indice.json` público
-  não fala dele. Junto vão a cópia dos termos (`terms-of-use.pdf`) e o aviso
+  educacionais, distribuição controlada a pessoas identificadas. Por isso o
+  dado fica fora da árvore pública (`/var/cache/amaview-previsao/restrito/`),
+  `/previsao/v1/wn2/` só abre com usuário e senha (sem o trecho do nginx: 404),
+  nada fica em cache (`no-store`) e o `indice.json` público não fala dele. Junto vão a cópia dos termos (`terms-of-use.pdf`) e o aviso
   que eles pedem (`termos.txt`).
 - **Fonte**: a cópia Icechunk do dynamical.org
   (`google-weathernext2-forecast-operational-virtual`). Cada pedaço é o globo
@@ -515,7 +516,7 @@ mesma grade do IFS, produtos dos **64 cenários** do Google WeatherNext 2
 - **Senha**, fora do repositório, criada uma vez na máquina:
 
   ```sh
-  printf 'USUARIO:%s\n' "$(openssl passwd -apr1)" | sudo tee /etc/amaview/wn2.htpasswd >/dev/null
+  printf 'USUARIO:%s\n' "$(openssl passwd -apr1)" | sudo tee -a /etc/amaview/wn2.htpasswd >/dev/null
   amaview instalar   # ajusta o dono (root:www-data, 640) e liga o timer
   ```
 
