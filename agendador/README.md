@@ -529,6 +529,51 @@ com o modelo `wn2`, mais `termos`), `wn2/<AAAAMMDDHH>/mapa/<var>/<hhh>.bin` e
 Logs: `journalctl -u amaview-previsao-wn2`. Testes (sem rede, no venv):
 `/opt/amaview/venv-wn2/bin/python -m unittest discover -s agendador/previsao`.
 
+## Chuva por satélite (GSMaP_NOW da JAXA)
+
+A taxa de chuva horária do [GSMaP](https://sharaku.eorc.jaxa.jp/GSMaP/guide.html)
+(Global Satellite Mapping of Precipitation, JAXA), na versão de tempo real
+**GSMaP_NOW**, recortada no setor NSA do GOES-19 para o AmaView.
+
+- **NOW, e não NRT.** O NOW sai a cada 30 min com atraso ~0 h; o NRT, de hora
+  em hora, 4 h depois — no loop das 48 h ele deixaria as 4 h mais novas sem
+  chuva. O NOW usa só o micro-ondas que chega em meia hora e estende a última
+  meia hora pelo movimento das nuvens no geoestacionário, por isso é menos
+  exato que o NRT; o app diz isso.
+- **Ajustado por pluviômetros** (`gsmap_gauge_now`): corrige o viés do
+  satélite sobre a terra com a relação aprendida dos pluviômetros (CPC/NOAA)
+  no GSMaP_Gauge. Se só o de satélite (`gsmap_now`) existe para um horário, ele
+  entra marcado `p: "s"` e é trocado quando o ajustado chegar.
+- **O valor da JAXA, sem retoque**: mm/h médio da hora, a grade de 0,1° como
+  ela é (442 × 594 pontos, de 22,1°N a 22,1°S e de 89,4°W a 30°W). Só a
+  codificação muda: **um byte por ponto**, `q = round(20·√v)` (0 abaixo de
+  0,1 mm/h; 254 = 161 mm/h ou mais; 255 = sem dado). O passo é fino na chuva
+  fraca (0,03 mm/h perto de 0,5) e largo onde a diferença não muda a leitura.
+  Um quadro tem 262 KB, e o `.bin.gz` ao lado, algumas dezenas (`gzip_static`).
+- **48 h**: o `latest/` do servidor da JAXA tem as últimas 24 h; o resto vem
+  do arquivo do dia (`/now/half_hour_G/AAAA/MM/DD/`), listado só quando falta
+  horário e no máximo a cada 30 min. Até 24 arquivos (~800 KB cada) por
+  rodada; arquivo que falha espera 30 min.
+- **Conta**: o cadastro da JAXA é grátis e dá usuário e senha para o servidor
+  `hokusai.eorc.jaxa.jp` (SFTP; FTP de reserva). `amaview chave gsmap` pede os
+  dois na tela, testa com uma listagem e grava um netrc 640
+  `root:amaview-gsmap`; o `curl` lê o arquivo, e a senha nunca aparece na
+  linha de comando. A chave SSH do servidor é gravada na instalação
+  (`/etc/amaview/gsmap_known_hosts`) e o curl recusa outra.
+- **Crédito** (termos da JAXA, uso e redistribuição livres): "GSMaP data by
+  Japan Aerospace Exploration Agency (JAXA)".
+
+| Peça | Onde |
+|---|---|
+| `gsmap/gsmap.py` | uma rodada: lista, baixa, recorta, codifica, indexa e apaga o velho; `arquivo ARQ` converte um arquivo local; `listar` confere a conta |
+| `gsmap/amaview-gsmap.{service,timer}` | a cada 5 min, usuário `amaview-gsmap`, `/var/cache/amaview-gsmap` |
+| `gsmap/nginx-locais.conf` | `/gsmap/`: quadros imutáveis (`gzip_static`), índice `no-cache`, CORS |
+
+URL: `/gsmap/v1/indice.json` (grade, codificação e quadros `{c, p, max, f1, sem}`)
+e `/gsmap/v1/quadros/AAAAMMDDHHNN-{g|s}.bin` (o carimbo é o início da hora, UTC).
+
+Testes (sem rede): `python3 -m unittest discover -s agendador/gsmap`.
+
 ## Rastreio de nuvens (pyFortraCC)
 
 A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19

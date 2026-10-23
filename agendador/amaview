@@ -2,13 +2,14 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações e a previsão
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão e o GSMaP
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
 #   amaview chave F remover   apaga a chave (a fonte sai na próxima rodada)
+#   amaview chave gsmap  grava a conta da JAXA (usuário e senha do GSMaP; sem eco; testa antes)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -75,6 +76,7 @@ instalar() {
   instalar_ar
   instalar_meteo
   instalar_previsao
+  instalar_gsmap
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -93,6 +95,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/meteo/nginx-locais.conf" /etc/nginx/snippets/amaview-meteo.conf
   sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
   sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
+  sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -432,6 +435,129 @@ PY
   echo "  em disco: $(du -sh /var/cache/amaview-fumaca 2>/dev/null | cut -f1)"
 }
 
+# Chuva por satélite (agendador/gsmap): o GSMaP_NOW da JAXA, com a conta do
+# cadastro (/etc/amaview/gsmap.netrc, gravada pelo `amaview chave gsmap`);
+# escreve em /var/cache/amaview-gsmap, que o nginx serve. Sem a conta, o
+# timer fica desligado.
+GSMAP_SERVIDOR="hokusai.eorc.jaxa.jp"
+GSMAP_NETRC="/etc/amaview/gsmap.netrc"
+GSMAP_HOSTS="/etc/amaview/gsmap_known_hosts"
+instalar_gsmap() {
+  titulo "Chuva por satélite (GSMaP)"
+  getent passwd amaview-gsmap >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-gsmap
+  dpkg -s python3-numpy >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-numpy >/dev/null
+  # A chave do servidor da JAXA, vista na primeira vez (o curl do serviço recusa outra).
+  if ! sudo test -s "$GSMAP_HOSTS"; then
+    ssh-keyscan -T 15 -t ecdsa,ed25519,rsa "$GSMAP_SERVIDOR" 2>/dev/null | sudo tee "$GSMAP_HOSTS" >/dev/null
+    ssh-keygen -lf "$GSMAP_HOSTS" 2>/dev/null | sed 's/^/  chave do servidor: /'
+  fi
+  sudo install -d -m 750 -o amaview-gsmap -g amaview-gsmap /var/lib/amaview-gsmap /var/lib/amaview-gsmap/.ssh
+  sudo install -m 644 -o amaview-gsmap -g amaview-gsmap "$GSMAP_HOSTS" /var/lib/amaview-gsmap/.ssh/known_hosts
+  sudo cp "$DESTINO/agendador/gsmap/amaview-gsmap.service" "$DESTINO/agendador/gsmap/amaview-gsmap.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  if ! sudo test -s "$GSMAP_NETRC"; then
+    sudo systemctl disable --now amaview-gsmap.timer >/dev/null 2>&1
+    amarelo "  sem a conta da JAXA — rode: amaview chave gsmap"
+    return 0
+  fi
+  sudo chown root:amaview-gsmap "$GSMAP_NETRC" && sudo chmod 640 "$GSMAP_NETRC"
+  sudo systemctl enable amaview-gsmap.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-gsmap.timer && verde "  amaview-gsmap.timer ligado (a cada 5 min)"
+}
+
+situacao_gsmap() {
+  titulo "Chuva por satélite (GSMaP)"
+  if ! sudo test -s "$GSMAP_NETRC" 2>/dev/null; then
+    amarelo "  sem a conta da JAXA — rode: amaview chave gsmap"
+    return 0
+  fi
+  systemctl is-active --quiet amaview-gsmap.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-gsmap"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-gsmap/gsmap/v1/indice.json"))
+q = i["quadros"]
+agora = datetime.now(timezone.utc)
+g = sum(1 for x in q if x["p"] == "g")
+print(f"  {len(q)} horários nas últimas 48 h (esperados 96), {g} ajustados por pluviômetros")
+if q:
+    t = datetime.strptime(q[-1]["c"], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    print(f"  mais novo: hora de {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás) · máx {q[-1]['max']} mm/h")
+PY
+  journalctl -u amaview-gsmap -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-gsmap 2>/dev/null | cut -f1)"
+}
+
+# A conta do GSMaP (cadastro grátis na JAXA). Usuário e senha pedidos na tela
+# (a senha sem eco), testados numa listagem do latest/ ANTES de gravar, e
+# gravados 640 root:amaview-gsmap como netrc — o curl lê o arquivo; a senha
+# nunca vai para a linha de comando nem para a tela.
+gravar_conta_gsmap() {
+  local acao="${1:-}"
+  titulo "Conta da JAXA (GSMaP)"
+  if [ "$acao" = "remover" ]; then
+    sudo systemctl disable --now amaview-gsmap.timer >/dev/null 2>&1
+    sudo rm -f "$GSMAP_NETRC" /etc/amaview/gsmap.conf && verde "  conta apagada; o timer foi desligado"
+    return 0
+  fi
+  if ! getent group amaview-gsmap >/dev/null || ! sudo test -s "$GSMAP_HOSTS"; then
+    vermelho "  o serviço do GSMaP não está instalado — rode antes: amaview instalar"
+    return 1
+  fi
+  echo "  Cadastro: https://sharaku.eorc.jaxa.jp/GSMaP/registration.html (o e-mail traz usuário e senha)"
+  echo
+  local u p
+  read -rp "  Usuário: " u
+  read -rsp "  Senha (não aparece na tela): " p
+  echo
+  u="$(printf '%s' "$u" | tr -d '[:space:]')"
+  if [ -z "$u" ] || [ -z "$p" ]; then vermelho "  usuário ou senha vazios; nada gravado"; unset p; return 1; fi
+  # netrc com aspas (curl ≥ 7.84): a senha pode ter espaço, aspas ou barra.
+  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  local netrc
+  netrc="$(printf 'machine %s login "%s" password "%s"\n' "$GSMAP_SERVIDOR" "$(esc "$u")" "$(esc "$p")")"
+  unset p
+
+  # Teste com a chave do servidor já conhecida (a do serviço).
+  local casa
+  casa="$(mktemp -d)"
+  mkdir -p "$casa/.ssh" && sudo cat "$GSMAP_HOSTS" >"$casa/.ssh/known_hosts"
+  local proto="" saida
+  for tentativa in sftp ftp; do
+    echo "  Testando por $tentativa…"
+    if saida="$(HOME="$casa" curl -sS --fail -m 60 --netrc-file <(printf '%s\n' "$netrc") --list-only "$tentativa://$GSMAP_SERVIDOR/now/latest/" 2>&1)"; then
+      proto="$tentativa"
+      break
+    fi
+    printf '%s\n' "$saida" | tail -n 1 | sed 's/^/    /'
+  done
+  rm -rf "$casa"
+  if [ -z "$proto" ]; then
+    unset netrc
+    vermelho "  a JAXA não aceitou a conta (nem por SFTP nem por FTP) — nada gravado"
+    return 1
+  fi
+  local n
+  n="$(printf '%s\n' "$saida" | grep -c 'gsmap_gauge_now\.' || true)"
+  verde "  aceita por $proto: $n arquivos ajustados por pluviômetros no latest/"
+  sudo install -m 640 -o root -g amaview-gsmap /dev/null "$GSMAP_NETRC"
+  printf '%s\n' "$netrc" | sudo tee "$GSMAP_NETRC" >/dev/null
+  unset netrc
+  if [ "$proto" = "sftp" ]; then
+    sudo rm -f /etc/amaview/gsmap.conf
+  else
+    printf 'GSMAP_PROTOCOLO=ftp\n' | sudo tee /etc/amaview/gsmap.conf >/dev/null
+  fi
+  verde "  gravada em $GSMAP_NETRC (640 root:amaview-gsmap)"
+  sudo systemctl enable amaview-gsmap.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-gsmap.timer
+  echo "  Rodando agora (o preenchimento das 48 h leva algumas rodadas de 5 min)…"
+  sudo systemctl start amaview-gsmap.service
+  situacao_gsmap
+}
+
 certificado() {
   titulo "Certificado dos blocos ($BLOCOS_NOME)"
   command -v certbot >/dev/null \
@@ -516,7 +642,7 @@ gravar_chave() {
       onde="https://explore.openaq.org/register (a chave aparece em Account → API Key)"
       ;;
     *)
-      echo "uso: amaview chave purpleair|openaq [remover]"
+      echo "uso: amaview chave purpleair|openaq|gsmap [remover]"
       return 1
       ;;
   esac
@@ -613,6 +739,7 @@ situacao() {
   situacao_ar
   situacao_meteo
   situacao_previsao
+  situacao_gsmap
   situacao_fortracc
   echo
 }
@@ -622,7 +749,9 @@ case "${1:-status}" in
   certificado) certificado ;;
   renovar-ip) renovar_ip ;;
   token) gravar_token ;;
-  chave | chaves) gravar_chave "${2:-}" "${3:-}" ;;
+  chave | chaves)
+    if [ "${2:-}" = "gsmap" ]; then gravar_conta_gsmap "${3:-}"; else gravar_chave "${2:-}" "${3:-}"; fi
+    ;;
   disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
   logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
   parar | stop) sudo systemctl disable --now $(timers) && verde "timers desligados" ;;
@@ -631,12 +760,13 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
     sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer /etc/systemd/system/amaview-previsao-wn2.service /etc/systemd/system/amaview-previsao-wn2.timer
+    sudo rm -f /etc/systemd/system/amaview-gsmap.service /etc/systemd/system/amaview-gsmap.timer
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload
@@ -644,6 +774,6 @@ case "${1:-status}" in
     ;;
   status | '') situacao ;;
   *)
-    sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac
