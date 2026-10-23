@@ -339,6 +339,8 @@ def montar_indice(resumos: dict[str, dict], agora: datetime) -> dict:
 
 
 def rodada(agora: datetime | None = None) -> dict:
+    # O limite de tempo conta desde o começo: as listagens também gastam.
+    inicio = time.time()
     agora = agora or datetime.now(timezone.utc)
     os.makedirs(QUADROS, exist_ok=True)
     estado = ler_json(ESTADO, {})
@@ -372,13 +374,19 @@ def rodada(agora: datetime | None = None) -> dict:
     # falhou) continua na fila: sem isto, o dia listado esperaria 30 min para
     # ser visto de novo e o preenchimento das 48 h empacava.
     remotos: dict[tuple[str, str], str] = {}
+    latest: dict[tuple[str, str], str] = {}
     for k, caminho in estado.get("pendentes", {}).items():
         c, p = k.split("-", 1)
         if c in esperados and publicados.get(c) != "g":
             remotos[(c, p)] = caminho
     erros = []
     try:
-        remotos.update(listar("/now/latest/"))
+        latest = listar("/now/latest/")
+        # Pendente do latest/ que não está mais nele (passou das 24 h): o
+        # caminho morreu — a hora vem do arquivo do dia.
+        for chave in [k for k, caminho in remotos.items() if caminho.startswith("/now/latest/") and k not in latest]:
+            del remotos[chave]
+        remotos.update(latest)
     except Exception as e:  # noqa: BLE001
         erros.append(str(e))
     # O que o latest/ não cobre (mais de ~24 h), pelo arquivo do dia: só os
@@ -391,8 +399,10 @@ def rodada(agora: datetime | None = None) -> dict:
         if time.time() - listadas.get(pasta, 0) < RELISTAR_S:
             continue
         try:
+            # O arquivo do dia ganha de um pendente velho; do latest/ desta rodada, não.
             for chave, caminho in listar(pasta).items():
-                remotos.setdefault(chave, caminho)
+                if not remotos.get(chave, "").startswith("/now/latest/") or chave not in latest:
+                    remotos[chave] = caminho
             listadas[pasta] = time.time()
         except Exception as e:  # noqa: BLE001 — um dia falhando não para os outros
             erros.append(str(e))
@@ -411,7 +421,6 @@ def rodada(agora: datetime | None = None) -> dict:
         elif tem is None and (c, "s") in remotos:
             fila.append((c, "s"))
     feitos, falhas = 0, 0
-    inicio = time.time()
 
     def publicar_indice() -> dict:
         indice = montar_indice(resumos, agora)

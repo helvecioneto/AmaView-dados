@@ -210,6 +210,19 @@ class TesteRodada(unittest.TestCase):
             self.assertEqual(self.rodar()["feitos"], 2)
         self.assertEqual(len(self.indice()["quadros"]), 12)
 
+    def test_pendente_do_latest_que_saiu_dele(self):
+        # Uma hora ficou pendente com o caminho do latest/; um dia depois ela só
+        # existe no arquivo do dia — o caminho morto não pode tapar o bom.
+        self.publicar("/now/latest/", "gsmap_gauge_now.20261023.0100.dat.gz")
+        with mock.patch.object(gsmap, "MAX_POR_RODADA", 0):
+            self.rodar()
+        del self.servidor["/now/latest/"]["gsmap_gauge_now.20261023.0100.dat.gz"]
+        self.publicar("/now/half_hour_G/2026/10/23/", "gsmap_gauge_now.20261023.0100.dat.gz")
+        self.agora = datetime(2026, 10, 24, 2, 7, tzinfo=timezone.utc)
+        self.rodar()
+        self.assertIn("/now/half_hour_G/2026/10/23/gsmap_gauge_now.20261023.0100.dat.gz", self.baixados)
+        self.assertIn("202610230100", [q["c"] for q in self.indice()["quadros"]])
+
     def test_arquivo_quebrado_espera(self):
         self.servidor["/now/latest/"]["gsmap_gauge_now.20261023.1630_1729.dat.gz"] = b"quebrado"
         r = self.rodar()
