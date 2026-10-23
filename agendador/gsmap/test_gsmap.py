@@ -72,9 +72,10 @@ class TesteCodificacao(unittest.TestCase):
         d = gsmap.decodificar(q)
         self.assertEqual(d[0], 0)
         self.assertEqual(d[1], 0, "abaixo de 0,1 mm/h é zero")
+        self.assertGreaterEqual(gsmap.decodificar(gsmap.codificar(np.array([0.101], np.float32)))[0], 0.1, "0,1 mm/h não vira 0,09")
         for orig, dec in zip(v[2:9], d[2:9]):
-            # O passo de √v é 1/20: o erro relativo cai com a chuva.
-            self.assertLess(abs(dec - orig), max(0.02, 0.05 * orig), (orig, dec))
+            # O passo de √v é 1/20: o erro relativo cai com a chuva (0,1 sobe para 0,12, o menor código com cor).
+            self.assertLess(abs(dec - orig), max(0.025, 0.05 * orig), (orig, dec))
         self.assertEqual(q[9], gsmap.LIMITE_Q)
         self.assertTrue(np.isnan(d[10]) and np.isnan(d[11]))
 
@@ -145,13 +146,14 @@ class TesteRodada(unittest.TestCase):
             return json.load(f)
 
     def test_ajustado_e_satelite(self):
-        self.publicar("/now/latest/", "gsmap_gauge_now.20261023.1630_1729.dat.gz", 8.0)
-        self.publicar("/now/latest/", "gsmap_gauge_now.20261023.1630.dat.gz", 8.0)  # cópia do GrADS
+        self.publicar("/now/latest/", "gsmap_gauge_now.20261023.1630_1729.dat.gz", 8.0)  # link para o de baixo
+        self.publicar("/now/latest/", "gsmap_gauge_now.20261023.1630.dat.gz", 8.0)
         self.publicar("/now/latest/", "gsmap_now.20261023.1630_1729.dat.gz", 9.0)
         self.publicar("/now/latest/", "gsmap_now.20261023.1600_1659.dat.gz", 4.0)
         r = self.rodar()
         self.assertEqual(r["feitos"], 2)
-        self.assertEqual(len(self.baixados), 2, "nem a cópia do GrADS nem o de satélite quando há o ajustado")
+        self.assertEqual(len(self.baixados), 2, "nem o link nem o de satélite quando há o ajustado")
+        self.assertIn("/now/latest/gsmap_gauge_now.20261023.1630.dat.gz", self.baixados, "o arquivo de verdade, não o link")
         idx = self.indice()
         self.assertEqual([(q["c"], q["p"]) for q in idx["quadros"]], [("202610231600", "s"), ("202610231630", "g")])
         self.assertEqual(idx["quadros"][1]["max"], 8.0)
@@ -165,12 +167,17 @@ class TesteRodada(unittest.TestCase):
         self.assertEqual(len(self.baixados), 1)
         idx = self.indice()
         self.assertEqual([(q["c"], q["p"]) for q in idx["quadros"]], [("202610231600", "g"), ("202610231630", "g")])
-        self.assertFalse(os.path.exists(os.path.join(gsmap.QUADROS, "202610231600-s.bin")))
+        # O de satélite fica 10 min no disco: o índice antigo, no navegador, ainda aponta para ele.
+        self.assertTrue(os.path.exists(os.path.join(gsmap.QUADROS, "202610231600-s.bin")))
+        g = os.path.join(gsmap.QUADROS, "202610231600-g.bin")
+        os.utime(g, (os.path.getmtime(g) - 700,) * 2)
 
-        # Nada novo: nada baixado.
+        # Nada novo: nada baixado, e o de satélite substituído sai.
         self.baixados.clear()
         self.assertEqual(self.rodar()["feitos"], 0)
         self.assertEqual(self.baixados, [])
+        self.assertFalse(os.path.exists(os.path.join(gsmap.QUADROS, "202610231600-s.bin")))
+        self.assertFalse(os.path.exists(os.path.join(gsmap.QUADROS, "202610231600-s.bin.gz")))
 
     def test_arquivo_do_dia_e_limpeza(self):
         # Mais de 24 h: só no arquivo do dia.
@@ -189,6 +196,19 @@ class TesteRodada(unittest.TestCase):
         r = self.rodar()
         self.assertEqual(r["removidos"], 2)
         self.assertEqual(self.indice()["quadros"], [])
+
+    def test_o_que_passou_do_limite_fica_para_a_proxima(self):
+        # Um dia inteiro no arquivo, mais que o limite da rodada: o resto vem na
+        # rodada seguinte, sem esperar 30 min para listar o dia de novo.
+        for h in range(18, 24):
+            for m in ("00", "30"):
+                self.publicar("/now/half_hour_G/2026/10/22/", f"gsmap_gauge_now.20261022.{h:02d}{m}.dat.gz")
+        with mock.patch.object(gsmap, "MAX_POR_RODADA", 5):
+            self.assertEqual(self.rodar()["feitos"], 5)
+            self.agora = self.agora.replace(minute=12)
+            self.assertEqual(self.rodar()["feitos"], 5)
+            self.assertEqual(self.rodar()["feitos"], 2)
+        self.assertEqual(len(self.indice()["quadros"]), 12)
 
     def test_arquivo_quebrado_espera(self):
         self.servidor["/now/latest/"]["gsmap_gauge_now.20261023.1630_1729.dat.gz"] = b"quebrado"

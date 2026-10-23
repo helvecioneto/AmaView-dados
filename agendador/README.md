@@ -552,10 +552,15 @@ A taxa de chuva horária do [GSMaP](https://sharaku.eorc.jaxa.jp/GSMaP/guide.htm
   Um quadro tem 262 KB, e o `.bin.gz` ao lado, algumas dezenas (`gzip_static`).
 - **48 h**: o `latest/` do servidor da JAXA tem as últimas 24 h; o resto vem
   do arquivo do dia (`/now/half_hour_G/AAAA/MM/DD/`), listado só quando falta
-  horário e no máximo a cada 30 min. Até 24 arquivos (~800 KB cada) por
-  rodada; arquivo que falha espera 30 min.
+  horário e no máximo a cada 30 min. Até 24 arquivos (~2 MB, ~11 s cada) e 10
+  min por rodada; o listado e não baixado fica na fila da próxima; o índice é
+  regravado a cada arquivo; arquivo que falha espera 30 min. O de satélite
+  substituído pelo ajustado fica mais 10 min no disco (o índice que o
+  navegador tem ainda aponta para ele), e o 404 não tem cache imutável.
 - **Conta**: o cadastro da JAXA é grátis e dá usuário e senha para o servidor
-  `hokusai.eorc.jaxa.jp` (SFTP; FTP de reserva). `amaview chave gsmap` pede os
+  `hokusai.eorc.jaxa.jp` por SFTP (FTPS, com TLS obrigatório, só pedido de
+  propósito: `amaview chave gsmap ftps`; nunca FTP aberto, nem troca automática
+  de protocolo quando o SFTP falha). `amaview chave gsmap` pede os
   dois na tela, testa com uma listagem e grava um netrc 640
   `root:amaview-gsmap`; o `curl` lê o arquivo, e a senha nunca aparece na
   linha de comando. A chave SSH do servidor é gravada na instalação

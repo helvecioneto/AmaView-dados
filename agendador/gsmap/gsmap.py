@@ -36,6 +36,7 @@ Saída (abaixo de GSMAP_RAIZ, servida pelo nginx em /gsmap/vN/):
 """
 import gzip
 import json
+import math
 import os
 import re
 import shutil
@@ -52,13 +53,16 @@ QUADROS = os.path.join(PASTA, "quadros")
 ESTADO = os.path.join(RAIZ, "estado.json")
 NETRC = os.environ.get("GSMAP_NETRC", "/etc/amaview/gsmap.netrc")
 SERVIDOR = os.environ.get("GSMAP_SERVIDOR", "hokusai.eorc.jaxa.jp")
-# SFTP (porta 22) é o que a JAXA documenta hoje; `ftp` fica de reserva.
+# SFTP (porta 22) é o que a JAXA documenta hoje; `ftp` (sempre com TLS
+# obrigatório: FTPS) só se pedido no `amaview chave gsmap ftps`.
 PROTOCOLO = os.environ.get("GSMAP_PROTOCOLO", "sftp")
 
 JANELA = timedelta(hours=48)
 # Arquivos por rodada: o horário novo nunca espera o preenchimento do passado
 # (~800 KB cada; o preenchimento das 48 h leva umas 5 rodadas).
 MAX_POR_RODADA = 24
+# E até 10 min por rodada (o tempo-limite do systemd é 15).
+TEMPO_MAX_S = 600
 # Dia do arquivo (half_hour_G/AAAA/MM/DD) com horário faltando: listar de
 # novo no máximo a cada 30 min. O latest/ é listado em toda rodada.
 RELISTAR_S = 1800
@@ -95,6 +99,7 @@ FATOR = 20
 LIMITE_Q = 254
 SEM_DADO = 255
 MINIMO_MMH = 0.1
+Q_MINIMO = math.ceil(math.sqrt(MINIMO_MMH) * FATOR)
 
 NOME = re.compile(r"^gsmap_(gauge_)?now\.(\d{8})\.(\d{4})(?:_(\d{4}))?\.dat(\.gz)?$")
 
@@ -148,6 +153,9 @@ def codificar(rec):
     sem = np.isnan(rec)
     v = np.where(sem, 0, rec)
     q = np.rint(np.sqrt(np.maximum(v, 0)) * FATOR)
+    # 0,100–0,105 mm/h arredondaria para q = 6 (0,09): sem cor no mapa. O
+    # menor código com chuva é o primeiro que decodifica ≥ 0,1 (q = 7, 0,12).
+    q = np.maximum(q, Q_MINIMO)
     q[v < MINIMO_MMH] = 0
     q = np.minimum(q, LIMITE_Q).astype(np.uint8)
     q[sem] = SEM_DADO
@@ -200,6 +208,9 @@ def tem_conta() -> bool:
 def curl(caminho: str, listar: bool = False, tempo: int = 120) -> bytes:
     url = f"{PROTOCOLO}://{SERVIDOR}{caminho}"
     cmd = ["curl", "-sS", "--fail", "--netrc-file", NETRC, "--connect-timeout", "20", "--max-time", str(tempo)]
+    if PROTOCOLO == "ftp":
+        # Só FTPS: a senha nunca vai em texto claro.
+        cmd.append("--ssl-reqd")
     if listar:
         cmd.append("--list-only")
     r = subprocess.run([*cmd, url], capture_output=True, timeout=tempo + 30)
@@ -215,8 +226,9 @@ def listar(pasta: str) -> dict[tuple[str, str], str]:
     for nome in curl(pasta, listar=True, tempo=60).decode(errors="replace").split():
         nome = nome.rsplit("/", 1)[-1]
         chave = ler_nome(nome)
-        # No latest/ há o nome "HHNN_hhnn" e a cópia para o GrADS "HHNN": basta um.
-        if chave and chave not in saida:
+        # No latest/ cada hora tem o arquivo "HHNN" e um link "HHNN_hhnn" para
+        # ele: basta um, e o arquivo de verdade ganha do link.
+        if chave and (chave not in saida or "_" in saida[chave].rsplit("/", 1)[-1].split(".")[2]):
             saida[chave] = pasta + nome
     return saida
 
@@ -258,13 +270,30 @@ def gravar(c: str, p: str, quadro: bytes) -> None:
     base = os.path.join(QUADROS, f"{c}-{p}.bin")
     escrever_atomico(base + ".gz", gzip.compress(quadro, compresslevel=9, mtime=0))
     escrever_atomico(base, quadro)
-    if p == "g":
-        # O ajustado substitui o de satélite só.
-        for ext in (".bin", ".bin.gz"):
-            try:
-                os.remove(os.path.join(QUADROS, f"{c}-s{ext}"))
-            except FileNotFoundError:
-                pass
+
+
+# O de satélite só, já substituído pelo ajustado, fica no disco este tempo: o
+# índice que o navegador tem na mão (revalidado a cada minuto) ainda pode
+# apontar para ele — apagar junto com a gravação do ajustado dava 404.
+MANTER_SUBSTITUIDO_S = 600
+
+
+def apagar_substituidos() -> int:
+    """Apaga os `-s` cujo `-g` já está no índice há mais de MANTER_SUBSTITUIDO_S."""
+    removidos = 0
+    for nome in os.listdir(QUADROS):
+        m = re.match(r"^(\d{12})-s\.bin(\.gz)?$", nome)
+        if not m:
+            continue
+        g = os.path.join(QUADROS, f"{m.group(1)}-g.bin")
+        try:
+            velho = time.time() - os.path.getmtime(g) > MANTER_SUBSTITUIDO_S
+        except FileNotFoundError:
+            continue
+        if velho:
+            os.remove(os.path.join(QUADROS, nome))
+            removidos += 1
+    return removidos
 
 
 def limpar(agora: datetime) -> int:
@@ -315,10 +344,19 @@ def rodada(agora: datetime | None = None) -> dict:
     estado = ler_json(ESTADO, {})
     listadas: dict[str, float] = estado.get("listadas", {})
     resumos: dict[str, dict] = estado.get("resumos", {})
-    removidos = limpar(agora)
+    removidos = limpar(agora) + apagar_substituidos()
+    # Versões antigas do formato: só depois de 2 dias sem rodar — o app já
+    # publicado ainda pede o endereço antigo até a versão nova dele entrar.
     for nome in os.listdir(os.path.dirname(PASTA)):
-        if nome != os.path.basename(PASTA):
-            shutil.rmtree(os.path.join(os.path.dirname(PASTA), nome), ignore_errors=True)
+        antiga = os.path.join(os.path.dirname(PASTA), nome)
+        if nome == os.path.basename(PASTA):
+            continue
+        try:
+            parada = time.time() - os.path.getmtime(os.path.join(antiga, "indice.json")) > 2 * 86400
+        except FileNotFoundError:
+            parada = True
+        if parada:
+            shutil.rmtree(antiga, ignore_errors=True)
 
     limite = agora - JANELA
     publicados = no_disco()
@@ -330,7 +368,14 @@ def rodada(agora: datetime | None = None) -> dict:
         esperados.append(carimbo_de(t))
         t -= timedelta(minutes=30)
 
+    # O que já foi listado e ainda não baixado (passou do limite da rodada, ou
+    # falhou) continua na fila: sem isto, o dia listado esperaria 30 min para
+    # ser visto de novo e o preenchimento das 48 h empacava.
     remotos: dict[tuple[str, str], str] = {}
+    for k, caminho in estado.get("pendentes", {}).items():
+        c, p = k.split("-", 1)
+        if c in esperados and publicados.get(c) != "g":
+            remotos[(c, p)] = caminho
     erros = []
     try:
         remotos.update(listar("/now/latest/"))
@@ -340,7 +385,7 @@ def rodada(agora: datetime | None = None) -> dict:
     # dias com horário faltando, no máximo a cada 30 min.
     dias = {}
     for c in esperados:
-        if publicados.get(c) != "g" and (c, "g") not in remotos:
+        if instante(c) < agora - timedelta(hours=23) and publicados.get(c) != "g" and (c, "g") not in remotos:
             dias.setdefault(pasta_do_dia(instante(c)), True)
     for pasta in dias:
         if time.time() - listadas.get(pasta, 0) < RELISTAR_S:
@@ -366,13 +411,26 @@ def rodada(agora: datetime | None = None) -> dict:
         elif tem is None and (c, "s") in remotos:
             fila.append((c, "s"))
     feitos, falhas = 0, 0
+    inicio = time.time()
+
+    def publicar_indice() -> dict:
+        indice = montar_indice(resumos, agora)
+        escrever_atomico(os.path.join(PASTA, "indice.json"), json.dumps(indice, separators=(",", ":")).encode())
+        return indice
+
     for c, p in [x for x in fila if f"{x[0]}-{x[1]}" not in falhados][:MAX_POR_RODADA]:
+        # Rodada longa (a rede da JAXA lenta): o resto fica para a próxima, bem
+        # antes do tempo-limite do systemd (15 min).
+        if time.time() - inicio > TEMPO_MAX_S:
+            break
         t0 = time.time()
         try:
             quadro, r = converter(curl(remotos[(c, p)]))
             gravar(c, p, quadro)
             resumos[f"{c}-{p}"] = r
             feitos += 1
+            # A hora nova no ar já: uma rodada interrompida não perde o que baixou.
+            publicar_indice()
             print(f"{c}-{p}: máx {r['max']} mm/h, {r['f1'] * 100:.1f}% ≥ 1 mm/h ({time.time() - t0:.1f} s)")
         except Exception as e:  # noqa: BLE001
             falhas += 1
@@ -380,11 +438,16 @@ def rodada(agora: datetime | None = None) -> dict:
             print(f"falha em {c}-{p}: {e}", file=sys.stderr)
 
     publicados = no_disco()
-    indice = montar_indice(resumos, agora)
+    indice = publicar_indice()
     presentes = {f"{q['c']}-{q['p']}" for q in indice["quadros"]}
-    escrever_atomico(os.path.join(PASTA, "indice.json"), json.dumps(indice, separators=(",", ":")).encode())
+    pendentes = {
+        f"{c}-{p}": caminho
+        for (c, p), caminho in remotos.items()
+        if c in esperados and publicados.get(c) != "g" and not (p == "s" and c in publicados)
+    }
     estado = {
         "listadas": listadas,
+        "pendentes": pendentes,
         "resumos": {k: v for k, v in resumos.items() if k in presentes},
         "falhados": falhados,
     }

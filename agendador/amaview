@@ -9,7 +9,7 @@
 #   amaview token        grava o token (pede na tela, sem eco)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
 #   amaview chave F remover   apaga a chave (a fonte sai na próxima rodada)
-#   amaview chave gsmap  grava a conta da JAXA (usuário e senha do GSMaP; sem eco; testa antes)
+#   amaview chave gsmap [ftps]  grava a conta da JAXA (usuário e senha do GSMaP; sem eco; testa antes por SFTP, ou FTPS)
 #   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -476,7 +476,7 @@ situacao_gsmap() {
     && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
   python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-gsmap"
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 i = json.load(open("/var/cache/amaview-gsmap/gsmap/v1/indice.json"))
 q = i["quadros"]
 agora = datetime.now(timezone.utc)
@@ -484,7 +484,8 @@ g = sum(1 for x in q if x["p"] == "g")
 print(f"  {len(q)} horários nas últimas 48 h (esperados 96), {g} ajustados por pluviômetros")
 if q:
     t = datetime.strptime(q[-1]["c"], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
-    print(f"  mais novo: hora de {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás) · máx {q[-1]['max']} mm/h")
+    fim = t + timedelta(minutes=i.get("duracao_min", 60))
+    print(f"  mais nova: {t:%d/%m %H:%M}–{fim:%H:%M} UTC, terminou há {(agora - fim).total_seconds() / 60:.0f} min · máx {q[-1]['max']} mm/h")
 PY
   journalctl -u amaview-gsmap -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   echo "  em disco: $(du -sh /var/cache/amaview-gsmap 2>/dev/null | cut -f1)"
@@ -509,8 +510,9 @@ gravar_conta_gsmap() {
   echo "  Cadastro: https://sharaku.eorc.jaxa.jp/GSMaP/registration.html (o e-mail traz usuário e senha)"
   echo
   local u p
-  read -rp "  Usuário: " u
-  read -rsp "  Senha (não aparece na tela): " p
+  IFS= read -rp "  Usuário: " u
+  # IFS vazio: espaços no começo e no fim da senha continuam nela.
+  IFS= read -rsp "  Senha (não aparece na tela): " p
   echo
   u="$(printf '%s' "$u" | tr -d '[:space:]')"
   if [ -z "$u" ] || [ -z "$p" ]; then vermelho "  usuário ou senha vazios; nada gravado"; unset p; return 1; fi
@@ -524,24 +526,25 @@ gravar_conta_gsmap() {
   local casa
   casa="$(mktemp -d)"
   mkdir -p "$casa/.ssh" && sudo cat "$GSMAP_HOSTS" >"$casa/.ssh/known_hosts"
-  local proto="" saida
-  for tentativa in sftp ftp; do
-    echo "  Testando por $tentativa…"
-    if saida="$(HOME="$casa" curl -sS --fail -m 60 --netrc-file <(printf '%s\n' "$netrc") --list-only "$tentativa://$GSMAP_SERVIDOR/now/latest/" 2>&1)"; then
-      proto="$tentativa"
-      break
-    fi
-    printf '%s\n' "$saida" | tail -n 1 | sed 's/^/    /'
-  done
-  rm -rf "$casa"
-  if [ -z "$proto" ]; then
+  # SFTP, com a chave do servidor conferida. Nunca FTP aberto (a senha iria
+  # em texto claro): só FTPS (TLS obrigatório) e só pedido de propósito —
+  # cair sozinho para outro protocolo quando o SFTP falha (uma chave do
+  # servidor diferente, por exemplo) é justamente o que um ataque quer.
+  local proto="sftp" tls=() saida
+  if [ "$acao" = "ftps" ]; then proto="ftp"; tls=(--ssl-reqd); fi
+  echo "  Testando por ${acao:-sftp}…"
+  if ! saida="$(HOME="$casa" curl -sS --fail -m 60 "${tls[@]}" --netrc-file <(printf '%s\n' "$netrc") --list-only "$proto://$GSMAP_SERVIDOR/now/latest/" 2>&1)"; then
+    rm -rf "$casa"
     unset netrc
-    vermelho "  a JAXA não aceitou a conta (nem por SFTP nem por FTP) — nada gravado"
+    printf '%s\n' "$saida" | tail -n 1 | sed 's/^/    /'
+    vermelho "  a JAXA não aceitou a conta por ${acao:-sftp} — nada gravado"
+    [ "$proto" = "sftp" ] && echo "  (se a chave do servidor mudou, confira com a JAXA e apague $GSMAP_HOSTS antes de 'amaview instalar')"
     return 1
   fi
+  rm -rf "$casa"
   local n
   n="$(printf '%s\n' "$saida" | grep -c 'gsmap_gauge_now\.' || true)"
-  verde "  aceita por $proto: $n arquivos ajustados por pluviômetros no latest/"
+  verde "  aceita por ${acao:-sftp}: $n arquivos ajustados por pluviômetros no latest/"
   sudo install -m 640 -o root -g amaview-gsmap /dev/null "$GSMAP_NETRC"
   printf '%s\n' "$netrc" | sudo tee "$GSMAP_NETRC" >/dev/null
   unset netrc
