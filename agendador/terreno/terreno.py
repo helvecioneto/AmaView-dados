@@ -330,6 +330,7 @@ class Pedido(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         u = urllib.parse.urlsplit(self.path)
         if u.path == "/terreno/saude":
+            self.recortes.completar()
             return self.enviar(200, {"ok": bool(self.recortes.anos), "anos": self.recortes.anos})
         if u.path != "/terreno/v1":
             return self.enviar(404, {"erro": "caminho desconhecido"})
