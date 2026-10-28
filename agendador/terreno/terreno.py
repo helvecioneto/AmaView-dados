@@ -101,12 +101,17 @@ class Recortes:
             arq = os.path.join(self.pasta, f"{ano}.tif")
             if not os.path.exists(arq):
                 continue
-            ds = gdal.Open(arq)
+            try:
+                ds = gdal.Open(arq)
+            except RuntimeError as e:  # um ano ilegível não derruba o serviço
+                print(f"{arq}: {e}", file=sys.stderr, flush=True)
+                continue
             gt = ds.GetGeoTransform()
             if self.gt is None:
                 self.gt, self.tam = gt, (ds.RasterXSize, ds.RasterYSize)
             elif any(abs(a - b) > 1e-9 for a, b in zip(gt, self.gt)) or (ds.RasterXSize, ds.RasterYSize) != self.tam:
-                raise RuntimeError(f"{arq}: grade diferente da dos outros anos")
+                print(f"{arq}: grade diferente da dos outros anos; fica de fora", file=sys.stderr, flush=True)
+                continue
             self.ds[ano] = ds
 
     @property
@@ -128,6 +133,15 @@ class Recortes:
                 a = self.ds[ano].GetRasterBand(1).ReadAsArray(x, y, w, h)
                 saida.append(contar(a[mascara]))
         return saida
+
+    def composicao_segura(self, lat: float, lon: float) -> tuple[list | None, bool]:
+        """A composição e se a leitura deu certo (um bloco ruim no disco não
+        pode levar junto o CAR da mesma resposta)."""
+        try:
+            return self.composicao(lat, lon), True
+        except RuntimeError as e:
+            print(f"MapBiomas {lat},{lon}: {e}", file=sys.stderr, flush=True)
+            return None, False
 
 
 def janela_circulo(gt, tam, lat: float, lon: float, raio_m: float):
@@ -189,6 +203,12 @@ class CacheCar:
 
 CACHE_CAR = CacheCar()
 
+# SICAR fora do ar: depois de uma falha, um minuto sem tentar (senão cada clique
+# espera o tempo-limite inteiro), e no máximo 4 consultas ao mesmo tempo.
+PAUSA_CAR = 60
+SEMAFORO_CAR = threading.BoundedSemaphore(4)
+_falha_car = [0.0]
+
 
 def url_car(uf: str, lat: float, lon: float) -> str:
     # Em EPSG:4326 o WFS 2.0 do GeoServer usa a ordem latitude, longitude.
@@ -238,13 +258,21 @@ def consultar_car(uf: str | None, lat: float, lon: float, abrir=abrir_car) -> di
     guardado = CACHE_CAR.pegar(chave)
     if guardado is not None:
         return {"situacao": "ok", "imoveis": guardado}
+    if time.time() - _falha_car[0] < PAUSA_CAR or not SEMAFORO_CAR.acquire(timeout=CAR_TEMPO):
+        return {"situacao": "indisponivel", "imoveis": []}
     pedido = urllib.request.Request(url_car(uf, lat, lon), headers={"User-Agent": AGENTE})
+    inicio = time.time()
     try:
         with abrir(pedido, timeout=CAR_TEMPO) as r:
             dado = json.loads(r.read())
+        if time.time() - inicio > 2 * CAR_TEMPO:  # respondeu, mas devagar demais: pausa também
+            _falha_car[0] = time.time()
     except Exception as e:  # noqa: BLE001 — qualquer falha do SICAR vira "indisponível"
+        _falha_car[0] = time.time()
         print(f"CAR {uf} {lat},{lon}: {type(e).__name__}: {e}", file=sys.stderr)
         return {"situacao": "indisponivel", "imoveis": []}
+    finally:
+        SEMAFORO_CAR.release()
     imoveis = imoveis_car(dado)
     CACHE_CAR.guardar(chave, imoveis)
     return {"situacao": "ok", "imoveis": imoveis}
@@ -256,17 +284,16 @@ def ler_ponto(qs: dict) -> tuple[float, float, str | None]:
     """Valida lat, lon (4 casas, ~11 m) e a UF. ValueError se inválido."""
     lat = round(float(qs["lat"][0]), 4)
     lon = round(float(qs["lon"][0]), 4)
-    if not (CAIXA[1] <= lat <= CAIXA[3] and CAIXA[0] <= lon <= CAIXA[2]):
+    if not (CAIXA[1] <= lat <= CAIXA[3] and CAIXA[0] <= lon <= CAIXA[2]):  # também recusa nan
         raise ValueError("fora da Amazônia Legal")
-    uf = (qs.get("uf") or [""])[0].upper() or None
-    if uf is not None and uf not in UFS:
-        raise ValueError("UF fora da Amazônia Legal")
-    return lat, lon, uf
+    # UF de fora (foco na folga do recorte): sem CAR, mas com o MapBiomas.
+    uf = (qs.get("uf") or [""])[0].upper()
+    return lat, lon, uf if uf in UFS else None
 
 
 def responder_ponto(recortes: Recortes, lat: float, lon: float, uf: str | None, car=consultar_car) -> tuple[dict, int]:
     """O corpo da resposta e por quanto tempo o nginx pode guardá-la."""
-    comp = recortes.composicao(lat, lon)
+    comp, leu = recortes.composicao_segura(lat, lon)
     resultado_car = car(uf, lat, lon)
     corpo = {
         "v": 1,
@@ -281,7 +308,7 @@ def responder_ponto(recortes: Recortes, lat: float, lon: float, uf: str | None, 
         },
         "car": resultado_car,
     }
-    validade = CACHE_SEM_CAR if resultado_car["situacao"] == "indisponivel" else CACHE_OK
+    validade = CACHE_SEM_CAR if resultado_car["situacao"] == "indisponivel" or not leu else CACHE_OK
     return corpo, validade
 
 
@@ -308,8 +335,10 @@ class Pedido(http.server.BaseHTTPRequestHandler):
             return self.enviar(404, {"erro": "caminho desconhecido"})
         try:
             lat, lon, uf = ler_ponto(urllib.parse.parse_qs(u.query))
-        except (KeyError, ValueError) as e:
-            return self.enviar(400, {"erro": str(e) or "lat e lon são obrigatórios"}, 3600)
+        except KeyError:
+            return self.enviar(400, {"erro": "lat e lon são obrigatórios"}, 3600)
+        except ValueError as e:
+            return self.enviar(400, {"erro": str(e)}, 3600)
         self.recortes.completar()
         corpo, validade = responder_ponto(self.recortes, lat, lon, uf)
         if len(self.recortes.anos) < len(ANOS):
@@ -320,10 +349,15 @@ class Pedido(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class Servidor(http.server.ThreadingHTTPServer):
+    # A fila padrão (5) recusava conexões com 32 clientes ao mesmo tempo.
+    request_queue_size = 128
+
+
 def main() -> None:
     recortes = Recortes(DADOS)
     Pedido.recortes = recortes
-    servidor = http.server.ThreadingHTTPServer(("127.0.0.1", PORTA), Pedido)
+    servidor = Servidor(("127.0.0.1", PORTA), Pedido)
     servidor.daemon_threads = True
     print(f"terreno em 127.0.0.1:{PORTA}, {len(recortes.anos)} anos do MapBiomas em {DADOS}", flush=True)
     servidor.serve_forever()

@@ -14,8 +14,9 @@ Environment=TERRENO_DADOS=/var/lib/amaview-terreno/mapbiomas-c11
 Environment=TERRENO_THREADS=2
 Environment=GDAL_CACHEMAX=512
 Environment=PYTHONUNBUFFERED=1
-# 41 anos × ~2 min. Ano que já existe é pulado: rodar de novo só completa.
-TimeoutStartSec=4h
+# 41 anos × 2–8 min (o bucket entrega de 2 a 11 MB/s). Ano que já existe é
+# pulado: rodar de novo só completa.
+TimeoutStartSec=12h
 # Trabalho de fundo: os blocos, os espelhos e o nginx vêm primeiro.
 Nice=15
 IOSchedulingClass=idle

@@ -40,6 +40,9 @@ COLECAO_URL = (
 )
 ANOS = list(range(1985, 2026))
 FOLGA_GRAUS = 0.15
+# Um ano pede ~1 GB enquanto é feito (o do Brasil inteiro + o recorte); a
+# máquina tem outros serviços em /var: abaixo disto, para.
+LIVRE_MINIMO = 3 * 1024**3
 TRABALHADORES = os.environ.get("TERRENO_THREADS", "2")
 
 AGENTE = "AmaView-terreno (+https://amaview.com.br/)"
@@ -87,6 +90,9 @@ def recortar(ano: int, corte: str, caixa: tuple[float, float, float, float]) -> 
         return
     t = time.time()
     oeste, sul, leste, norte = caixa
+    livre = shutil.disk_usage(DADOS).free
+    if livre < LIVRE_MINIMO:
+        raise OSError(f"só {livre / 1024**3:.1f} GB livres em {DADOS}; precisa de {LIVRE_MINIMO / 1024**3:.0f}")
     with tempfile.TemporaryDirectory(dir=DADOS) as tmp:
         origem = os.path.join(tmp, "brasil.tif")
         baixar(COLECAO_URL.format(ano=ano), origem)
@@ -100,7 +106,7 @@ def recortar(ano: int, corte: str, caixa: tuple[float, float, float, float]) -> 
         # 2) Corta pelo anel na mesma grade (mesma caixa e resolução: o vizinho
         #    mais próximo copia o pixel, sem reamostrar).
         parcial = os.path.join(tmp, f"{ano}.tif")
-        gdal.Warp(
+        saida = gdal.Warp(
             parcial, vrt,
             cutlineDSName=corte, outputBounds=lim, xRes=dx, yRes=abs(dy), resampleAlg="near",
             srcNodata=0, dstNodata=0, multithread=True, warpMemoryLimit=512,
@@ -108,12 +114,33 @@ def recortar(ano: int, corte: str, caixa: tuple[float, float, float, float]) -> 
             creationOptions=["COMPRESS=ZSTD", "ZSTD_LEVEL=9", "TILED=YES", "BLOCKXSIZE=512",
                              "BLOCKYSIZE=512", f"NUM_THREADS={TRABALHADORES}"],
         )
+        # Fechar explicitamente: no destrutor, um erro de escrita (disco cheio)
+        # passaria calado e o arquivo truncado entraria no lugar.
+        saida.FlushCache()
+        saida.Close()
+        conferir(parcial, lim, dx)
         os.replace(parcial, final)
     print(f"{ano}: {os.path.getsize(final) / 1e6:.0f} MB em {time.time() - t:.0f} s", flush=True)
 
 
+def conferir(arq: str, lim: list[float], dx: float) -> None:
+    """Reabre e lê o arquivo inteiro por blocos antes de publicá-lo."""
+    ds = gdal.Open(arq)
+    x0, rx, _, y0, _, _ = ds.GetGeoTransform()
+    if abs(x0 - lim[0]) > 1e-9 or abs(y0 - lim[3]) > 1e-9 or abs(rx - dx) > 1e-12:
+        raise RuntimeError(f"{arq}: grade fora da do MapBiomas")
+    banda = ds.GetRasterBand(1)
+    passo = 4096
+    for y in range(0, ds.RasterYSize, passo):
+        banda.ReadAsArray(0, y, ds.RasterXSize, min(passo, ds.RasterYSize - y))
+
+
 def main(argv: list[str]) -> int:
     os.makedirs(DADOS, exist_ok=True)
+    # Sobras de uma rodada interrompida (o serviço só roda um de cada vez).
+    for nome in os.listdir(DADOS):
+        if nome.startswith("tmp") and os.path.isdir(os.path.join(DADOS, nome)):
+            shutil.rmtree(os.path.join(DADOS, nome), ignore_errors=True)
     anos = [int(a) for a in argv] or ANOS
     with tempfile.TemporaryDirectory() as tmp:
         corte = os.path.join(tmp, "amazonia_legal.geojson")

@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 from osgeo import gdal
@@ -94,11 +95,12 @@ class TestRecortes(unittest.TestCase):
         self.assertEqual(set(classes), {3, 15})
         self.assertAlmostEqual(classes[3] / sum(classes.values()), 0.5, delta=0.06)
 
-    def test_grade_diferente_entre_anos_e_erro(self):
+    def test_ano_com_grade_diferente_ou_ilegivel_fica_de_fora(self):
         gravar(self.pasta, 1985, np.zeros((LADO, LADO), dtype=np.uint8))
         gravar(self.pasta, 1986, np.zeros((LADO, LADO), dtype=np.uint8), x0=X0 + RES)
-        with self.assertRaises(RuntimeError):
-            terreno.Recortes(self.pasta)
+        with open(os.path.join(self.pasta, "1987.tif"), "wb") as f:
+            f.write(b"isto nao e um tiff")
+        self.assertEqual(terreno.Recortes(self.pasta).anos, [1985])
 
     def test_pasta_vazia_nao_quebra(self):
         r = terreno.Recortes(self.pasta)
@@ -119,6 +121,7 @@ class TestRecortes(unittest.TestCase):
 class TestCar(unittest.TestCase):
     def setUp(self):
         terreno.CACHE_CAR.itens.clear()
+        terreno._falha_car[0] = 0.0
 
     def test_url_usa_lat_lon_e_so_campos_publicos(self):
         u = terreno.url_car("PA", -6.5, -52.5)
@@ -147,13 +150,21 @@ class TestCar(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertEqual(len(chamadas), 1)
 
-    def test_sicar_fora_do_ar(self):
+    def test_sicar_fora_do_ar_pausa_um_minuto(self):
+        chamadas = []
+
         def abrir(pedido, timeout):
+            chamadas.append(1)
             raise TimeoutError("timed out")
 
         r = terreno.consultar_car("PA", -6.5, -52.5, abrir)
         self.assertEqual(r, {"situacao": "indisponivel", "imoveis": []})
         self.assertIsNone(terreno.CACHE_CAR.pegar(("PA", -6.5, -52.5)))
+        terreno.consultar_car("PA", -6.6, -52.6, abrir)
+        self.assertEqual(len(chamadas), 1)  # o segundo nem tentou
+        terreno._falha_car[0] -= terreno.PAUSA_CAR
+        terreno.consultar_car("PA", -6.6, -52.6, abrir)
+        self.assertEqual(len(chamadas), 2)
 
     def test_sem_uf_nao_consulta(self):
         self.assertEqual(terreno.consultar_car(None, -6.5, -52.5, None)["situacao"], "sem_uf")
@@ -166,10 +177,19 @@ class TestPedido(unittest.TestCase):
     def test_ponto_fora_ou_uf_errada(self):
         with self.assertRaises(ValueError):
             terreno.ler_ponto({"lat": ["-23.5"], "lon": ["-46.6"]})
+        self.assertEqual(terreno.ler_ponto({"lat": ["-8.7"], "lon": ["-63.9"], "uf": ["GO"]}), (-8.7, -63.9, None))
         with self.assertRaises(ValueError):
-            terreno.ler_ponto({"lat": ["-8.7"], "lon": ["-63.9"], "uf": ["SP"]})
+            terreno.ler_ponto({"lat": ["nan"], "lon": ["-63.9"]})
         with self.assertRaises(KeyError):
             terreno.ler_ponto({"lat": ["-8.7"]})
+
+    def test_bloco_ilegivel_nao_leva_o_car_junto(self):
+        r = terreno.Recortes(tempfile.mkdtemp())
+        r.composicao = mock.Mock(side_effect=RuntimeError("TIFFReadEncodedTile() failed"))
+        corpo, validade = terreno.responder_ponto(r, -8.7, -63.9, "RO", lambda *a: {"situacao": "ok", "imoveis": [{"cod": "X"}]})
+        self.assertIsNone(corpo["mapbiomas"])
+        self.assertEqual(corpo["car"]["imoveis"], [{"cod": "X"}])
+        self.assertEqual(validade, terreno.CACHE_SEM_CAR)
 
     def test_resposta_guarda_pouco_sem_car(self):
         pasta = tempfile.mkdtemp()
