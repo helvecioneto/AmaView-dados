@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 import numpy as np
@@ -123,11 +124,39 @@ class TestCar(unittest.TestCase):
         terreno.CACHE_CAR.itens.clear()
         terreno._falha_car[0] = 0.0
 
-    def test_url_usa_lat_lon_e_so_campos_publicos(self):
-        u = terreno.url_car("PA", -6.5, -52.5)
-        self.assertIn("sicar%3Asicar_imoveis_pa", u)
-        self.assertIn("POINT%28-6.5+-52.5%29", u)
+    def test_url_pede_o_circulo_em_lat_lon_e_so_campos_publicos(self):
+        u = urllib.parse.unquote_plus(terreno.url_car("PA", -6.5, -52.5))
+        self.assertIn("sicar:sicar_imoveis_pa", u)
+        self.assertIn("INTERSECTS(geo_area_imovel,POLYGON((-6.500000 -52.496610,", u)  # lat, lon: leste do ponto
         self.assertIn("propertyName=cod_imovel", u)
+        self.assertNotIn("cpf", u.lower())
+
+    def test_contorno_simplificado_e_quem_contem_o_ponto(self):
+        # Um quadrado de ~1 km com 4000 vértices nas bordas, e um vizinho a leste.
+        lado = [(-52.505 + i * 0.01 / 1000, -6.505) for i in range(1000)]
+        anel = lado + [(-52.495, -6.505 + i * 0.01 / 1000) for i in range(1000)]
+        anel += [(-52.495 - i * 0.01 / 1000, -6.495) for i in range(1000)]
+        anel += [(-52.505, -6.495 - i * 0.01 / 1000) for i in range(1000)] + [anel[0]]
+        vizinho = [(-52.495, -6.505), (-52.49, -6.505), (-52.49, -6.495), (-52.495, -6.495), (-52.495, -6.505)]
+        dado = {"features": [
+            {"properties": {"cod_imovel": "VIZ", "status_imovel": "AT", "area": 50.0},
+             "geometry": {"type": "Polygon", "coordinates": [vizinho]}},
+            {"properties": {"cod_imovel": "DONO", "status_imovel": "CA", "area": 120.0},
+             "geometry": {"type": "MultiPolygon", "coordinates": [[anel]]}},
+        ]}
+        imoveis = terreno.imoveis_car(dado, -6.5, -52.5)
+        self.assertEqual([i["cod"] for i in imoveis], ["DONO", "VIZ"])  # quem contém vem antes, mesmo cancelado
+        self.assertEqual([i["contem"] for i in imoveis], [True, False])
+        def pares(c):
+            return [c] if isinstance(c[0], float) else [p for x in c for p in pares(x)]
+
+        pontos = pares(imoveis[0]["geom"]["coordinates"])
+        self.assertLessEqual(len(pontos), terreno.CAR_VERTICES)
+        self.assertTrue(all(round(c, 5) == c for p in pontos for c in p))
+
+    def test_geometria_ruim_nao_quebra(self):
+        dado = {"features": [{"properties": {"cod_imovel": "X"}, "geometry": {"type": "Polygon", "coordinates": "lixo"}}]}
+        self.assertEqual(terreno.imoveis_car(dado, -6.5, -52.5)[0]["geom"], None)
 
     def test_imoveis_ativos_primeiro_e_menores_antes(self):
         cods = [i["cod"] for i in terreno.imoveis_car(CAR_PA)]

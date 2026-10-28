@@ -13,9 +13,11 @@ menor dos satélites de focos):
   `preparar.py` deixa em disco. Ler o pixel direto do bucket custaria ~4 MB e
   ~4 s por ano (os arquivos não têm visões reduzidas e o índice de blocos é
   grande), e o bucket não manda CORS.
-- `car`: os imóveis do CAR que contêm o ponto, pelo WFS público do SICAR (só
-  dados públicos: código, situação, área, tipo; o CAR não publica nome nem
-  CPF). O CAR é autodeclaratório e os imóveis se sobrepõem: vão todos.
+- `car`: os imóveis do CAR que tocam o mesmo círculo (a posição do foco tem essa
+  incerteza: o fogo pode estar no vizinho), pelo WFS público do SICAR, com o
+  contorno simplificado para o mapa e a marca de quem contém o ponto (só dados
+  públicos: código, situação, área, tipo; o CAR não publica nome nem CPF). O
+  CAR é autodeclaratório e os imóveis se sobrepõem: vão todos.
 
 A resposta de um ponto não muda (o MapBiomas é anual; o CAR muda devagar): o
 nginx guarda em cache (X-Accel-Expires) e limita a taxa por IP.
@@ -35,7 +37,7 @@ import urllib.request
 from collections import OrderedDict
 
 import numpy as np
-from osgeo import gdal
+from osgeo import gdal, ogr
 
 gdal.UseExceptions()
 
@@ -51,9 +53,13 @@ CAIXA = (-74.2, -18.2, -43.8, 5.5)
 UFS = {"AC", "AM", "AP", "MA", "MT", "PA", "RO", "RR", "TO"}
 
 CAR_WFS = "https://geoserver.car.gov.br/geoserver/sicar/wfs"
-CAR_CAMPOS = "cod_imovel,status_imovel,condicao,area,m_fiscal,tipo_imovel,municipio,uf"
+CAR_CAMPOS = "cod_imovel,status_imovel,condicao,area,m_fiscal,tipo_imovel,municipio,uf,geo_area_imovel"
 CAR_TEMPO = 10
-CAR_MAX = 10
+CAR_MAX = 20
+# Contorno para o mapa: até ~400 vértices por imóvel (os de centenas de milhares
+# de hectares vinham com 100 KB) e 5 casas (~1 m).
+CAR_VERTICES = 400
+CAR_CASAS = 5
 AGENTE = "AmaView-terreno (+https://amaview.com.br/)"
 # O GeoServer do SICAR só oferece cifras abaixo do nível 2 do OpenSSL 3 (o
 # 3.6 recusa no aperto de mão; o 3.0 do Ubuntu 24.04 ainda aceita): nível 1
@@ -210,8 +216,17 @@ SEMAFORO_CAR = threading.BoundedSemaphore(4)
 _falha_car = [0.0]
 
 
+def circulo_latlon(lat: float, lon: float, raio_m: float = RAIO_M, n: int = 24) -> str:
+    """O círculo do raio em WKT, na ordem latitude, longitude (a do WFS 2.0
+    do GeoServer em EPSG:4326)."""
+    dlat = raio_m / M_POR_GRAU
+    dlon = raio_m / (M_POR_GRAU * math.cos(math.radians(lat)))
+    pts = [(lat + dlat * math.sin(2 * math.pi * k / n), lon + dlon * math.cos(2 * math.pi * k / n)) for k in range(n)]
+    pts.append(pts[0])
+    return "POLYGON((" + ",".join(f"{a:.6f} {b:.6f}" for a, b in pts) + "))"
+
+
 def url_car(uf: str, lat: float, lon: float) -> str:
-    # Em EPSG:4326 o WFS 2.0 do GeoServer usa a ordem latitude, longitude.
     q = {
         "service": "WFS",
         "version": "2.0.0",
@@ -220,19 +235,52 @@ def url_car(uf: str, lat: float, lon: float) -> str:
         "outputFormat": "application/json",
         "count": str(CAR_MAX),
         "propertyName": CAR_CAMPOS,
-        "cql_filter": f"INTERSECTS(geo_area_imovel,POINT({lat} {lon}))",
+        "srsName": "EPSG:4326",
+        "cql_filter": f"INTERSECTS(geo_area_imovel,{circulo_latlon(lat, lon)})",
     }
     return f"{CAR_WFS}?{urllib.parse.urlencode(q)}"
 
 
-def imoveis_car(geojson: dict) -> list[dict]:
-    """Só os campos públicos que a ficha mostra, na ordem da situação."""
+def vertices(g: ogr.Geometry) -> int:
+    if g.GetGeometryCount() == 0:
+        return g.GetPointCount()
+    return sum(vertices(g.GetGeometryRef(i)) for i in range(g.GetGeometryCount()))
+
+
+def contorno(geometria: dict | None) -> tuple[dict | None, ogr.Geometry | None]:
+    """O contorno simplificado (GeoJSON lon/lat) e a geometria original."""
+    if not geometria:
+        return None, None
+    try:
+        g = ogr.CreateGeometryFromJson(json.dumps(geometria))
+    except RuntimeError:
+        return None, None
+    if g is None:
+        return None, None
+    s, tol = g, 0.00005
+    while vertices(s) > CAR_VERTICES and tol < 0.05:
+        s = g.SimplifyPreserveTopology(tol)
+        tol *= 2
+
+    def arredondar(c):
+        return [round(c[0], CAR_CASAS), round(c[1], CAR_CASAS)] if isinstance(c[0], (int, float)) else [arredondar(x) for x in c]
+
+    gj = json.loads(s.ExportToJson())
+    gj["coordinates"] = arredondar(gj["coordinates"])
+    return gj, g
+
+
+def imoveis_car(geojson: dict, lat: float | None = None, lon: float | None = None) -> list[dict]:
+    """Só os campos públicos que a ficha mostra, com o contorno para o mapa:
+    primeiro os que contêm o ponto, depois pela situação."""
+    ponto = ogr.CreateGeometryFromWkt(f"POINT({lon} {lat})") if lat is not None else None
     saida = []
     for f in geojson.get("features") or []:
         p = f.get("properties") or {}
         cod = p.get("cod_imovel")
         if not cod:
             continue
+        geom, original = contorno(f.get("geometry"))
         saida.append({
             "cod": cod,
             "status": p.get("status_imovel"),
@@ -242,8 +290,10 @@ def imoveis_car(geojson: dict) -> list[dict]:
             "tipo": p.get("tipo_imovel"),
             "municipio": p.get("municipio"),
             "uf": p.get("uf"),
+            "contem": bool(ponto is not None and original is not None and original.Contains(ponto)),
+            "geom": geom,
         })
-    saida.sort(key=lambda i: (ORDEM_STATUS.get(i["status"], 9), i["areaHa"] or 0))
+    saida.sort(key=lambda i: (not i["contem"], ORDEM_STATUS.get(i["status"], 9), i["areaHa"] or 0))
     return saida
 
 
@@ -273,7 +323,7 @@ def consultar_car(uf: str | None, lat: float, lon: float, abrir=abrir_car) -> di
         return {"situacao": "indisponivel", "imoveis": []}
     finally:
         SEMAFORO_CAR.release()
-    imoveis = imoveis_car(dado)
+    imoveis = imoveis_car(dado, lat, lon)
     CACHE_CAR.guardar(chave, imoveis)
     return {"situacao": "ok", "imoveis": imoveis}
 

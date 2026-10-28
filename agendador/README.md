@@ -601,8 +601,12 @@ espelhos, é um **serviço que responde por ponto** (`amaview-terreno`, porta
   dos pixels cujo centro cai no círculo, ano a ano: `[[classe, pixels], …]`.
   Ler as 41 janelas leva milissegundos.
 - **CAR**: o WFS público do SICAR (`geoserver.car.gov.br`, camada
-  `sicar_imoveis_<uf>`), filtrado pelo ponto, só com os campos públicos
-  (código, situação, condição, área, módulos fiscais, tipo, município). O CAR
+  `sicar_imoveis_<uf>`): os imóveis que tocam o mesmo círculo de 375 m (o fogo
+  pode estar no vizinho), até 20, com a marca `contem` de quem tem o ponto, só
+  com os campos públicos (código, situação, condição, área, módulos fiscais,
+  tipo, município) e o contorno simplificado para o destaque no mapa (até ~400
+  vértices por imóvel, 5 casas; os de centenas de milhares de hectares vinham
+  com 100 KB). ~10 KB por ponto, ~3 KB comprimido. O CAR
   não publica nome nem CPF, e o serviço não procura isso em outro lugar. A UF
   vem do app (a do INPE ou a do município estimado); sem ela, só o MapBiomas.
   O SICAR fora do ar vira `"situacao": "indisponivel"`.
