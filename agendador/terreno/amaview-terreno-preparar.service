@@ -1,0 +1,29 @@
+[Unit]
+Description=Recortes anuais do MapBiomas na Amazônia Legal para o terreno do AmaView (uma vez por coleção)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/terreno
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/terreno/preparar.py
+User=amaview-terreno
+Group=amaview-terreno
+StateDirectory=amaview-terreno
+Environment=TERRENO_DADOS=/var/lib/amaview-terreno/mapbiomas-c11
+Environment=TERRENO_THREADS=2
+Environment=GDAL_CACHEMAX=512
+Environment=PYTHONUNBUFFERED=1
+# 41 anos × ~2 min. Ano que já existe é pulado: rodar de novo só completa.
+TimeoutStartSec=4h
+# Trabalho de fundo: os blocos, os espelhos e o nginx vêm primeiro.
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=200%
+MemoryMax=3G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

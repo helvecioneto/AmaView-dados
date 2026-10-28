@@ -1,0 +1,29 @@
+[Unit]
+Description=Uso do solo (MapBiomas) e CAR no ponto de um foco, para o AmaView
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/terreno
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/terreno/terreno.py
+User=amaview-terreno
+Group=amaview-terreno
+# Os recortes do MapBiomas (preparar.py), só leitura aqui.
+StateDirectory=amaview-terreno
+Environment=TERRENO_DADOS=/var/lib/amaview-terreno/mapbiomas-c11
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+# Cada pedido lê ~41 janelas de 30 × 30 px: o cache de blocos do GDAL basta pequeno.
+Environment=GDAL_CACHEMAX=128
+Nice=5
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

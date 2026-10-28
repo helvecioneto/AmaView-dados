@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão e o GSMaP
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o terreno
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -77,6 +77,7 @@ instalar() {
   instalar_meteo
   instalar_previsao
   instalar_gsmap
+  instalar_terreno
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -96,6 +97,9 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
   sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
   sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
+  # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
+  sudo install -m 644 "$DESTINO/agendador/terreno/nginx-locais.conf" /etc/nginx/snippets/amaview-terreno.conf
+  sudo install -m 644 "$DESTINO/agendador/terreno/nginx-http.conf" /etc/nginx/conf.d/amaview-terreno.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -466,6 +470,40 @@ instalar_gsmap() {
   sudo systemctl restart amaview-gsmap.timer && verde "  amaview-gsmap.timer ligado (a cada 5 min)"
 }
 
+# Uso do solo (MapBiomas) e CAR no clique do foco: um serviço que responde por
+# ponto (amaview-terreno) e os recortes anuais do MapBiomas, baixados uma vez
+# por coleção pelo amaview-terreno-preparar (~2 h na primeira vez, em segundo
+# plano; ano que já existe é pulado).
+instalar_terreno() {
+  titulo "Terreno (MapBiomas e CAR no clique do foco)"
+  getent passwd amaview-terreno >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-terreno
+  dpkg -s python3-gdal python3-numpy >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-gdal python3-numpy >/dev/null
+  sudo cp "$DESTINO/agendador/terreno/amaview-terreno.service" \
+    "$DESTINO/agendador/terreno/amaview-terreno-preparar.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-terreno >/dev/null 2>&1
+  sudo systemctl restart amaview-terreno && verde "  amaview-terreno no ar (127.0.0.1:8096)"
+  local n
+  n=$(sudo find /var/lib/amaview-terreno/mapbiomas-c11 -maxdepth 1 -name '[12]*.tif' 2>/dev/null | wc -l)
+  if [ "$n" -lt 41 ]; then
+    sudo systemctl start --no-block amaview-terreno-preparar \
+      && amarelo "  $n de 41 anos do MapBiomas: preparando em segundo plano (journalctl -u amaview-terreno-preparar)"
+  fi
+}
+
+situacao_terreno() {
+  titulo "Terreno (MapBiomas e CAR)"
+  systemctl is-active --quiet amaview-terreno \
+    && verde "  serviço no ar" || vermelho "  serviço parado — rode: amaview instalar"
+  local n
+  n=$(sudo find /var/lib/amaview-terreno/mapbiomas-c11 -maxdepth 1 -name '[12]*.tif' 2>/dev/null | wc -l)
+  echo "  MapBiomas: $n de 41 anos em disco ($(sudo du -sh /var/lib/amaview-terreno 2>/dev/null | cut -f1))"
+  systemctl is-active --quiet amaview-terreno-preparar && amarelo "  preparando agora"
+  journalctl -u amaview-terreno-preparar -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+}
+
 situacao_gsmap() {
   titulo "Chuva por satélite (GSMaP)"
   if ! sudo test -s "$GSMAP_NETRC" 2>/dev/null; then
@@ -743,6 +781,7 @@ situacao() {
   situacao_meteo
   situacao_previsao
   situacao_gsmap
+  situacao_terreno
   situacao_fortracc
   echo
 }
@@ -763,13 +802,15 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
     sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer /etc/systemd/system/amaview-previsao-wn2.service /etc/systemd/system/amaview-previsao-wn2.timer
     sudo rm -f /etc/systemd/system/amaview-gsmap.service /etc/systemd/system/amaview-gsmap.timer
+    sudo rm -f /etc/systemd/system/amaview-terreno.service /etc/systemd/system/amaview-terreno-preparar.service \
+      /etc/nginx/snippets/amaview-terreno.conf /etc/nginx/conf.d/amaview-terreno.conf
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload

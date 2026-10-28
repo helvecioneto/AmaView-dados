@@ -579,6 +579,49 @@ e `/gsmap/v1/quadros/AAAAMMDDHHNN-{g|s}.bin` (o carimbo é o início da hora, UT
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/gsmap`.
 
+## Terreno do foco (MapBiomas e CAR)
+
+O que havia em volta de um foco de queimada nos últimos 41 anos e de quem é a
+área declarada, para a ficha do foco no AmaView. Ao contrário dos outros
+espelhos, é um **serviço que responde por ponto** (`amaview-terreno`, porta
+8096, atrás do nginx), porque os pontos só se conhecem no clique.
+
+- **MapBiomas Coleção 11** (30 m, 1985–2025, CC BY 4.0), do bucket público
+  `mapbiomas-public`. Ler o pixel direto de lá custa ~4 MB e ~4 s por ano (os
+  GeoTIFFs não têm visões reduzidas, o índice de blocos é grande) e o bucket
+  não manda CORS; por isso o `preparar.py` guarda um recorte por ano da
+  Amazônia Legal (o anel do IBGE com folga de 0,15°), **na grade do próprio
+  MapBiomas, sem reamostrar**, com o lado de fora zerado. ~0,2 GB por ano;
+  ~2 h na primeira vez, em segundo plano (`amaview-terreno-preparar`, Nice 15,
+  E/S ociosa, 2 núcleos); ano já pronto é pulado.
+- **Raio de 375 m**: a posição do foco não tem a precisão do pixel do
+  MapBiomas (VIIRS 375 m, MODIS 1 km, GOES ~2 km). O serviço conta as classes
+  dos pixels cujo centro cai no círculo, ano a ano: `[[classe, pixels], …]`.
+  Ler as 41 janelas leva milissegundos.
+- **CAR**: o WFS público do SICAR (`geoserver.car.gov.br`, camada
+  `sicar_imoveis_<uf>`), filtrado pelo ponto, só com os campos públicos
+  (código, situação, condição, área, módulos fiscais, tipo, município). O CAR
+  não publica nome nem CPF, e o serviço não procura isso em outro lugar. A UF
+  vem do app (a do INPE ou a do município estimado); sem ela, só o MapBiomas.
+  O SICAR fora do ar vira `"situacao": "indisponivel"`.
+- **Cache e limite**: a resposta de um ponto não muda. O serviço diz ao nginx
+  por quanto tempo guardá-la (`X-Accel-Expires`: 7 dias; 2 min sem o CAR ou
+  com a série incompleta); o nginx guarda até 200 MB e limita a 5 pedidos/s
+  por IP (rajada de 20), para ninguém varrer o CAR por aqui.
+
+| Peça | Onde |
+|---|---|
+| `terreno/terreno.py` | o serviço: `GET /terreno/v1?lat=&lon=[&uf=]`, `GET /terreno/saude` |
+| `terreno/preparar.py` | os recortes anuais em `/var/lib/amaview-terreno/mapbiomas-c11` (`preparar.py 2024 2025` refaz só esses) |
+| `terreno/amaview-terreno.service` | o serviço, usuário `amaview-terreno` |
+| `terreno/amaview-terreno-preparar.service` | os recortes, uma vez por coleção (o `amaview instalar` dispara se faltar ano) |
+| `terreno/nginx-locais.conf`, `terreno/nginx-http.conf` | `/terreno/` com cache e limite de taxa (o segundo vai em `conf.d`, bloco http) |
+
+Coleção nova do MapBiomas: trocar `COLECAO_URL`, a pasta e `ANOS` no
+`preparar.py` e no `terreno.py`, e rodar `systemctl start amaview-terreno-preparar`.
+
+Testes (sem rede): `python3 -m unittest discover -s agendador/terreno`.
+
 ## Rastreio de nuvens (pyFortraCC)
 
 A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19
