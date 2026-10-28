@@ -6,9 +6,11 @@ terreno.py.
 Um GeoTIFF por ano em TERRENO_DADOS (`1985.tif` … `2025.tif`), baixado
 inteiro do bucket público (~0,76 GB; cortar direto pelo /vsicurl/ leva ~6 min
 por ano, aos pedaços) e cortado do disco, sem reamostrar: a mesma grade do
-MapBiomas, cortada na caixa da Amazônia Legal e com o lado de fora do anel do
-IBGE (com folga de 0,15°, porque o anel é simplificado em 0,1°) zerado, o que
-comprime a quase nada. ~0,2 GB por ano, ~70 s de download cada no Oracle.
+MapBiomas, só a caixa da Amazônia Legal (a do anel do IBGE, com folga de 0,15°,
+porque o anel é simplificado em 0,1°). ~0,27 GB por ano, ~1 min de download
+cada no Oracle. Zerar o lado de fora do anel (gdal.Warp com cutline) pouparia
+~20 % de disco, mas levava ~16 min por ano no Oracle; o serviço já recusa
+pontos fora da caixa.
 
 Ano que já existe é pulado: rodar de novo só completa o que faltou. O MapBiomas
 publica uma coleção por ano; trocar de coleção é trocar COLECAO_URL e a pasta.
@@ -68,23 +70,18 @@ def baixar(url: str, destino: str) -> None:
             time.sleep(30 * tentativa)
 
 
-def anel_com_folga(destino: str) -> tuple[float, float, float, float]:
-    """Escreve o anel do IBGE com folga como GeoJSON (o corte) e devolve a caixa."""
+def caixa_da_amazonia() -> tuple[float, float, float, float]:
+    """A caixa (oeste, sul, leste, norte) do anel do IBGE com folga."""
     with open(ANEL) as f:
         anel = json.load(f)["anel"]
     if anel[0] != anel[-1]:
         anel = anel + [anel[0]]
     wkt = "POLYGON((" + ",".join(f"{x} {y}" for x, y in anel) + "))"
-    geom = ogr.CreateGeometryFromWkt(wkt).Buffer(FOLGA_GRAUS, 8)
-    with open(destino, "w") as f:
-        json.dump({"type": "FeatureCollection", "features": [
-            {"type": "Feature", "properties": {}, "geometry": json.loads(geom.ExportToJson())}
-        ]}, f)
-    oeste, leste, sul, norte = geom.GetEnvelope()
+    oeste, leste, sul, norte = ogr.CreateGeometryFromWkt(wkt).Buffer(FOLGA_GRAUS, 8).GetEnvelope()
     return oeste, sul, leste, norte
 
 
-def recortar(ano: int, corte: str, caixa: tuple[float, float, float, float]) -> None:
+def recortar(ano: int, caixa: tuple[float, float, float, float]) -> None:
     final = os.path.join(DADOS, f"{ano}.tif")
     if os.path.exists(final):
         return
@@ -103,14 +100,11 @@ def recortar(ano: int, corte: str, caixa: tuple[float, float, float, float]) -> 
         x0, dx, _, y0, _, dy = ds.GetGeoTransform()
         lim = [x0, y0 + dy * ds.RasterYSize, x0 + dx * ds.RasterXSize, y0]
         ds = None
-        # 2) Corta pelo anel na mesma grade (mesma caixa e resolução: o vizinho
-        #    mais próximo copia o pixel, sem reamostrar).
+        # 2) Copia a caixa, pixel a pixel, em blocos de 512 px (o serviço lê
+        #    janelas de ~30 px; os blocos de 256 do MapBiomas pedem índice 4× maior).
         parcial = os.path.join(tmp, f"{ano}.tif")
-        saida = gdal.Warp(
+        saida = gdal.Translate(
             parcial, vrt,
-            cutlineDSName=corte, outputBounds=lim, xRes=dx, yRes=abs(dy), resampleAlg="near",
-            srcNodata=0, dstNodata=0, multithread=True, warpMemoryLimit=512,
-            warpOptions=[f"NUM_THREADS={TRABALHADORES}"],
             creationOptions=["COMPRESS=ZSTD", "ZSTD_LEVEL=9", "TILED=YES", "BLOCKXSIZE=512",
                              "BLOCKYSIZE=512", f"NUM_THREADS={TRABALHADORES}"],
         )
@@ -142,16 +136,14 @@ def main(argv: list[str]) -> int:
         if nome.startswith("tmp") and os.path.isdir(os.path.join(DADOS, nome)):
             shutil.rmtree(os.path.join(DADOS, nome), ignore_errors=True)
     anos = [int(a) for a in argv] or ANOS
-    with tempfile.TemporaryDirectory() as tmp:
-        corte = os.path.join(tmp, "amazonia_legal.geojson")
-        caixa = anel_com_folga(corte)
-        falhas = 0
-        for ano in anos:
-            try:
-                recortar(ano, corte, caixa)
-            except Exception as e:  # noqa: BLE001 — um ano ruim não para os outros
-                falhas += 1
-                print(f"{ano}: falhou ({type(e).__name__}: {e})", file=sys.stderr, flush=True)
+    caixa = caixa_da_amazonia()
+    falhas = 0
+    for ano in anos:
+        try:
+            recortar(ano, caixa)
+        except Exception as e:  # noqa: BLE001 — um ano ruim não para os outros
+            falhas += 1
+            print(f"{ano}: falhou ({type(e).__name__}: {e})", file=sys.stderr, flush=True)
     prontos = sorted(int(n[:4]) for n in os.listdir(DADOS) if n.endswith(".tif") and n[:4].isdigit())
     print(f"{len(prontos)} de {len(ANOS)} anos em {DADOS}", flush=True)
     return 1 if falhas else 0

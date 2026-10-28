@@ -590,10 +590,12 @@ espelhos, é um **serviço que responde por ponto** (`amaview-terreno`, porta
   `mapbiomas-public`. Ler o pixel direto de lá custa ~4 MB e ~4 s por ano (os
   GeoTIFFs não têm visões reduzidas, o índice de blocos é grande) e o bucket
   não manda CORS; por isso o `preparar.py` guarda um recorte por ano da
-  Amazônia Legal (o anel do IBGE com folga de 0,15°), **na grade do próprio
-  MapBiomas, sem reamostrar**, com o lado de fora zerado. ~0,2 GB por ano;
-  ~2 h na primeira vez, em segundo plano (`amaview-terreno-preparar`, Nice 15,
-  E/S ociosa, 2 núcleos); ano já pronto é pulado.
+  Amazônia Legal (a caixa do anel do IBGE com folga de 0,15°), **na grade do
+  próprio MapBiomas, sem reamostrar**: baixa o ano inteiro (~1 min) e copia a
+  caixa (cortar pelo anel com `gdal.Warp` levava ~16 min por ano aqui). ~0,27
+  GB por ano, ~11 GB ao todo; algumas horas na primeira vez, em segundo plano
+  (`amaview-terreno-preparar`, Nice 15, E/S ociosa, 2 núcleos); ano já pronto
+  é pulado, e cada recorte é relido antes de entrar no lugar.
 - **Raio de 375 m**: a posição do foco não tem a precisão do pixel do
   MapBiomas (VIIRS 375 m, MODIS 1 km, GOES ~2 km). O serviço conta as classes
   dos pixels cujo centro cai no círculo, ano a ano: `[[classe, pixels], …]`.
