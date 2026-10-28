@@ -98,6 +98,8 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
   sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
+  # O nginx cria só o último nível da pasta do cache.
+  sudo install -d -m 755 /var/cache/nginx
   sudo install -m 644 "$DESTINO/agendador/terreno/nginx-locais.conf" /etc/nginx/snippets/amaview-terreno.conf
   sudo install -m 644 "$DESTINO/agendador/terreno/nginx-http.conf" /etc/nginx/conf.d/amaview-terreno.conf
   {
