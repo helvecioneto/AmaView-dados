@@ -155,6 +155,9 @@ class Raios:
         self.alterados: set[str] = set()
         self.listadas: dict[str, float] = {}
         self.falhados: dict[str, float] = {}
+        # Arquivos do passado já listados e ainda não lidos: ficam na fila entre
+        # os ciclos (sem isto, a hora listada esperaria 30 min para ser vista de novo).
+        self.pendentes: dict[str, datetime] = {}
         self.ultimo_ciclo: float | None = None
         self.ultimo_erro: str | None = None
 
@@ -328,10 +331,13 @@ def ciclo(r: Raios, agora: datetime | None = None) -> dict:
     agora = agora or datetime.now(timezone.utc)
     limite = agora - JANELA
     novos: list[tuple[datetime, str]] = []
-    passado: list[tuple[datetime, str]] = []
+    r.pendentes = {k: t for k, t in r.pendentes.items() if t >= limite and not r.ja_lido(t)}
     for k, hora in enumerate(horas_da_janela(agora)):
         prefixo = prefixo_da_hora(hora)
         if k >= 2:
+            # Fila do passado cheia: o resto fica para os próximos ciclos.
+            if len(r.pendentes) >= PASSADO_POR_CICLO:
+                break
             # Hora antiga: só se falta quadro e a última olhada foi há mais de 30 min.
             completa = all(
                 len(r.quadros.get(carimbo_de(hora + timedelta(minutes=m)), {"a": []})["a"]) >= ARQUIVOS_POR_QUADRO for m in range(0, 60, 10)
@@ -348,10 +354,11 @@ def ciclo(r: Raios, agora: datetime | None = None) -> dict:
             ini = inicio_do_arquivo(chave)
             if ini is None or ini < limite or r.ja_lido(ini) or time.time() - r.falhados.get(chave, 0) < ESPERA_FALHA_S:
                 continue
-            (novos if k < 2 else passado).append((ini, chave))
-        if len(passado) >= PASSADO_POR_CICLO:
-            break
-    passado.sort(reverse=True)
+            if k < 2:
+                novos.append((ini, chave))
+            else:
+                r.pendentes[chave] = ini
+    passado = sorted(((ini, chave) for chave, ini in r.pendentes.items() if (ini, chave) not in novos), reverse=True)
     lidos, falhas, flashes = 0, 0, 0
 
     def um(item: tuple[datetime, str]):
@@ -375,6 +382,8 @@ def ciclo(r: Raios, agora: datetime | None = None) -> dict:
                 lidos += 1
                 flashes += len(v)
             gravar_alterados(r, agora)
+    for _, chave in fila:
+        r.pendentes.pop(chave, None)
     gravar_alterados(r, agora)
     r.falhados = {k: t for k, t in r.falhados.items() if time.time() - t < ESPERA_FALHA_S}
     r.listadas = {p: t for p, t in r.listadas.items() if time.time() - t < JANELA.total_seconds()}

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 import numpy as np
 
@@ -115,6 +116,47 @@ class TestConsulta(unittest.TestCase):
         self.r.limpar(T)
         self.assertEqual(self.r.quadros, {})
         self.assertEqual(os.listdir(raios.QUADROS), [])
+
+
+class TestPreenchimento(unittest.TestCase):
+    """O passado é lido aos poucos, sem deixar hora para trás (29/10/2026: horas inteiras ficavam vazias por 30 min)."""
+
+    def setUp(self):
+        self.pasta = tempfile.mkdtemp()
+        self.antes = (raios.QUADROS, raios.PASTA, raios.JANELA, raios.PASSADO_POR_CICLO)
+        raios.PASTA = os.path.join(self.pasta, "raios", "v1")
+        raios.QUADROS = os.path.join(raios.PASTA, "quadros")
+        raios.JANELA = timedelta(hours=8)
+        raios.PASSADO_POR_CICLO = 100  # menos que uma hora: o caso que deixava buraco
+
+    def tearDown(self):
+        raios.QUADROS, raios.PASTA, raios.JANELA, raios.PASSADO_POR_CICLO = self.antes
+        shutil.rmtree(self.pasta)
+
+    @staticmethod
+    def chave(t: datetime) -> str:
+        e = t + timedelta(seconds=20)
+        f = lambda x: f"{x.year}{x.timetuple().tm_yday:03d}{x.hour:02d}{x.minute:02d}{x.second:02d}0"  # noqa: E731
+        # Como na NOAA, a pasta da hora é a do FIM do arquivo: o das :59:40 cai na hora seguinte.
+        return f"GLM-L2-LCFA/{e.year}/{e.timetuple().tm_yday:03d}/{e.hour:02d}/OR_GLM-L2-LCFA_G19_s{f(t)}_e{f(e)}_c{f(e)}.nc"
+
+    def test_sem_buracos(self):
+        agora = T
+        todos = [agora - raios.JANELA + timedelta(seconds=20 * k) for k in range(int(raios.JANELA.total_seconds() // 20))]
+        por_hora: dict[str, list[str]] = {}
+        for t in todos:
+            c = self.chave(t)
+            por_hora.setdefault(c.rsplit("/", 1)[0] + "/", []).append(c)
+        r = raios.Raios()
+        r.carregar()
+        with mock.patch.object(raios, "listar", lambda p: por_hora.get(p, [])), \
+             mock.patch.object(raios, "baixar", lambda url, **k: b""), \
+             mock.patch.object(raios, "ler_flashes", lambda nc: (None, np.zeros((0, 3)))), \
+             mock.patch.object(raios.time, "time", side_effect=lambda: 1e9):
+            for _ in range(int(len(todos) / raios.PASSADO_POR_CICLO) + 3):
+                raios.ciclo(r, agora)
+        faltando = [t for t in todos if not r.ja_lido(t)]
+        self.assertEqual(faltando, [])
 
 
 class TestPedido(unittest.TestCase):
