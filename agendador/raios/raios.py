@@ -43,6 +43,7 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,8 +65,12 @@ QUADRO = timedelta(minutes=10)
 # Um arquivo a cada 20 s: 30 por quadro.
 ARQUIVOS_POR_QUADRO = 30
 CICLO_S = 20
-# Preenchimento do passado: arquivos por ciclo (~200 KB cada; ~1 min de rede por hora de dado).
-PASSADO_POR_CICLO = 60
+# Preenchimento do passado: arquivos por ciclo (~200 KB cada): uma hora de dado.
+PASSADO_POR_CICLO = 180
+# Cada pedido ao S3 leva ~0,7 s, quase tudo espera (medido na Oracle, 29/10/2026):
+# vários de uma vez, e o disco gravado a cada lote (o índice aparece logo).
+PARALELOS = 16
+LOTE = 64
 RELISTAR_S = 1800
 ESPERA_FALHA_S = 1800
 
@@ -348,16 +353,35 @@ def ciclo(r: Raios, agora: datetime | None = None) -> dict:
             break
     passado.sort(reverse=True)
     lidos, falhas, flashes = 0, 0, 0
-    for ini, chave in sorted(novos) + passado[:PASSADO_POR_CICLO]:
+
+    def um(item: tuple[datetime, str]):
+        ini, chave = item
         try:
-            _, v = ler_flashes(baixar(f"{BALDE}/{chave}"))
-            r.juntar(ini, v)
-            lidos += 1
-            flashes += len(v)
+            return ini, chave, ler_flashes(baixar(f"{BALDE}/{chave}"))[1], None
         except Exception as e:  # noqa: BLE001
-            falhas += 1
-            r.falhados[chave] = time.time()
-            print(f"{chave}: falhou — {e}", file=sys.stderr)
+            return ini, chave, None, e
+
+    # O novo primeiro (do mais novo ao mais velho), depois o passado.
+    fila = sorted(novos, reverse=True) + passado[:PASSADO_POR_CICLO]
+    with ThreadPoolExecutor(PARALELOS) as pool:
+        for k in range(0, len(fila), LOTE):
+            for ini, chave, v, erro in pool.map(um, fila[k : k + LOTE]):
+                if erro is not None:
+                    falhas += 1
+                    r.falhados[chave] = time.time()
+                    print(f"{chave}: falhou — {erro}", file=sys.stderr)
+                    continue
+                r.juntar(ini, v)
+                lidos += 1
+                flashes += len(v)
+            gravar_alterados(r, agora)
+    gravar_alterados(r, agora)
+    r.falhados = {k: t for k, t in r.falhados.items() if time.time() - t < ESPERA_FALHA_S}
+    r.listadas = {p: t for p, t in r.listadas.items() if time.time() - t < JANELA.total_seconds()}
+    return {"lidos": lidos, "falhas": falhas, "flashes": flashes, "quadros": len(r.quadros)}
+
+
+def gravar_alterados(r: Raios, agora: datetime) -> None:
     with r.trava:
         r.limpar(agora)
         for c in r.alterados:
@@ -365,9 +389,6 @@ def ciclo(r: Raios, agora: datetime | None = None) -> dict:
                 r.gravar(c)
         r.alterados.clear()
         r.gravar_indice(agora)
-    r.falhados = {k: t for k, t in r.falhados.items() if time.time() - t < ESPERA_FALHA_S}
-    r.listadas = {p: t for p, t in r.listadas.items() if time.time() - t < JANELA.total_seconds()}
-    return {"lidos": lidos, "falhas": falhas, "flashes": flashes, "quadros": len(r.quadros)}
 
 
 def laco(r: Raios) -> None:

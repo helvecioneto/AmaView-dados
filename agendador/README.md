@@ -655,7 +655,7 @@ O serviço faz duas coisas:
   por 1 dia.
 
 Na primeira vez, o serviço preenche o passado aos poucos: ~1 h de dado por
-ciclo de 20 s com folga, e 7 dias em algumas horas. Medido em 29/10/2026: um
+ciclo (16 arquivos em paralelo: cada pedido ao S3 leva ~0,7 s, quase tudo espera), e os 7 dias em cerca de 1 h. Medido em 29/10/2026: um
 arquivo da manhã tinha 51 flashes no disco e 14 na caixa; leitura em 0,1 s.
 
 Testes: `python3 -m unittest discover -s agendador/raios`.
