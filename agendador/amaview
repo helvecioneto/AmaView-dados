@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o terreno
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno, raios)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP, o terreno e os raios
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -78,6 +78,7 @@ instalar() {
   instalar_previsao
   instalar_gsmap
   instalar_terreno
+  instalar_raios
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -102,6 +103,8 @@ gerar_site_blocos() {
   sudo install -d -m 755 /var/cache/nginx
   sudo install -m 644 "$DESTINO/agendador/terreno/nginx-locais.conf" /etc/nginx/snippets/amaview-terreno.conf
   sudo install -m 644 "$DESTINO/agendador/terreno/nginx-http.conf" /etc/nginx/conf.d/amaview-terreno.conf
+  sudo install -m 644 "$DESTINO/agendador/raios/nginx-locais.conf" /etc/nginx/snippets/amaview-raios.conf
+  sudo install -m 644 "$DESTINO/agendador/raios/nginx-http.conf" /etc/nginx/conf.d/amaview-raios.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -495,6 +498,41 @@ instalar_terreno() {
   fi
 }
 
+# Raios do GOES-19 (agendador/raios): um serviço que lê o GLM do balde público
+# da NOAA a cada 20 s, grava os quadros de 10 min em /var/cache/amaview-raios
+# (o nginx serve) e responde a consulta por ponto (127.0.0.1:8097). Na primeira
+# vez preenche os 7 dias aos poucos (~1 h por hora de relógio).
+instalar_raios() {
+  titulo "Raios (GLM do GOES-19)"
+  getent passwd amaview-raios >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-raios
+  dpkg -s python3-numpy python3-h5py >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-numpy python3-h5py >/dev/null
+  sudo cp "$DESTINO/agendador/raios/amaview-raios.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-raios >/dev/null 2>&1
+  sudo systemctl restart amaview-raios && verde "  amaview-raios no ar (127.0.0.1:8097)"
+}
+
+situacao_raios() {
+  titulo "Raios (GLM)"
+  systemctl is-active --quiet amaview-raios \
+    && verde "  serviço no ar" || vermelho "  serviço parado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-raios"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-raios/raios/v1/indice.json"))
+q = i["quadros"]
+completos = sum(1 for x in q if x["a"] >= i["arquivos_por_quadro"])
+print(f"  {len(q)} quadros em 7 dias (esperados 1008), {completos} completos, {sum(x['n'] for x in q)} flashes")
+if q:
+    t = datetime.strptime(q[-1]["c"], "%Y%j%H%M").replace(tzinfo=timezone.utc)
+    print(f"  mais novo: {t:%d/%m %H:%M} UTC ({(datetime.now(timezone.utc) - t).total_seconds() / 60:.0f} min atrás) · {q[-1]['n']} flashes")
+PY
+  journalctl -u amaview-raios -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-raios 2>/dev/null | cut -f1)"
+}
+
 situacao_terreno() {
   titulo "Terreno (MapBiomas e CAR)"
   systemctl is-active --quiet amaview-terreno \
@@ -784,6 +822,7 @@ situacao() {
   situacao_previsao
   situacao_gsmap
   situacao_terreno
+  situacao_raios
   situacao_fortracc
   echo
 }

@@ -1,0 +1,31 @@
+[Unit]
+Description=Raios do GOES-19 (GLM) para o AmaView: quadros de 10 min e consulta por ponto
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/raios
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/raios/raios.py
+User=amaview-raios
+Group=amaview-raios
+# /var/cache/amaview-raios, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-raios
+CacheDirectoryMode=0755
+UMask=0022
+Environment=RAIOS_RAIZ=/var/cache/amaview-raios
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro.
+Nice=10
+# 7 dias de flashes da América do Sul: alguns milhões de pontos (dezenas de MB).
+MemoryMax=1500M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

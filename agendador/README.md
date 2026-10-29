@@ -628,6 +628,38 @@ Coleção nova do MapBiomas: trocar `COLECAO_URL`, a pasta e `ANOS` no
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/terreno`.
 
+## Raios do GOES-19 (GLM)
+
+`raios/raios.py` (serviço `amaview-raios`, 127.0.0.1:8097) lê os flashes do
+**GLM** (Geostationary Lightning Mapper) do GOES-19, produto `GLM-L2-LCFA` do
+balde público `noaa-goes19`. A NOAA publica um arquivo a cada 20 s (~200 KB),
+~25 s depois da medição. O GLM vê raios nuvem-solo e intranuvem, de dia e de
+noite, com pixel de ~8 km. A NOAA exige detecção acima de 70% na média do
+disco; na América do Sul, os estudos medem de ~75% a ~90%.
+
+O serviço faz duas coisas:
+
+- **Quadros de 10 min para o mapa.** A cada 20 s, lê os arquivos novos das
+  duas horas mais recentes e 60 do passado que falta, até 7 dias. Cada arquivo
+  é baixado para a memória e descartado; ficam só os flashes da caixa
+  85°W–30°W, 25°S–15°N, em centésimos de grau. Os quadros vão para
+  `/var/cache/amaview-raios/raios/v1/quadros/AAAADDDHHMM.json`, com o
+  formato `{"c", "a": arquivos lidos, "v": [[lon×100, lat×100, s], …]}`.
+  O índice fica em `raios/v1/indice.json`. Nada é filtrado pela qualidade:
+  os flashes "degradados" da NOAA são raios grandes ou longos, não falsos.
+- **Consulta por ponto, para a ficha do foco e a denúncia:**
+  `GET /raios/v1/ponto?lat&lon&t=AAAAMMDDHHMM[&h=72][&r=25]`. Responde
+  quantos raios caíram a até `r` km nas `h` horas antes de `t`, o mais perto,
+  o mais recente e a `cobertura` (fração das fatias de 20 s da janela que
+  foram lidas). Com a janela completa no passado, o nginx guarda a resposta
+  por 1 dia.
+
+Na primeira vez, o serviço preenche o passado aos poucos: ~1 h de dado por
+ciclo de 20 s com folga, e 7 dias em algumas horas. Medido em 29/10/2026: um
+arquivo da manhã tinha 51 flashes no disco e 14 na caixa; leitura em 0,1 s.
+
+Testes: `python3 -m unittest discover -s agendador/raios`.
+
 ## Rastreio de nuvens (pyFortraCC)
 
 A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19
