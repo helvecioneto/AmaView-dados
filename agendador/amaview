@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno, raios)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP, o terreno e os raios
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno, raios, retrato)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP, o terreno, os raios e o retrato da denúncia
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -79,6 +79,7 @@ instalar() {
   instalar_gsmap
   instalar_terreno
   instalar_raios
+  instalar_retrato
   instalar_blocos
 
   if [ ! -s "$TOKEN" ]; then
@@ -105,6 +106,8 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/terreno/nginx-http.conf" /etc/nginx/conf.d/amaview-terreno.conf
   sudo install -m 644 "$DESTINO/agendador/raios/nginx-locais.conf" /etc/nginx/snippets/amaview-raios.conf
   sudo install -m 644 "$DESTINO/agendador/raios/nginx-http.conf" /etc/nginx/conf.d/amaview-raios.conf
+  sudo install -m 644 "$DESTINO/agendador/retrato/nginx-locais.conf" /etc/nginx/snippets/amaview-retrato.conf
+  sudo install -m 644 "$DESTINO/agendador/retrato/nginx-http.conf" /etc/nginx/conf.d/amaview-retrato.conf
   {
     cat "$src/nginx-site.conf"
     if sudo test -s "/etc/letsencrypt/live/$BLOCOS_NOME/fullchain.pem"; then
@@ -514,6 +517,26 @@ instalar_raios() {
   sudo systemctl restart amaview-raios && verde "  amaview-raios no ar (127.0.0.1:8097)"
 }
 
+# Retrato da denúncia (agendador/retrato): guarda os dados públicos em volta de
+# um foco quando alguém denuncia, para o link curto do AmaView continuar
+# mostrando o que foi reunido (127.0.0.1:8098). Sem registro de acesso no nginx.
+instalar_retrato() {
+  titulo "Retrato da denúncia"
+  getent passwd amaview-retrato >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-retrato
+  sudo cp "$DESTINO/agendador/retrato/amaview-retrato.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-retrato >/dev/null 2>&1
+  sudo systemctl restart amaview-retrato && verde "  amaview-retrato no ar (127.0.0.1:8098)"
+}
+
+situacao_retrato() {
+  titulo "Retrato da denúncia"
+  systemctl is-active --quiet amaview-retrato \
+    && verde "  serviço no ar" || vermelho "  serviço parado — rode: amaview instalar"
+  echo "  $(sudo find /var/lib/amaview-retrato -name '*.json' 2>/dev/null | wc -l) retratos, $(sudo du -sh /var/lib/amaview-retrato 2>/dev/null | cut -f1)"
+}
+
 situacao_raios() {
   titulo "Raios (GLM)"
   systemctl is-active --quiet amaview-raios \
@@ -823,6 +846,7 @@ situacao() {
   situacao_gsmap
   situacao_terreno
   situacao_raios
+  situacao_retrato
   situacao_fortracc
   echo
 }

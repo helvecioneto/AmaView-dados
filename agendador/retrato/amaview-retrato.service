@@ -1,0 +1,29 @@
+[Unit]
+Description=Retrato da denúncia do AmaView: os dados públicos em volta de um foco, guardados para o link curto
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/retrato
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/retrato/retrato.py
+User=amaview-retrato
+Group=amaview-retrato
+# /var/lib/amaview-retrato: os retratos ficam (não é cache).
+StateDirectory=amaview-retrato
+StateDirectoryMode=0750
+UMask=0027
+Environment=RETRATO_RAIZ=/var/lib/amaview-retrato
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+Nice=10
+MemoryMax=300M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

@@ -660,6 +660,41 @@ arquivo da manhã tinha 51 flashes no disco e 14 na caixa; leitura em 0,1 s.
 
 Testes: `python3 -m unittest discover -s agendador/raios`.
 
+## Retrato da denúncia
+
+`retrato/retrato.py` (serviço `amaview-retrato`, 127.0.0.1:8098) guarda os
+dados públicos em volta de um foco quando alguém denuncia pelo AmaView. Assim o
+link curto da denúncia (`amaview.com.br/d/<código>`) continua mostrando o que
+foi reunido depois que as fontes apagam o dado: descargas atmosféricas em 7
+dias, INMET e fumaça em 48 h, chuva do CEMADEN em 24 h.
+
+- `POST /retrato/v1/<código>[?uf=PA]`: a página pede quando a pessoa abre o
+  site do órgão. O código é o do link curto (ponto, horário e satélite, em
+  base 36). O serviço busca cada fonte sozinho e guarda o recorte bruto, no
+  formato da fonte:
+  - o terreno (CAR e MapBiomas) e as descargas atmosféricas, pelo nginx
+    local, que já tem a resposta em cache;
+  - as estações do INMET a até 150 km e as áreas de fumaça perto do ponto,
+    nos quadros a até 30 min do foco, lidas dos arquivos da máquina;
+  - os pluviômetros do CEMADEN a até 50 km. O cadastro e a grade publicados
+    no Pages ficam 10 min na memória.
+
+  Nada que a pessoa escreveu passa por aqui, e não há imagem: o fundo do mapa
+  vem do Google, ao vivo, e não pode ser guardado.
+- `GET /retrato/v1/<código>`: o retrato, ou 404.
+- **O primeiro retrato fica**, porque é o mais perto do fogo. Um pedido
+  depois só completa a parte que faltou (fonte fora do ar).
+- **Sem registro de quem pede.** O `location /retrato/` não tem `access_log`
+  nem `error_log`, e o serviço não escreve IP: o IP ao lado do foco
+  identificaria quem denunciou.
+- **Limites:** 1 pedido/s por IP (rajada de 10) e 3 mil retratos novos por dia
+  (`RETRATO_MAX_POR_DIA`).
+- **Tamanho:** ~20 KB por retrato, em `/var/lib/amaview-retrato/retrato/v1/`
+  (não é cache: não apagar).
+- **Processamento:** uma vez por foco, não por visita. Cerca de 0,1 s de CPU.
+
+Testes: `python3 -m unittest discover -s agendador/retrato`.
+
 ## Rastreio de nuvens (pyFortraCC)
 
 A mesma máquina rastreia e prevê os sistemas de nuvens frias do GOES-19
