@@ -30,6 +30,12 @@ Saída (abaixo de RASTREIO_PUBLICA, servida pelo nginx em /rastreio-chuva/vN/):
 AAAAMMDDHHNN é o início da hora do GSMaP (UTC), o mesmo nome do quadro da
 chuva. Um quadro publicado nunca muda; o índice é refeito do disco.
 
+Dados abertos (QGIS, scripts; documentados em amaview.com.br/dados), refeitos a
+cada rodada a partir dos quadros já publicados, com nomes de campo legíveis:
+
+  rastreio-chuva/v1/latest.geojson                  as áreas do horário mais novo
+  rastreio-chuva/v1/last-24h.geojson                as das últimas 24 h (campo quadro_inicio)
+
   rastreio.py              uma rodada (o que o container roda)
   rastreio.py precisa      sai 0 se há horário novo para rastrear, 1 se não (ExecCondition)
 """
@@ -427,6 +433,99 @@ def limpar():
                 f.unlink(missing_ok=True)
 
 
+# ------------------------------------------------------------------ dados abertos
+# Os mesmos contornos, para quem usa fora do AmaView (QGIS, Python, R). Pedido do
+# usuário em 03/11/2026. A JAXA permite redistribuir produto derivado do GSMaP
+# com o crédito dela (earth.jaxa.jp/en/data/policy).
+ABERTO_JANELA = timedelta(hours=24)
+SITUACOES = {"NEW": "nova", "CON": "continua", "SPL": "divisão", "MRG": "fusão"}
+PRODUTOS = {"g": "GSMaP_Gauge_NOW", "s": "GSMaP_NOW"}
+CREDITO = "GSMaP data by Japan Aerospace Exploration Agency (JAXA); rastreio: pyForTraCC; AmaView (amaview.com.br)"
+LICENCA = "CC BY 4.0, com o crédito acima"
+DOCUMENTACAO = "https://amaview.com.br/dados"
+FMT_ISO = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def situacao(st):
+    """"SPL/MRG" → "divisão e fusão"; sigla desconhecida fica como veio (o mesmo do app)."""
+    if not isinstance(st, str) or not st:
+        return None
+    return " e ".join(SITUACOES.get(x.strip(), x.strip()) for x in st.split("/"))
+
+
+def iso(c, minutos=0):
+    return (datetime.strptime(c, FMT_C) + timedelta(minutes=minutos)).strftime(FMT_ISO)
+
+
+def feicoes_abertas(c, fc, produto):
+    """Os contornos (sem as trajetórias nem a história) de um quadro publicado, com os campos por extenso."""
+    out = []
+    for f in fc.get("features", []):
+        p = f.get("properties") or {}
+        if p.get("k") != "c":
+            continue
+        out.append({"type": "Feature", "geometry": f["geometry"], "properties": {
+            "id_area": p.get("uid"),
+            "quadro_inicio": iso(c),
+            "quadro_fim": iso(c, DURACAO),
+            "situacao": situacao(p.get("st")),
+            "situacao_codigo": p.get("st"),
+            "vida_min": p.get("vida"),
+            "area_km2": p.get("km2"),
+            "chuva_max_mm_h": p.get("pmax"),
+            "chuva_media_mm_h": p.get("pmed"),
+            "chuva_dp_mm_h": p.get("dp"),
+            "expansao_1e6_s": p.get("exp"),
+            "velocidade_km_h": p.get("vel"),
+            "rumo_graus": p.get("rumo"),
+            "produto": PRODUTOS.get(produto),
+        }})
+    return out
+
+
+def colecao(nome, feicoes, de, ate):
+    """FeatureCollection com os metadados por fora (membros a mais do GeoJSON: o QGIS ignora, o script lê)."""
+    return {
+        "type": "FeatureCollection",
+        "name": nome,
+        "gerado": agora().strftime(FMT_ISO),
+        "quadros": {"de": de, "ate": ate},
+        "credito": CREDITO,
+        "licenca": LICENCA,
+        "documentacao": DOCUMENTACAO,
+        "limiar_mmh": LIMIAR,
+        "features": feicoes,
+    }
+
+
+def dados_abertos(horarios):
+    """Refaz o latest.geojson e o last-24h.geojson a partir dos quadros publicados."""
+    arquivos = sorted((PUBLICA / "quadros").glob("*.geojson"))
+    if not arquivos:
+        return
+    mais_novo = arquivos[-1].stem
+    corte = (datetime.strptime(mais_novo, FMT_C) - ABERTO_JANELA).strftime(FMT_C)
+    ultimo, dia = [], []
+    for f in arquivos:
+        c = f.stem
+        if c <= corte:
+            continue
+        try:
+            with open(f) as src:
+                fc = json.load(src)
+        except (OSError, ValueError):
+            continue
+        feicoes = feicoes_abertas(c, fc, horarios.get(c, (None, None))[1])
+        dia.extend(feicoes)
+        if c == mais_novo:
+            ultimo = feicoes
+    primeiro = next(f.stem for f in arquivos if f.stem > corte)
+    gravar_json(PUBLICA / "latest.geojson",
+                colecao("AmaView: rastreio da chuva, horário mais novo", ultimo, iso(mais_novo), iso(mais_novo)), comprimido=True)
+    gravar_json(PUBLICA / "last-24h.geojson",
+                colecao("AmaView: rastreio da chuva, últimas 24 h", dia, iso(primeiro), iso(mais_novo)), comprimido=True)
+
+
 def rodada():
     t0 = time.time()
     horarios = horarios_do_gsmap()
@@ -443,6 +542,10 @@ def rodada():
     feitos = publicar(horarios)
     limpar()
     indice(horarios)
+    try:
+        dados_abertos(horarios)
+    except Exception as e:  # o app não depende deles: um erro aqui não derruba a rodada
+        log(f"dados abertos não refeitos: {e!r}")
     log(f"rodada: {len(fila)} rastreados, {feitos} publicados; mais novo {ultimo_publicado()} ({time.time() - t0:.1f} s)")
 
 
