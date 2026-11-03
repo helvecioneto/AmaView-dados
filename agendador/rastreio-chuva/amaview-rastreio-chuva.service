@@ -1,0 +1,29 @@
+[Unit]
+Description=Rastreio da chuva por satélite para o AmaView (pyForTraCC sobre o GSMaP_NOW)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/rastreio-chuva
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# O container só sobe quando o GSMaP tem horário novo (só biblioteca padrão, ~50 ms).
+Environment=RASTREIO_GSMAP=/var/cache/amaview-gsmap/gsmap/v1
+Environment=RASTREIO_PUBLICA=/var/cache/amaview-rastreio-chuva
+ExecCondition=/usr/bin/python3 /opt/amaview/agendador/rastreio-chuva/rastreio.py precisa
+# A imagem do rastreio de nuvens (pyfortracc_ir, mesma biblioteca): nada a construir nem a guardar.
+# Sem rede, raiz só leitura; o código vem do repositório, só leitura; escreve só no estado e na saída.
+# Medido: ~4,5 s de processador e < 650 MB por horário; a primeira rodada (48 h) leva ~6 min.
+ExecStart=/bin/sh -c 'exec /usr/bin/docker run --rm --name amaview-rastreio-chuva \
+  --network none --read-only --tmpfs /tmp:size=256m \
+  --cpus 1 --memory 2g --memory-swap 2g --cpu-shares 256 \
+  --user "$(id -u amaview-rastreio-chuva):$(id -g amaview-rastreio-chuva)" \
+  -e HOME=/tmp -e MPLCONFIGDIR=/tmp -e TQDM_DISABLE=1 \
+  -v /opt/amaview/agendador/rastreio-chuva:/app:ro \
+  -v /var/cache/amaview-gsmap/gsmap/v1:/gsmap:ro \
+  -v /var/lib/amaview-rastreio-chuva:/dados \
+  -v /var/cache/amaview-rastreio-chuva:/publica \
+  --entrypoint python pyfortracc_ir:latest -u /app/rastreio.py'
+# Um container que ficou de uma rodada interrompida não deixa a próxima subir com o mesmo nome.
+ExecStartPre=-/usr/bin/docker rm -f amaview-rastreio-chuva
+TimeoutStartSec=20min
+Nice=10

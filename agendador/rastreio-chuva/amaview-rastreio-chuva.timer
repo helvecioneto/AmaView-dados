@@ -1,0 +1,13 @@
+[Unit]
+Description=Rastreio da chuva por satélite a cada 5 minutos (só roda com horário novo do GSMaP)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/rastreio-chuva
+
+[Timer]
+# Um minuto depois do amaview-gsmap (:02, :07…), que grava o horário novo em ~10 s.
+OnCalendar=*:3/5
+Persistent=true
+AccuracySec=20s
+Unit=amaview-rastreio-chuva.service
+
+[Install]
+WantedBy=timers.target

@@ -579,6 +579,48 @@ e `/gsmap/v1/quadros/AAAAMMDDHHNN-{g|s}.bin` (o carimbo é o início da hora, UT
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/gsmap`.
 
+## Rastreio da chuva (pyForTraCC sobre o GSMaP)
+
+O [pyForTraCC](https://github.com/fortracc/pyfortracc) acompanha, de um horário
+do GSMaP_NOW para o outro, cada área contínua com chuva de **pelo menos
+0,1 mm/h**: contorno, trajetória, área, taxa máxima e média, velocidade, rumo,
+tempo de vida e a história do sistema (até 12 h).
+
+- **Nada a baixar.** Lê os quadros que o `amaview-gsmap` já guarda (um byte
+  por ponto; `q > 0` é exatamente ≥ 0,1 mm/h) e roda com `--network none`.
+- **Nada a construir.** Roda na imagem do rastreio de nuvens (`pyfortracc_ir`,
+  a mesma biblioteca), com o `rastreio.py` montado só para leitura; raiz do
+  container só leitura, 1 núcleo, 2 GB, `cpu-shares` 256.
+- **Só com horário novo.** O timer olha a cada 5 min (um minuto depois do
+  GSMaP); o `ExecCondition` (`rastreio.py precisa`, só biblioteca padrão)
+  compara os índices e só então o container sobe. Medido em 03/11/2026: ~4,5 s
+  de processador e < 650 MB por horário novo (~0,25% de um núcleo na média); a
+  primeira rodada, as 48 h de uma vez, ~6 min.
+- **Parâmetros**: limiar 0,1 mm/h (`>=`), sistema com 5 pontos ou mais
+  (~600 km²), 30 min entre horários, as correções de divisão, fusão, fluxo
+  óptico e validação do pyForTraCC ligadas. Sem previsão. Horário que chega
+  depois de um mais novo já rastreado fica de fora (o rastreio só anda para a
+  frente).
+- **Disco**: ~20 MB publicados nas 48 h (~210 KB por horário, ~42 KB o
+  `.geojson.gz` ao lado, `gzip_static`) e ~4 MB de estado (as tabelas do
+  pyForTraCC ficam 13 h: a história e a ligação bastam).
+- O estado em `/var/lib/amaview-rastreio-chuva` não é cache: apagado, os
+  sistemas recomeçam do 1. Para refazer: parar o timer, apagar as duas pastas,
+  ligar de novo.
+
+| Peça | Onde |
+|---|---|
+| `rastreio-chuva/rastreio.py` | uma rodada no container (rastreia, publica, indexa, apaga o velho); `precisa` decide se a rodada sobe |
+| `rastreio-chuva/amaview-rastreio-chuva.{service,timer}` | a cada 5 min, `docker run --rm` como `amaview-rastreio-chuva`, estado em `/var/lib/amaview-rastreio-chuva`, saída em `/var/cache/amaview-rastreio-chuva` |
+| `rastreio-chuva/nginx-locais.conf` | `/rastreio-chuva/`: quadros imutáveis (`gzip_static`), índice `no-cache`, CORS |
+
+URL: `/rastreio-chuva/v1/indice.json` (quadros `{c, p, n, km2, pmax}`) e
+`/rastreio-chuva/v1/quadros/AAAAMMDDHHNN.geojson` (o carimbo é o do GSMaP, o
+início da hora UTC): contornos `k: "c"` (`uid, st, vida, km2, pmax, pmed, dp,
+exp, vel, rumo, hist`) e trajetórias `k: "t"`.
+
+Testes (sem o pyForTraCC): `python3 -m unittest discover -s agendador/rastreio-chuva`.
+
 ## Terreno do foco (MapBiomas e CAR)
 
 O que havia em volta de um foco de queimada nos últimos 41 anos e de quem é a

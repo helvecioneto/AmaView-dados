@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, terreno, raios, retrato)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP, o terreno, os raios e o retrato da denúncia
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios e o retrato da denúncia
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview token        grava o token (pede na tela, sem eco)
@@ -77,6 +77,7 @@ instalar() {
   instalar_meteo
   instalar_previsao
   instalar_gsmap
+  instalar_rastreio_chuva
   instalar_terreno
   instalar_raios
   instalar_retrato
@@ -99,6 +100,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/fortracc/nginx-locais.conf" /etc/nginx/snippets/amaview-fortracc.conf
   sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
   sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
+  sudo install -m 644 "$DESTINO/agendador/rastreio-chuva/nginx-locais.conf" /etc/nginx/snippets/amaview-rastreio-chuva.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -478,6 +480,47 @@ instalar_gsmap() {
   sudo systemctl restart amaview-gsmap.timer && verde "  amaview-gsmap.timer ligado (a cada 5 min)"
 }
 
+# Rastreio da chuva (agendador/rastreio-chuva): o pyForTraCC sobre os quadros
+# que o amaview-gsmap já guarda, na imagem do rastreio de nuvens (pyfortracc_ir),
+# sem rede. O timer olha a cada 5 min; o container só sobe com horário novo.
+instalar_rastreio_chuva() {
+  titulo "Rastreio da chuva (pyForTraCC sobre o GSMaP)"
+  getent passwd amaview-rastreio-chuva >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-rastreio-chuva
+  # O estado do pyForTraCC (não é cache: sem ele os sistemas recomeçam do 1) e a saída que o nginx lê.
+  sudo install -d -m 750 -o amaview-rastreio-chuva -g amaview-rastreio-chuva /var/lib/amaview-rastreio-chuva
+  sudo install -d -m 755 -o amaview-rastreio-chuva -g amaview-rastreio-chuva /var/cache/amaview-rastreio-chuva
+  sudo cp "$DESTINO/agendador/rastreio-chuva/amaview-rastreio-chuva.service" \
+    "$DESTINO/agendador/rastreio-chuva/amaview-rastreio-chuva.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  if ! sudo docker image inspect pyfortracc_ir:latest >/dev/null 2>&1; then
+    sudo systemctl disable --now amaview-rastreio-chuva.timer >/dev/null 2>&1
+    amarelo "  sem a imagem pyfortracc_ir — rode antes: docker compose up -d --build (containers/pyfortracc_IR)"
+    return 0
+  fi
+  sudo systemctl enable amaview-rastreio-chuva.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-rastreio-chuva.timer && verde "  amaview-rastreio-chuva.timer ligado (a cada 5 min, só com horário novo)"
+}
+
+situacao_rastreio_chuva() {
+  titulo "Rastreio da chuva (pyForTraCC sobre o GSMaP)"
+  systemctl is-active --quiet amaview-rastreio-chuva.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-rastreio-chuva"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-rastreio-chuva/rastreio-chuva/v1/indice.json"))
+q = i["quadros"]
+agora = datetime.now(timezone.utc)
+print(f"  {len(q)} horários nas últimas 48 h (esperados 96)")
+if q:
+    t = datetime.strptime(q[-1]["c"], "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    print(f"  mais novo: {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás) · {q[-1]['n']} sistemas, {q[-1]['km2']} km² com ≥ {i['limiar_mmh']} mm/h")
+PY
+  journalctl -u amaview-rastreio-chuva -n 300 --no-pager -o cat 2>/dev/null | grep '^rodada:' | tail -1 | sed 's/^/  /'
+  echo "  em disco: $(sudo du -sh /var/cache/amaview-rastreio-chuva /var/lib/amaview-rastreio-chuva 2>/dev/null | cut -f1 | paste -sd+ | sed 's/+/ + /') (publicado + estado)"
+}
+
 # Uso do solo (MapBiomas) e CAR no clique do foco: um serviço que responde por
 # ponto (amaview-terreno) e os recortes anuais do MapBiomas, baixados uma vez
 # por coleção pelo amaview-terreno-preparar (~2 h na primeira vez, em segundo
@@ -844,6 +887,7 @@ situacao() {
   situacao_meteo
   situacao_previsao
   situacao_gsmap
+  situacao_rastreio_chuva
   situacao_terreno
   situacao_raios
   situacao_retrato
@@ -867,13 +911,14 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
-    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
+    sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-rastreio-chuva.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
     sudo rm -f /etc/systemd/system/amaview-ar.service /etc/systemd/system/amaview-ar.timer
     sudo rm -f /etc/systemd/system/amaview-meteo.service /etc/systemd/system/amaview-meteo.timer
     sudo rm -f /etc/systemd/system/amaview-previsao.service /etc/systemd/system/amaview-previsao.timer /etc/systemd/system/amaview-previsao-wn2.service /etc/systemd/system/amaview-previsao-wn2.timer
     sudo rm -f /etc/systemd/system/amaview-gsmap.service /etc/systemd/system/amaview-gsmap.timer
+    sudo rm -f /etc/systemd/system/amaview-rastreio-chuva.service /etc/systemd/system/amaview-rastreio-chuva.timer
     sudo rm -f /etc/systemd/system/amaview-terreno.service /etc/systemd/system/amaview-terreno-preparar.service \
       /etc/nginx/snippets/amaview-terreno.conf /etc/nginx/conf.d/amaview-terreno.conf
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
