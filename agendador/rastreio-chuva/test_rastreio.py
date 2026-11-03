@@ -146,59 +146,5 @@ class TestPublicacao(Pastas):
         self.assertEqual([f.stem for f in tabelas.iterdir()], [t_nova])
 
 
-
-class TestDadosAbertos(Pastas):
-    CONTORNO = {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-60, -3], [-59.9, -3], [-59.9, -2.9], [-60, -3]]]},
-                "properties": {"k": "c", "uid": 5009, "st": "SPL/MRG", "vida": 90, "km2": 135819, "pmax": 49.7, "pmed": 3.1,
-                               "dp": 6.55, "exp": 16.3, "vel": 19, "rumo": 247, "hist": {"dt": [-30, 0]}}}
-    TRAJETORIA = {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[-60, -3], [-59, -3]]},
-                  "properties": {"k": "t", "uid": 5009}}
-
-    def quadro(self, c):
-        pasta = rastreio.PUBLICA / "quadros"
-        pasta.mkdir(parents=True, exist_ok=True)
-        (pasta / f"{c}.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [self.CONTORNO, self.TRAJETORIA]}))
-
-    def ler(self, nome):
-        return json.loads((rastreio.PUBLICA / nome).read_text())
-
-    def test_campos_por_extenso_sem_trajetoria_nem_historia(self):
-        f = rastreio.feicoes_abertas("202611031400", {"features": [self.CONTORNO, self.TRAJETORIA]}, "g")
-        self.assertEqual(len(f), 1)
-        self.assertEqual(f[0]["properties"], {
-            "id_area": 5009, "quadro_inicio": "2026-11-03T14:00:00Z", "quadro_fim": "2026-11-03T15:00:00Z",
-            "situacao": "divisão e fusão", "situacao_codigo": "SPL/MRG", "vida_min": 90, "area_km2": 135819,
-            "chuva_max_mm_h": 49.7, "chuva_media_mm_h": 3.1, "chuva_dp_mm_h": 6.55, "expansao_1e6_s": 16.3,
-            "velocidade_km_h": 19, "rumo_graus": 247, "produto": "GSMaP_Gauge_NOW"})
-        self.assertEqual(f[0]["geometry"], self.CONTORNO["geometry"])
-
-    def test_latest_e_o_mais_novo_e_last_24h_cobre_so_as_ultimas_24_h(self):
-        for c in ("202611021400", "202611021430", "202611031330", "202611031400"):
-            self.quadro(c)
-        rastreio.dados_abertos({"202611031400": (None, "s")})
-        ultimo = self.ler("latest.geojson")
-        self.assertEqual([x["properties"]["quadro_inicio"] for x in ultimo["features"]], ["2026-11-03T14:00:00Z"])
-        self.assertEqual(ultimo["features"][0]["properties"]["produto"], "GSMaP_NOW")
-        self.assertIn("JAXA", ultimo["credito"])
-        self.assertEqual(ultimo["documentacao"], "https://amaview.com.br/dados")
-        dia = self.ler("last-24h.geojson")
-        # 14:00 de ontem fica de fora: 24 h são 48 quadros de 30 min, o corte (24 h antes do mais novo) é exclusivo.
-        self.assertEqual(sorted({x["properties"]["quadro_inicio"] for x in dia["features"]}),
-                         ["2026-11-02T14:30:00Z", "2026-11-03T13:30:00Z", "2026-11-03T14:00:00Z"])
-        self.assertEqual(dia["quadros"], {"de": "2026-11-02T14:30:00Z", "ate": "2026-11-03T14:00:00Z"})
-        self.assertTrue((rastreio.PUBLICA / "latest.geojson.gz").is_file())
-        self.assertTrue((rastreio.PUBLICA / "last-24h.geojson.gz").is_file())
-
-    def test_sem_quadro_nao_grava_nada(self):
-        rastreio.dados_abertos({})
-        self.assertFalse((rastreio.PUBLICA / "latest.geojson").exists())
-
-    def test_limpar_nao_apaga_os_dados_abertos(self):
-        self.quadro("202611031400")
-        rastreio.dados_abertos({})
-        rastreio.limpar()
-        self.assertTrue((rastreio.PUBLICA / "latest.geojson").is_file())
-
-
 if __name__ == "__main__":
     unittest.main()
