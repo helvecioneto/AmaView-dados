@@ -140,7 +140,7 @@ VARS["aifs"] = {k: v for k, v in VARS["ifs"].items() if k != "rajada"}
 # GFS: as do IFS; a rajada é a do instante (o GFS não publica a máxima do intervalo).
 VARS["gfs"] = {**VARS["ifs"], "rajada": ("m/s", 0.0, 0.01, "rajada a 10 m no instante do passo")}
 # ICON: as do IFS; a rajada é a máxima da última saída do modelo (1 h até +78 h, 3 h depois).
-VARS["icon"] = {**VARS["ifs"], "rajada": ("m/s", 0.0, 0.01, "rajada máxima a 10 m na última saída do modelo")}
+VARS["icon"] = {**VARS["ifs"], "rajada": ("m/s", 0.0, 0.01, "rajada máxima a 10 m na última hora (até +78 h) ou nas últimas 3 h (depois)")}
 # O ICON é publicado em 0,125° (o modelo tem ~13 km): 0,25° jogaria fora a resolução que é a razão de tê-lo.
 PASSO_GRADE = {"ifs": 0.25, "aifs": 0.25, "gfs": 0.25, "icon": 0.125, "cams": 0.4}
 # Campos do IFS que são baixados (shortName do ECMWF).
@@ -711,9 +711,10 @@ def icon_indices(t: datetime, ec: "Eccodes", ncelulas: int):
     ni, nj, _ = dimensoes("icon")
     try:
         g = np.load(ICON_GRADE)
-        if int(g["ncelulas"]) == ncelulas and g["idx"].shape == (ni, nj):
+        mesma = [float(x) for x in g["recorte"]] == [LAT0, LON0, PASSO_GRADE["icon"]]
+        if int(g["ncelulas"]) == ncelulas and g["idx"].shape == (ni, nj) and mesma:
             return g["idx"]
-    except (FileNotFoundError, KeyError, ValueError, OSError):
+    except Exception:  # noqa: BLE001 — ausente, de outro recorte ou corrompido: recalcula
         pass
     coords = {}
     for v in ("clat", "clon"):
@@ -727,7 +728,7 @@ def icon_indices(t: datetime, ec: "Eccodes", ncelulas: int):
     lons_q = LON0 + np.arange(nj) * PASSO_GRADE["icon"]
     idx = mais_proximos(coords["clat"], clon, lats_q, lons_q)
     temp = f"{ICON_GRADE}.parcial-{os.getpid()}.npz"
-    np.savez(temp, idx=idx, ncelulas=ncelulas)
+    np.savez(temp, idx=idx, ncelulas=ncelulas, recorte=np.array([LAT0, LON0, PASSO_GRADE["icon"]]))
     os.replace(temp, ICON_GRADE)
     print(f"icon: correspondência de {ni}×{nj} pontos calculada ({ncelulas} células)")
     return idx
@@ -970,7 +971,9 @@ def rodada(agora: datetime | None = None, so: str | None = None, forcar: str | N
         st["faixas"] = {k: v for k, v in st.get("faixas", {}).items() if k in st.get("feitas", [])}
         escrever_atomico(ESTADO, json.dumps(estado).encode())
         limpar(modelo)
-    escrever_atomico(os.path.join(PASTA, "indice.json"), json.dumps(montar_indice(estado, agora), separators=(",", ":"), ensure_ascii=False).encode())
+        # O índice a cada modelo: se o ICON (o último, o mais pesado) for morto pelo systemd
+        # (memória, tempo), as rodadas novas dos outros já estão no site.
+        escrever_atomico(os.path.join(PASTA, "indice.json"), json.dumps(montar_indice(estado, agora), separators=(",", ":"), ensure_ascii=False).encode())
     resultado["_falhou"] = falhou
     return resultado
 
