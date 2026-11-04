@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-Previsão de modelo para o AmaView: o tempo do ECMWF (IFS, dados abertos) e o
-aerossol de queimadas do CAMS (Copernicus), recortados na Amazônia Legal.
+Previsão de modelo para o AmaView: o tempo do ECMWF (IFS e AIFS, dados
+abertos) e o aerossol de queimadas do CAMS (Copernicus), recortados na
+Amazônia Legal.
 
 - **IFS** (`data.ecmwf.int`, sem conta, CC BY 4.0): rodadas de 00 e 12 UTC,
   grade de 0,25°, passos de 3 h até +144 h e de 6 h até +360 h. Só os campos
   usados são baixados, por intervalo de bytes (o `.index` de cada passo diz
   onde cada campo está no GRIB global de ~140 MB).
+- **AIFS** (o modelo de aprendizado de máquina do ECMWF, AIFS Single; mesmo
+  servidor, mesma licença): rodadas de 00 e 12 UTC (as de 06 e 18 não são
+  usadas, para andar junto com o IFS), grade de 0,25°, passos de 6 h até
+  +360 h. Os mesmos campos do IFS menos a rajada (`10fg`), que o AIFS não tem.
+  Baixado depois do IFS na mesma execução, nunca em paralelo a ele: o servidor
+  aberto limita pedidos (429).
 - **CAMS** (Atmosphere Data Store, conta e licença; chave em
   `/etc/amaview/ads-key`): rodadas de 00 e 12 UTC, grade de 0,4°, passos de 3 h
   até +120 h. O pedido entra na fila do ADS; a rodada seguinte do timer vê se
@@ -31,6 +38,7 @@ têm os mesmos blocos (2° = 8 pontos do IFS = 5 do CAMS).
 
   previsao.py                 uma rodada (o que o timer chama)
   previsao.py ifs AAAAMMDDHH  força uma rodada do IFS (teste)
+  previsao.py aifs AAAAMMDDHH força uma rodada do AIFS (teste)
   previsao.py cams AAAAMMDDHH força o pedido do CAMS (teste; espera o ADS)
 """
 import ctypes
@@ -68,6 +76,12 @@ ESPERA_FALHA_S = 1800
 
 IFS_URL = "https://data.ecmwf.int/forecasts"
 IFS_PASSOS = list(range(0, 145, 3)) + list(range(150, 361, 6))
+AIFS_PASSOS = list(range(0, 361, 6))
+# Os modelos do servidor aberto do ECMWF: caminho na árvore e passos.
+ECMWF_ABERTO = {
+    "ifs": ("ifs/0p25/oper", IFS_PASSOS),
+    "aifs": ("aifs-single/0p25/oper", AIFS_PASSOS),
+}
 # Downloads simultâneos (intervalos de bytes) no servidor de dados abertos.
 IFS_PARALELO = 2
 # Esperas seguidas por um 429 antes de desistir do arquivo (e da rodada).
@@ -95,7 +109,9 @@ VARS = {
         "pm25": ("µg/m³", 0.0, 0.1, "MP2,5 na superfície"),
     },
 }
-PASSO_GRADE = {"ifs": 0.25, "cams": 0.4}
+# O AIFS publica as mesmas variáveis do IFS, menos a rajada (não há `10fg`).
+VARS["aifs"] = {k: v for k, v in VARS["ifs"].items() if k != "rajada"}
+PASSO_GRADE = {"ifs": 0.25, "aifs": 0.25, "cams": 0.4}
 # Campos do IFS que são baixados (shortName do ECMWF).
 IFS_CAMPOS = ("2t", "2d", "tp", "10u", "10v", "10fg", "tcc")
 CAMS_CAMPOS = {
@@ -186,6 +202,7 @@ class Eccodes:
                 passo = longo("step")
             return {
                 "nome": texto("shortName"),
+                "unidade": texto("units"),
                 "param": param,
                 "passo": passo,
                 "data": longo("dataDate"),
@@ -217,6 +234,27 @@ def mensagens(dado: bytes):
             return
         yield dado[p : p + n]
         p += n
+
+
+# Unidades que o IFS e o AIFS publicam para o mesmo campo (conferidas em 4/11/2026):
+# a chuva do IFS vem em m e a do AIFS em kg/m² (= mm); as nuvens do IFS em fração
+# (0–1) e as do AIFS em %. Tudo vai para a unidade do IFS antes da conversão; uma
+# unidade desconhecida derruba a rodada (melhor que publicar chuva 1.000× maior).
+UNIDADES = {
+    "tp": {"m": 1.0, "kg m**-2": 0.001},
+    "tcc": {"(0 - 1)": 1.0, "%": 0.01},
+}
+
+
+def normalizar(nome: str, unidade: str | None, valores):
+    """Valores do campo na unidade do IFS (só `tp` e `tcc` diferem entre os modelos)."""
+    fatores = UNIDADES.get(nome)
+    if fatores is None:
+        return valores
+    if unidade not in fatores:
+        raise ValueError(f"{nome} em unidade desconhecida: {unidade!r}")
+    f = fatores[unidade]
+    return valores if f == 1.0 else valores * f
 
 
 def recortar(campo: dict, modelo: str):
@@ -255,15 +293,15 @@ def quantizar(valores, offset: float, escala: float):
     return q.astype("<u2")
 
 
-def converter_ifs(brutos: dict[int, dict]) -> dict:
-    """{passo: {shortName: grade}} → {var: array [passo][lat][lon]} nas unidades publicadas."""
+def converter_ifs(brutos: dict[int, dict], modelo: str = "ifs") -> dict:
+    """{passo: {shortName: grade}} → {var: array [passo][lat][lon]} nas unidades publicadas (IFS ou AIFS)."""
     import numpy as np
 
-    ni, nj, _ = dimensoes("ifs")
+    ni, nj, _ = dimensoes(modelo)
     vazio = np.full((ni, nj), np.nan, np.float32)
     passos = sorted(brutos)
     pega = lambda s, k: brutos[s].get(k, vazio)  # noqa: E731
-    out = {v: np.empty((len(passos), ni, nj), np.float32) for v in VARS["ifs"]}
+    out = {v: np.empty((len(passos), ni, nj), np.float32) for v in VARS[modelo]}
     tp_ant = None
     for i, s in enumerate(passos):
         t = pega(s, "2t") - 273.15
@@ -275,7 +313,8 @@ def converter_ifs(brutos: dict[int, dict]) -> dict:
         tp_ant = tp
         out["u10"][i] = pega(s, "10u")
         out["v10"][i] = pega(s, "10v")
-        out["rajada"][i] = pega(s, "10fg")
+        if "rajada" in out:
+            out["rajada"][i] = pega(s, "10fg")
         out["nuvens"][i] = pega(s, "tcc") * 100.0
     return out
 
@@ -412,14 +451,15 @@ def instante_rodada(nome: str) -> datetime:
 # IFS (dados abertos do ECMWF)
 
 
-def ifs_base(t: datetime, passo: int) -> str:
-    return f"{IFS_URL}/{t:%Y%m%d}/{t:%H}z/ifs/0p25/oper/{t:%Y%m%d%H}0000-{passo}h-oper-fc"
+def ifs_base(t: datetime, passo: int, modelo: str = "ifs") -> str:
+    caminho = ECMWF_ABERTO[modelo][0]
+    return f"{IFS_URL}/{t:%Y%m%d}/{t:%H}z/{caminho}/{t:%Y%m%d%H}0000-{passo}h-oper-fc"
 
 
-def ifs_pronta(t: datetime) -> bool:
+def ifs_pronta(t: datetime, modelo: str = "ifs") -> bool:
     """A rodada só entra inteira: o último passo publicado é o sinal."""
     try:
-        baixar(ifs_base(t, IFS_PASSOS[-1]) + ".index", metodo="HEAD", tentativas=1)
+        baixar(ifs_base(t, ECMWF_ABERTO[modelo][1][-1], modelo) + ".index", metodo="HEAD", tentativas=1)
         return True
     except urllib.error.HTTPError as e:
         # 404/403: ainda não publicada. Qualquer outra coisa (429 que não passou
@@ -430,8 +470,11 @@ def ifs_pronta(t: datetime) -> bool:
         raise
 
 
-def ifs_rodada(t: datetime, ec: Eccodes) -> tuple[list[int], dict]:
+def ifs_rodada(t: datetime, ec: Eccodes, modelo: str = "ifs") -> tuple[list[int], dict]:
+    """Uma rodada do IFS ou do AIFS (dados abertos do ECMWF): só os campos usados, por intervalo de bytes."""
     from concurrent.futures import ThreadPoolExecutor
+
+    passos = ECMWF_ABERTO[modelo][1]
 
     brutos: dict[int, dict] = {}
     baixados = 0
@@ -441,21 +484,27 @@ def ifs_rodada(t: datetime, ec: Eccodes) -> tuple[list[int], dict]:
     # leitura do GRIB fica numa linha só (a libeccodes não promete ser segura
     # entre threads).
     with ThreadPoolExecutor(max_workers=IFS_PARALELO) as pool:
-        for s in IFS_PASSOS:
-            base = ifs_base(t, s)
+        for s in passos:
+            base = ifs_base(t, s, modelo)
             indice = [json.loads(l) for l in baixar(base + ".index").decode().splitlines() if l.strip()]
             campos = {}
             for e in indice:
                 if e.get("levtype") == "sfc" and e.get("param") in IFS_CAMPOS and e["param"] not in campos:
                     campos[e["param"]] = (int(e["_offset"]), int(e["_length"]))
+            # Um campo que some do índice não pode virar mapa vazio em silêncio: a rodada falha
+            # (a rajada não existe no AIFS; no passo 0 do IFS também não há `10fg`).
+            faltam = {c for c in IFS_CAMPOS if c != "10fg"} - set(campos)
+            if faltam:
+                raise ValueError(f"{modelo} +{s}h sem {sorted(faltam)} no índice")
             pedir = lambda ini_n: baixar(base + ".grib2", {"Range": f"bytes={ini_n[0]}-{sum(ini_n) - 1}"})  # noqa: E731
             msgs = dict(zip(campos, pool.map(pedir, campos.values())))
             brutos[s] = {}
             for nome, msg in msgs.items():
                 baixados += len(msg)
-                brutos[s][nome] = recortar(ec.ler(msg), "ifs")
-    print(f"ifs {nome_rodada(t)}: {len(brutos)} passos, {baixados / 1e6:.0f} MB baixados em {(time.time() - t0) / 60:.1f} min")
-    return IFS_PASSOS, converter_ifs(brutos)
+                c = ec.ler(msg)
+                brutos[s][nome] = normalizar(nome, c.get("unidade"), recortar(c, modelo))
+    print(f"{modelo} {nome_rodada(t)}: {len(brutos)} passos, {baixados / 1e6:.0f} MB baixados em {(time.time() - t0) / 60:.1f} min")
+    return passos, converter_ifs(brutos, modelo)
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +627,8 @@ def cams_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = 
     return f"{pedido['rodada']} publicada"
 
 
-def ifs_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = None) -> str:
+def ifs_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = None, modelo: str = "ifs") -> str:
+    """Um passo do IFS ou do AIFS: a rodada mais nova pronta que ainda não foi feita."""
     feitas = set(estado.get("feitas", []))
     falhas = estado.get("falhas", {})
     ultima = max(feitas) if feitas else ""
@@ -589,7 +639,7 @@ def ifs_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = N
             (
                 t
                 for t in rodadas_candidatas(agora, 3)
-                if nome_rodada(t) > ultima and time.time() - falhas.get(nome_rodada(t), 0) > ESPERA_FALHA_S and ifs_pronta(t)
+                if nome_rodada(t) > ultima and time.time() - falhas.get(nome_rodada(t), 0) > ESPERA_FALHA_S and ifs_pronta(t, modelo)
             ),
             None,
         )
@@ -597,8 +647,8 @@ def ifs_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = N
         return "em dia"
     n = nome_rodada(alvo)
     try:
-        passos, dados = ifs_rodada(alvo, ec)
-        faixa = publicar("ifs", n, passos, dados)
+        passos, dados = ifs_rodada(alvo, ec, modelo)
+        faixa = publicar(modelo, n, passos, dados)
     except Exception as e:  # noqa: BLE001
         falhas[n] = time.time()
         estado["falhas"] = {k: v for k, v in falhas.items() if time.time() - v < 86400}
@@ -607,7 +657,7 @@ def ifs_andar(estado: dict, agora: datetime, ec: Eccodes, forcar: str | None = N
     estado["feitas"] = sorted(feitas | {n})[-RODADAS_GUARDADAS:]
     estado.setdefault("faixas", {})[n] = faixa
     estado["erro"] = None
-    print(f"ifs {n}: publicada · t2m {faixa['t2m']} · chuva {faixa['chuva']}")
+    print(f"{modelo} {n}: publicada · t2m {faixa['t2m']} · chuva {faixa['chuva']}")
     return f"{n} publicada"
 
 
@@ -620,6 +670,7 @@ def montar_indice(estado: dict, agora: datetime) -> dict:
     modelos = {}
     fontes = {
         "ifs": ("ECMWF IFS (dados abertos), CC BY 4.0", IFS_PASSOS),
+        "aifs": ("ECMWF AIFS Single, modelo de aprendizado de máquina (dados abertos), CC BY 4.0", AIFS_PASSOS),
         "cams": ("CAMS global (Copernicus/ECMWF) — Contains modified Copernicus Atmosphere Monitoring Service information", CAMS_PASSOS),
     }
     for modelo, (fonte, passos) in fontes.items():
@@ -646,7 +697,9 @@ def rodada(agora: datetime | None = None, so: str | None = None, forcar: str | N
     estado = ler_json(ESTADO, {})
     ec = Eccodes()
     resultado, falhou = {}, False
-    for modelo, andar in (("ifs", ifs_andar), ("cams", cams_andar)):
+    # Em série: o AIFS só depois do IFS (o mesmo servidor aberto, que limita pedidos).
+    aifs_andar = lambda st, ag, e, f: ifs_andar(st, ag, e, f, "aifs")  # noqa: E731
+    for modelo, andar in (("ifs", ifs_andar), ("aifs", aifs_andar), ("cams", cams_andar)):
         if so and so != modelo:
             continue
         st = estado.setdefault(modelo, {})
@@ -667,7 +720,7 @@ def rodada(agora: datetime | None = None, so: str | None = None, forcar: str | N
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] in ("ifs", "cams"):
+    if len(sys.argv) == 3 and sys.argv[1] in ("ifs", "aifs", "cams"):
         modelo, alvo = sys.argv[1], sys.argv[2]
         if modelo == "cams":
             # Teste: pede e espera aqui mesmo, em vez de deixar para o próximo timer.
@@ -678,7 +731,7 @@ def main() -> None:
                 time.sleep(30)
                 r = rodada(agora, "cams")
         else:
-            r = rodada(None, "ifs", alvo)
+            r = rodada(None, modelo, alvo)
         print(r)
         return
     r = rodada()

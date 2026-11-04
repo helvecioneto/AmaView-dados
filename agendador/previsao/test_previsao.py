@@ -50,7 +50,7 @@ class Temp(unittest.TestCase):
 
 class Grade(unittest.TestCase):
     def test_dimensoes_fecham_em_blocos(self):
-        for modelo in ("ifs", "cams"):
+        for modelo in ("ifs", "aifs", "cams"):
             ni, nj, b = previsao.dimensoes(modelo)
             self.assertEqual((ni % b, nj % b), (0, 0), modelo)
             # Os dois modelos têm os mesmos blocos.
@@ -345,7 +345,7 @@ class Ifs(Temp):
         prontas = {"2026101700"}
         ni, nj, _ = previsao.dimensoes("ifs")
         dados = {v: np.zeros((2, ni, nj), np.float32) for v in previsao.VARS["ifs"]}
-        with mock.patch.object(previsao, "ifs_pronta", lambda t: previsao.nome_rodada(t) in prontas), mock.patch.object(
+        with mock.patch.object(previsao, "ifs_pronta", lambda t, m="ifs": previsao.nome_rodada(t) in prontas), mock.patch.object(
             previsao, "ifs_rodada", return_value=([0, 3], dados)
         ) as rod:
             r = previsao.ifs_andar(st, datetime(2026, 10, 17, 15, tzinfo=UTC), None)
@@ -353,7 +353,7 @@ class Ifs(Temp):
         self.assertEqual(previsao.nome_rodada(rod.call_args[0][0]), "2026101700")
         self.assertEqual(st["feitas"], ["2026101612", "2026101700"])
         # Feita a 00, nada mais novo pronto: não baixa de novo.
-        with mock.patch.object(previsao, "ifs_pronta", lambda t: previsao.nome_rodada(t) in prontas), mock.patch.object(
+        with mock.patch.object(previsao, "ifs_pronta", lambda t, m="ifs": previsao.nome_rodada(t) in prontas), mock.patch.object(
             previsao, "ifs_rodada", side_effect=AssertionError("não devia baixar")
         ):
             self.assertEqual(previsao.ifs_andar(st, datetime(2026, 10, 17, 15, tzinfo=UTC), None), "em dia")
@@ -361,7 +361,7 @@ class Ifs(Temp):
     def test_429_na_conferencia_nao_pula_para_a_mais_velha(self):
         st = {}
 
-        def pronta(t):
+        def pronta(t, m="ifs"):
             raise previsao.urllib.error.HTTPError("u", 429, "x", {}, None)
 
         with mock.patch.object(previsao, "ifs_pronta", pronta), mock.patch.object(previsao, "ifs_rodada", side_effect=AssertionError("não devia baixar")):
@@ -371,13 +371,139 @@ class Ifs(Temp):
 
     def test_falha_marca_a_rodada(self):
         st = {}
-        with mock.patch.object(previsao, "ifs_pronta", lambda t: True), mock.patch.object(
+        with mock.patch.object(previsao, "ifs_pronta", lambda t, m="ifs": True), mock.patch.object(
             previsao, "ifs_rodada", side_effect=OSError("rede caiu")
         ):
             with self.assertRaises(OSError):
                 previsao.ifs_andar(st, datetime(2026, 10, 17, 15, tzinfo=UTC), None)
         self.assertIn("2026101712", st["falhas"])
         self.assertIn("rede caiu", st["erro"])
+
+
+class Aifs(Temp):
+    def test_endereco_e_passos(self):
+        t = datetime(2026, 11, 4, 0, tzinfo=UTC)
+        self.assertEqual(
+            previsao.ifs_base(t, 6, "aifs"),
+            "https://data.ecmwf.int/forecasts/20261104/00z/aifs-single/0p25/oper/20261104000000-6h-oper-fc",
+        )
+        self.assertEqual(previsao.ifs_base(t, 6), previsao.ifs_base(t, 6, "ifs"))
+        self.assertIn("/ifs/0p25/oper/", previsao.ifs_base(t, 6))
+        self.assertEqual(previsao.AIFS_PASSOS[:3], [0, 6, 12])
+        self.assertEqual(previsao.AIFS_PASSOS[-1], 360)
+        self.assertEqual(len(previsao.AIFS_PASSOS), 61)
+
+    def test_unidades_da_chuva_e_das_nuvens(self):
+        um = np.ones((2, 2), np.float32)
+        # IFS: m e fração; AIFS: kg/m² (mm) e %. Tudo na unidade do IFS.
+        self.assertAlmostEqual(float(previsao.normalizar("tp", "m", um * 0.012)[0, 0]), 0.012, places=6)
+        self.assertAlmostEqual(float(previsao.normalizar("tp", "kg m**-2", um * 12.0)[0, 0]), 0.012, places=6)
+        self.assertAlmostEqual(float(previsao.normalizar("tcc", "%", um * 50.0)[0, 0]), 0.5, places=6)
+        self.assertAlmostEqual(float(previsao.normalizar("tcc", "(0 - 1)", um * 0.5)[0, 0]), 0.5, places=6)
+        self.assertIs(previsao.normalizar("2t", "K", um), um)
+        with self.assertRaises(ValueError):
+            previsao.normalizar("tp", "mm/h", um)
+
+    def test_sem_rajada(self):
+        self.assertNotIn("rajada", previsao.VARS["aifs"])
+        self.assertEqual(set(previsao.VARS["ifs"]) - set(previsao.VARS["aifs"]), {"rajada"})
+        ni, nj, _ = previsao.dimensoes("aifs")
+        um = np.ones((ni, nj), np.float32)
+        brutos = {
+            0: {"2t": um * 300, "2d": um * 290, "tp": um * 0.0, "10u": um, "10v": um, "tcc": um},
+            6: {"2t": um * 300, "2d": um * 290, "tp": um * 0.012, "10u": um, "10v": um, "tcc": um},
+        }
+        d = previsao.converter_ifs(brutos, "aifs")
+        self.assertNotIn("rajada", d)
+        self.assertAlmostEqual(float(d["chuva"][1, 0, 0]), 12.0, places=3)
+
+    def test_publica_na_pasta_do_aifs_e_no_indice(self):
+        st = {}
+        ni, nj, _ = previsao.dimensoes("aifs")
+        dados = {v: np.zeros((2, ni, nj), np.float32) for v in previsao.VARS["aifs"]}
+        visto = []
+        with mock.patch.object(previsao, "ifs_pronta", lambda t, m="ifs": visto.append(m) or True), mock.patch.object(
+            previsao, "ifs_rodada", return_value=([0, 6], dados)
+        ) as rod:
+            r = previsao.ifs_andar(st, datetime(2026, 11, 4, 9, tzinfo=UTC), None, None, "aifs")
+        self.assertEqual(r, "2026110400 publicada")
+        self.assertEqual(rod.call_args[0][2], "aifs")
+        self.assertEqual(set(visto), {"aifs"})
+        self.assertTrue(os.path.isdir(os.path.join(previsao.PASTA, "aifs", "2026110400", "mapa", "t2m")))
+        self.assertFalse(os.path.exists(os.path.join(previsao.PASTA, "aifs", "2026110400", "mapa", "rajada")))
+        i = previsao.montar_indice({"aifs": st}, datetime(2026, 11, 4, 9, tzinfo=UTC))
+        m = i["modelos"]["aifs"]
+        self.assertEqual(m["rodadas"], ["2026110400"])
+        self.assertEqual(m["passos"], previsao.AIFS_PASSOS)
+        self.assertNotIn("rajada", m["vars"])
+        self.assertIn("AIFS", m["fonte"])
+
+    def test_pronta_confere_o_ultimo_passo_do_aifs(self):
+        pedidos = []
+        with mock.patch.object(previsao, "baixar", lambda url, *a, **k: pedidos.append(url) or b""):
+            self.assertTrue(previsao.ifs_pronta(datetime(2026, 11, 4, 0, tzinfo=UTC), "aifs"))
+        self.assertEqual(pedidos, ["https://data.ecmwf.int/forecasts/20261104/00z/aifs-single/0p25/oper/20261104000000-360h-oper-fc.index"])
+
+    def test_rodada_normaliza_e_recusa_campo_faltando(self):
+        ni, nj, _ = previsao.dimensoes("aifs")
+        campos = ["2t", "2d", "tp", "10u", "10v", "tcc"]
+        indice = "\n".join(json.dumps({"levtype": "sfc", "param": c, "_offset": k * 10, "_length": 10}) for k, c in enumerate(campos)).encode()
+        unid = {"tp": "kg m**-2", "tcc": "%", "2t": "K", "2d": "K", "10u": "m s**-1", "10v": "m s**-1"}
+
+        class Ec:
+            def ler(self, msg):
+                c = msg.decode()
+                g = campo_global(lambda la, lo: np.full(la.shape, 50.0 if c == "tcc" else 6.0 if c == "tp" else 300.0))
+                return {**g, "unidade": unid[c]}
+
+        def baixar(url, cab=None, *a, **k):
+            if url.endswith(".index"):
+                return indice
+            ini = int(cab["Range"].split("=")[1].split("-")[0])
+            return campos[ini // 10].encode()
+
+        with mock.patch.object(previsao, "baixar", baixar), mock.patch.object(previsao, "AIFS_PASSOS", [0, 6]), mock.patch.dict(
+            previsao.ECMWF_ABERTO, {"aifs": ("aifs-single/0p25/oper", [0, 6])}
+        ):
+            passos, d = previsao.ifs_rodada(datetime(2026, 11, 4, tzinfo=UTC), Ec(), "aifs")
+            self.assertEqual(passos, [0, 6])
+            # 6 kg/m² acumulados nos dois passos: chuva 0 no intervalo; nuvens 50 %, não 5.000 %.
+            self.assertAlmostEqual(float(d["nuvens"][1, 0, 0]), 50.0, places=3)
+            self.assertAlmostEqual(float(d["chuva"][1, 0, 0]), 0.0, places=3)
+            campos.remove("tp")
+            indice = "\n".join(json.dumps({"levtype": "sfc", "param": c, "_offset": k * 10, "_length": 10}) for k, c in enumerate(campos)).encode()
+            with self.assertRaises(ValueError):
+                previsao.ifs_rodada(datetime(2026, 11, 4, tzinfo=UTC), Ec(), "aifs")
+
+    def test_falha_do_aifs_nao_para_o_cams(self):
+        ordem = []
+
+        def ifs_andar(st, ag, e, f=None, modelo="ifs"):
+            ordem.append(modelo)
+            if modelo == "aifs":
+                raise OSError("aifs caiu")
+            return "em dia"
+
+        with mock.patch.object(previsao, "Eccodes", lambda: None), mock.patch.object(previsao, "ifs_andar", ifs_andar), mock.patch.object(
+            previsao, "cams_andar", lambda *a: ordem.append("cams") or "em dia"
+        ):
+            r = previsao.rodada(datetime(2026, 11, 4, 9, tzinfo=UTC))
+        self.assertEqual(ordem, ["ifs", "aifs", "cams"])
+        self.assertTrue(r["_falhou"])
+        self.assertIn("aifs caiu", r["aifs"])
+
+    def test_rodada_em_serie_ifs_aifs_cams(self):
+        ordem = []
+
+        def andar(nome):
+            return lambda st, ag, e, f=None, modelo=None: ordem.append(modelo or nome) or "em dia"
+
+        with mock.patch.object(previsao, "Eccodes", lambda: None), mock.patch.object(
+            previsao, "ifs_andar", lambda st, ag, e, f=None, modelo="ifs": ordem.append(modelo) or "em dia"
+        ), mock.patch.object(previsao, "cams_andar", andar("cams")):
+            r = previsao.rodada(datetime(2026, 11, 4, 9, tzinfo=UTC))
+        self.assertEqual(ordem, ["ifs", "aifs", "cams"])
+        self.assertFalse(r["_falhou"])
 
 
 if __name__ == "__main__":

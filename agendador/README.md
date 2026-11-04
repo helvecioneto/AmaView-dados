@@ -451,14 +451,21 @@ Testes (sem rede): `python3 -m unittest discover -s agendador/meteo`.
 ## Previsão (ECMWF e CAMS)
 
 A mesma máquina recorta na Amazônia Legal (8°N–20°S, 76°W–42°W) a previsão
-de tempo do **ECMWF IFS** (dados abertos, CC BY 4.0) e a de fumaça do **CAMS**
-(Copernicus) para o modo "Próximos dias" do AmaView.
+de tempo do **ECMWF IFS** e do **ECMWF AIFS** (dados abertos, CC BY 4.0) e a
+de fumaça do **CAMS** (Copernicus) para o modo "Próximos dias" do AmaView.
 
 - **IFS**: rodadas de 00 e 12 UTC, 0,25°, 85 passos (de 3 em 3 h até +144 h,
   de 6 em 6 h até +360 h). Só os sete campos usados (`2t`, `2d`, `tp`, `10u`,
   `10v`, `10fg`, `tcc`) descem, por intervalo de bytes, com o `.index` de cada
   passo; dois downloads simultâneos e espera no HTTP 429 (o servidor aberto
   limita). Uma rodada: ~600 pedidos, 37 MB publicados.
+- **AIFS** (o modelo de IA do ECMWF, AIFS Single; 4/11/2026): rodadas de 00 e
+  12 UTC, 0,25°, 61 passos (de 6 em 6 h até +360 h). Os campos do IFS menos a
+  rajada (`10fg`, que o AIFS não tem). Baixado **depois** do IFS na mesma
+  execução, nunca junto (o limite de pedidos é do servidor). A chuva vem em
+  kg/m² (o IFS, em m) e as nuvens em % (o IFS, em fração): `normalizar`
+  converte pela unidade do próprio GRIB e recusa uma desconhecida. Uma rodada
+  medida: 146 MB baixados em 6,4 min, 23 MB publicados.
 - **CAMS**: rodadas de 00 e 12 UTC, 0,4°, 41 passos (até +120 h). O pedido
   entra na fila do ADS e a execução seguinte do timer confere; se a rodada
   nova ainda não está no ADS (HTTP 400), pede a anterior. **Aerossol de
@@ -477,7 +484,7 @@ de tempo do **ECMWF IFS** (dados abertos, CC BY 4.0) e a de fumaça do **CAMS**
 
 URLs (em `https://147.15.84.134/previsao/v1/`):
 
-- `indice.json`: `{"versao", "gerado", "semDado", "modelos": {"ifs"|"cams":
+- `indice.json`: `{"versao", "gerado", "semDado", "modelos": {"ifs"|"aifs"|"cams":
   {"fonte", "rodadas", "passos", "grade": {"lat0", "lon0", "passo", "ni",
   "nj", "bloco"}, "vars": {nome: {"u", "off", "esc", "desc"}}, "faixas",
   "erro", "fila"}}}`.
@@ -485,7 +492,7 @@ URLs (em `https://147.15.84.134/previsao/v1/`):
   little-endian, valor = `off + esc × q`, 65535 = sem dado; linha i →
   lat0 − i·passo, coluna j → lon0 + j·passo (o centro do ponto).
 - `<modelo>/<AAAAMMDDHH>/serie/<bi>_<bj>.bin`: bloco de 2°×2° (8×8 pontos no
-  IFS, 5×5 no CAMS) com todos os passos e variáveis, `[var][passo][linha][coluna]`.
+  IFS e no AIFS, 5×5 no CAMS) com todos os passos e variáveis, `[var][passo][linha][coluna]`.
 
 Instalar: `amaview instalar`. Logs: `journalctl -u amaview-previsao`.
 Testes (sem rede): `python3 -m unittest discover -s agendador/previsao`.
