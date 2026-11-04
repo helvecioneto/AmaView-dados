@@ -14,6 +14,18 @@ Amazônia Legal.
   +360 h. Os mesmos campos do IFS menos a rajada (`10fg`), que o AIFS não tem.
   Baixado depois do IFS na mesma execução, nunca em paralelo a ele: o servidor
   aberto limita pedidos (429).
+- **GFS** (NOAA, domínio público): rodadas de 00 e 12 UTC, 0,25°, passos de
+  3 h até +384 h. O filtro do NOMADS já devolve só o recorte (~200 KB por
+  passo); a prontidão é conferida na cópia da AWS (sem limite de pedidos). A
+  chuva é a acumulada desde o início (o GFS publica também a de 3/6 h); as
+  nuvens, as do instante (não a média do intervalo); a rajada (`GUST`) é a do
+  instante.
+- **ICON** (DWD, CC BY 4.0, "Fonte: Deutscher Wetterdienst"): rodadas de 00 e
+  12 UTC, ~13 km em grade icosaédrica, passos de 3 h até +180 h. Um arquivo
+  global por variável e passo (bz2, 2–4 MB): ~1,4 GB por rodada. Cada ponto
+  da grade publicada (0,125°) recebe a célula do ICON mais próxima; a
+  correspondência sai das coordenadas das células (CLAT/CLON) e fica guardada
+  em `icon-grade.npz`. É o último da execução (o mais demorado).
 - **CAMS** (Atmosphere Data Store, conta e licença; chave em
   `/etc/amaview/ads-key`): rodadas de 00 e 12 UTC, grade de 0,4°, passos de 3 h
   até +120 h. O pedido entra na fila do ADS; a rodada seguinte do timer vê se
@@ -39,8 +51,11 @@ têm os mesmos blocos (2° = 8 pontos do IFS = 5 do CAMS).
   previsao.py                 uma rodada (o que o timer chama)
   previsao.py ifs AAAAMMDDHH  força uma rodada do IFS (teste)
   previsao.py aifs AAAAMMDDHH força uma rodada do AIFS (teste)
+  previsao.py gfs AAAAMMDDHH  força uma rodada do GFS (teste)
+  previsao.py icon AAAAMMDDHH força uma rodada do ICON (teste)
   previsao.py cams AAAAMMDDHH força o pedido do CAMS (teste; espera o ADS)
 """
+import bz2
 import ctypes
 import ctypes.util
 import json
@@ -77,6 +92,17 @@ ESPERA_FALHA_S = 1800
 IFS_URL = "https://data.ecmwf.int/forecasts"
 IFS_PASSOS = list(range(0, 145, 3)) + list(range(150, 361, 6))
 AIFS_PASSOS = list(range(0, 361, 6))
+GFS_PASSOS = list(range(0, 385, 3))
+GFS_FILTRO = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+GFS_AWS = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+# Pausa entre pedidos ao NOMADS (ele bloqueia quem passa de ~120 por minuto).
+GFS_PAUSA_S = 0.5
+ICON_URL = "https://opendata.dwd.de/weather/nwp/icon/grib"
+ICON_PASSOS = list(range(0, 181, 3))
+# Variável do DWD → shortName do ECMWF (o nome que o resto do código usa).
+ICON_VARS = {"t_2m": "2t", "td_2m": "2d", "tot_prec": "tp", "u_10m": "10u", "v_10m": "10v", "vmax_10m": "10fg", "clct": "tcc"}
+# Downloads simultâneos do servidor do DWD (~1 MB/s por conexão, medido da Oracle em 4/11/2026).
+ICON_PARALELO = 4
 # Os modelos do servidor aberto do ECMWF: caminho na árvore e passos.
 ECMWF_ABERTO = {
     "ifs": ("ifs/0p25/oper", IFS_PASSOS),
@@ -111,7 +137,12 @@ VARS = {
 }
 # O AIFS publica as mesmas variáveis do IFS, menos a rajada (não há `10fg`).
 VARS["aifs"] = {k: v for k, v in VARS["ifs"].items() if k != "rajada"}
-PASSO_GRADE = {"ifs": 0.25, "aifs": 0.25, "cams": 0.4}
+# GFS: as do IFS; a rajada é a do instante (o GFS não publica a máxima do intervalo).
+VARS["gfs"] = {**VARS["ifs"], "rajada": ("m/s", 0.0, 0.01, "rajada a 10 m no instante do passo")}
+# ICON: as do IFS; a rajada é a máxima da última saída do modelo (1 h até +78 h, 3 h depois).
+VARS["icon"] = {**VARS["ifs"], "rajada": ("m/s", 0.0, 0.01, "rajada máxima a 10 m na última saída do modelo")}
+# O ICON é publicado em 0,125° (o modelo tem ~13 km): 0,25° jogaria fora a resolução que é a razão de tê-lo.
+PASSO_GRADE = {"ifs": 0.25, "aifs": 0.25, "gfs": 0.25, "icon": 0.125, "cams": 0.4}
 # Campos do IFS que são baixados (shortName do ECMWF).
 IFS_CAMPOS = ("2t", "2d", "tp", "10u", "10v", "10fg", "tcc")
 CAMS_CAMPOS = {
@@ -200,9 +231,14 @@ class Eccodes:
                 passo = longo("endStep")
             except KeyError:
                 passo = longo("step")
+            try:
+                inicio = longo("startStep")
+            except KeyError:
+                inicio = passo
             return {
                 "nome": texto("shortName"),
                 "unidade": texto("units"),
+                "inicio": inicio,
                 "param": param,
                 "passo": passo,
                 "data": longo("dataDate"),
@@ -213,6 +249,42 @@ class Eccodes:
             }
         finally:
             lib.codes_handle_delete(h)
+
+
+def ler_bruto(ec: "Eccodes", msg: bytes) -> dict:
+    """Uma mensagem de grade não regular (o ICON) → {nome, unidade, passo, valores (1-D)}."""
+    import numpy as np
+
+    lib = ec.lib
+    h = lib.codes_handle_new_from_message(None, msg, len(msg))
+    if not h:
+        raise ValueError("mensagem GRIB ilegível")
+    h = ctypes.c_void_p(h)
+    try:
+        def texto(k):
+            buf = ctypes.create_string_buffer(256)
+            n = ctypes.c_size_t(256)
+            return None if lib.codes_get_string(h, k.encode(), buf, ctypes.byref(n)) else buf.value.decode()
+
+        def longo(k):
+            v = ctypes.c_long()
+            if lib.codes_get_long(h, k.encode(), ctypes.byref(v)):
+                raise KeyError(k)
+            return v.value
+
+        n = ctypes.c_size_t()
+        lib.codes_get_size(h, b"values", ctypes.byref(n))
+        vals = np.empty(n.value, dtype=np.float64)
+        m = ctypes.c_size_t(n.value)
+        if lib.codes_get_double_array(h, b"values", vals.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), ctypes.byref(m)):
+            raise ValueError("valores ilegíveis")
+        try:
+            passo = longo("endStep")
+        except KeyError:
+            passo = None
+        return {"nome": texto("shortName"), "unidade": texto("units"), "passo": passo, "valores": vals}
+    finally:
+        lib.codes_handle_delete(h)
 
 
 def mensagens(dado: bytes):
@@ -458,6 +530,10 @@ def ifs_base(t: datetime, passo: int, modelo: str = "ifs") -> str:
 
 def ifs_pronta(t: datetime, modelo: str = "ifs") -> bool:
     """A rodada só entra inteira: o último passo publicado é o sinal."""
+    if modelo == "gfs":
+        return gfs_pronta(t)
+    if modelo == "icon":
+        return icon_pronta(t)
     try:
         baixar(ifs_base(t, ECMWF_ABERTO[modelo][1][-1], modelo) + ".index", metodo="HEAD", tentativas=1)
         return True
@@ -474,6 +550,10 @@ def ifs_rodada(t: datetime, ec: Eccodes, modelo: str = "ifs") -> tuple[list[int]
     """Uma rodada do IFS ou do AIFS (dados abertos do ECMWF): só os campos usados, por intervalo de bytes."""
     from concurrent.futures import ThreadPoolExecutor
 
+    if modelo == "gfs":
+        return gfs_rodada(t, ec)
+    if modelo == "icon":
+        return icon_rodada(t, ec)
     passos = ECMWF_ABERTO[modelo][1]
 
     brutos: dict[int, dict] = {}
@@ -505,6 +585,177 @@ def ifs_rodada(t: datetime, ec: Eccodes, modelo: str = "ifs") -> tuple[list[int]
                 brutos[s][nome] = normalizar(nome, c.get("unidade"), recortar(c, modelo))
     print(f"{modelo} {nome_rodada(t)}: {len(brutos)} passos, {baixados / 1e6:.0f} MB baixados em {(time.time() - t0) / 60:.1f} min")
     return passos, converter_ifs(brutos, modelo)
+
+
+def faltando_404(f, *a, **k) -> bool:
+    """Pergunta de prontidão: True se respondeu, False num 403/404 (ainda não publicado); outro erro sobe."""
+    try:
+        f(*a, **k)
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return False
+        raise
+
+
+# ---------------------------------------------------------------------------
+# GFS (NOAA)
+
+
+def gfs_url(t: datetime, passo: int) -> str:
+    """O filtro do NOMADS: só as variáveis e os níveis usados, só o recorte."""
+    q = "&".join(
+        [
+            f"dir=%2Fgfs.{t:%Y%m%d}%2F{t:%H}%2Fatmos",
+            f"file=gfs.t{t:%H}z.pgrb2.0p25.f{passo:03d}",
+            *(f"var_{v}=on" for v in ("TMP", "DPT", "APCP", "UGRD", "VGRD", "GUST", "TCDC")),
+            *(f"lev_{n}=on" for n in ("2_m_above_ground", "10_m_above_ground", "surface", "entire_atmosphere")),
+            "subregion=",
+            f"toplat={LAT0 + 0.5:g}&leftlon={LON0 - 0.5:g}&rightlon={LON1 + 0.5:g}&bottomlat={LAT1 - 0.5:g}",
+        ]
+    )
+    return f"{GFS_FILTRO}?{q}"
+
+
+def gfs_pronta(t: datetime) -> bool:
+    url = f"{GFS_AWS}/gfs.{t:%Y%m%d}/{t:%H}/atmos/gfs.t{t:%H}z.pgrb2.0p25.f{GFS_PASSOS[-1]:03d}.idx"
+    return faltando_404(baixar, url, metodo="HEAD", tentativas=1)
+
+
+def gfs_campos(dado: bytes, ec: "Eccodes", passo: int) -> dict:
+    """As mensagens de um passo do filtro → {shortName do ECMWF: recorte}, nas unidades do IFS."""
+    import numpy as np
+
+    campos: dict = {}
+    for msg in mensagens(dado):
+        c = ec.ler(msg)
+        nome = "10fg" if c["nome"] in ("gust", "i10fg") else c["nome"]
+        if nome not in IFS_CAMPOS or nome in campos:
+            continue
+        # A chuva acumulada desde o início (a de 3/6 h também vem); as nuvens do instante (não a média).
+        if nome == "tp" and c["inicio"] != 0:
+            continue
+        if nome == "tcc" and c["inicio"] != c["passo"]:
+            continue
+        campos[nome] = normalizar(nome, c.get("unidade"), recortar(c, "gfs"))
+    if passo == 0 and "tp" not in campos:
+        ni, nj, _ = dimensoes("gfs")
+        campos["tp"] = np.zeros((ni, nj), np.float32)
+    faltam = set(IFS_CAMPOS) - set(campos)
+    if faltam:
+        raise ValueError(f"gfs +{passo}h sem {sorted(faltam)}")
+    return campos
+
+
+def gfs_rodada(t: datetime, ec: "Eccodes") -> tuple[list[int], dict]:
+    brutos: dict[int, dict] = {}
+    baixados = 0
+    t0 = time.time()
+    for s in GFS_PASSOS:
+        dado = baixar(gfs_url(t, s))
+        baixados += len(dado)
+        brutos[s] = gfs_campos(dado, ec, s)
+        time.sleep(GFS_PAUSA_S)
+    print(f"gfs {nome_rodada(t)}: {len(brutos)} passos, {baixados / 1e6:.0f} MB baixados em {(time.time() - t0) / 60:.1f} min")
+    return GFS_PASSOS, converter_ifs(brutos, "gfs")
+
+
+# ---------------------------------------------------------------------------
+# ICON (DWD)
+
+ICON_GRADE = os.path.join(RAIZ, "icon-grade.npz")
+
+
+def icon_url(t: datetime, var: str, passo: int) -> str:
+    return f"{ICON_URL}/{t:%H}/{var}/icon_global_icosahedral_single-level_{t:%Y%m%d%H}_{passo:03d}_{var.upper()}.grib2.bz2"
+
+
+def icon_pronta(t: datetime) -> bool:
+    """O último passo de cada variável publicado (o DWD sobe uma variável por vez)."""
+    return all(faltando_404(baixar, icon_url(t, v, ICON_PASSOS[-1]), metodo="HEAD", tentativas=1) for v in ICON_VARS)
+
+
+def mais_proximos(clat, clon, lats_q, lons_q):
+    """Para cada ponto (lats_q × lons_q), o índice da célula mais próxima (graus; distância com cos(lat))."""
+    import numpy as np
+
+    folga = 1.0
+    dentro = np.nonzero((clat <= lats_q.max() + folga) & (clat >= lats_q.min() - folga) & (clon >= lons_q.min() - folga) & (clon <= lons_q.max() + folga))[0]
+    la, lo = clat[dentro], clon[dentro]
+    caixa = 0.25
+    bi = np.floor(la / caixa).astype(np.int64)
+    bj = np.floor(lo / caixa).astype(np.int64)
+    baldes: dict = {}
+    for k, chave in enumerate(zip(bi.tolist(), bj.tolist())):
+        baldes.setdefault(chave, []).append(k)
+    baldes = {k: np.array(v) for k, v in baldes.items()}
+    out = np.empty((lats_q.size, lons_q.size), np.int64)
+    for i, lat in enumerate(lats_q):
+        c = math.cos(math.radians(lat))
+        b0 = math.floor(lat / caixa)
+        for j, lon in enumerate(lons_q):
+            b1 = math.floor(lon / caixa)
+            cand = [baldes[(b0 + di, b1 + dj)] for di in (-1, 0, 1) for dj in (-1, 0, 1) if (b0 + di, b1 + dj) in baldes]
+            if not cand:
+                raise ValueError(f"sem célula do ICON perto de {lat}, {lon}")
+            cand = np.concatenate(cand)
+            d = (la[cand] - lat) ** 2 + ((lo[cand] - lon) * c) ** 2
+            out[i, j] = dentro[cand[int(np.argmin(d))]]
+    return out
+
+
+def icon_indices(t: datetime, ec: "Eccodes", ncelulas: int):
+    """A correspondência ponto publicado → célula do ICON (calculada uma vez; refeita se a grade mudar)."""
+    import numpy as np
+
+    ni, nj, _ = dimensoes("icon")
+    try:
+        g = np.load(ICON_GRADE)
+        if int(g["ncelulas"]) == ncelulas and g["idx"].shape == (ni, nj):
+            return g["idx"]
+    except (FileNotFoundError, KeyError, ValueError, OSError):
+        pass
+    coords = {}
+    for v in ("clat", "clon"):
+        url = f"{ICON_URL}/{t:%H}/{v}/icon_global_icosahedral_time-invariant_{t:%Y%m%d%H}_{v.upper()}.grib2.bz2"
+        c = ler_bruto(ec, bz2.decompress(baixar(url)))
+        coords[v] = c["valores"]
+    if coords["clat"].size != ncelulas:
+        raise ValueError(f"CLAT com {coords['clat'].size} células, os campos com {ncelulas}")
+    clon = (coords["clon"] + 180.0) % 360.0 - 180.0
+    lats_q = LAT0 - np.arange(ni) * PASSO_GRADE["icon"]
+    lons_q = LON0 + np.arange(nj) * PASSO_GRADE["icon"]
+    idx = mais_proximos(coords["clat"], clon, lats_q, lons_q)
+    temp = f"{ICON_GRADE}.parcial-{os.getpid()}.npz"
+    np.savez(temp, idx=idx, ncelulas=ncelulas)
+    os.replace(temp, ICON_GRADE)
+    print(f"icon: correspondência de {ni}×{nj} pontos calculada ({ncelulas} células)")
+    return idx
+
+
+def icon_rodada(t: datetime, ec: "Eccodes") -> tuple[list[int], dict]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    import numpy as np
+
+    pedidos = [(s, v) for s in ICON_PASSOS for v in ICON_VARS if not (v == "vmax_10m" and s == 0)]
+    brutos: dict[int, dict] = {s: {} for s in ICON_PASSOS}
+    idx = None
+    baixados = 0
+    t0 = time.time()
+    # Em lotes: os arquivos baixados não se acumulam na memória (MemoryMax do serviço).
+    with ThreadPoolExecutor(max_workers=ICON_PARALELO) as pool:
+        for k in range(0, len(pedidos), 4 * ICON_PARALELO):
+            lote = pedidos[k : k + 4 * ICON_PARALELO]
+            for (s, v), dado in zip(lote, pool.map(lambda sv: baixar(icon_url(t, sv[1], sv[0])), lote)):
+                baixados += len(dado)
+                c = ler_bruto(ec, bz2.decompress(dado))
+                if idx is None:
+                    idx = icon_indices(t, ec, c["valores"].size)
+                nome = ICON_VARS[v]
+                brutos[s][nome] = normalizar(nome, c["unidade"], c["valores"][idx].astype(np.float32))
+    print(f"icon {nome_rodada(t)}: {len(ICON_PASSOS)} passos, {baixados / 1e6:.0f} MB baixados em {(time.time() - t0) / 60:.1f} min")
+    return ICON_PASSOS, converter_ifs(brutos, "icon")
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +922,8 @@ def montar_indice(estado: dict, agora: datetime) -> dict:
     fontes = {
         "ifs": ("ECMWF IFS (dados abertos), CC BY 4.0", IFS_PASSOS),
         "aifs": ("ECMWF AIFS Single, modelo de aprendizado de máquina (dados abertos), CC BY 4.0", AIFS_PASSOS),
+        "gfs": ("NOAA GFS (domínio público)", GFS_PASSOS),
+        "icon": ("ICON global — Fonte: Deutscher Wetterdienst (DWD), CC BY 4.0", ICON_PASSOS),
         "cams": ("CAMS global (Copernicus/ECMWF) — Contains modified Copernicus Atmosphere Monitoring Service information", CAMS_PASSOS),
     }
     for modelo, (fonte, passos) in fontes.items():
@@ -698,8 +951,11 @@ def rodada(agora: datetime | None = None, so: str | None = None, forcar: str | N
     ec = Eccodes()
     resultado, falhou = {}, False
     # Em série: o AIFS só depois do IFS (o mesmo servidor aberto, que limita pedidos).
-    aifs_andar = lambda st, ag, e, f: ifs_andar(st, ag, e, f, "aifs")  # noqa: E731
-    for modelo, andar in (("ifs", ifs_andar), ("aifs", aifs_andar), ("cams", cams_andar)):
+    # O ICON por último: é o mais demorado (~1,4 GB por rodada) e não deve atrasar os outros.
+    def de(m):
+        return lambda st, ag, e, f: ifs_andar(st, ag, e, f, m)
+
+    for modelo, andar in (("ifs", ifs_andar), ("aifs", de("aifs")), ("gfs", de("gfs")), ("cams", cams_andar), ("icon", de("icon"))):
         if so and so != modelo:
             continue
         st = estado.setdefault(modelo, {})
@@ -720,7 +976,7 @@ def rodada(agora: datetime | None = None, so: str | None = None, forcar: str | N
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] in ("ifs", "aifs", "cams"):
+    if len(sys.argv) == 3 and sys.argv[1] in ("ifs", "aifs", "gfs", "icon", "cams"):
         modelo, alvo = sys.argv[1], sys.argv[2]
         if modelo == "cams":
             # Teste: pede e espera aqui mesmo, em vez de deixar para o próximo timer.

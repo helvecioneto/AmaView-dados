@@ -488,7 +488,7 @@ class Aifs(Temp):
             previsao, "cams_andar", lambda *a: ordem.append("cams") or "em dia"
         ):
             r = previsao.rodada(datetime(2026, 11, 4, 9, tzinfo=UTC))
-        self.assertEqual(ordem, ["ifs", "aifs", "cams"])
+        self.assertEqual(ordem, ["ifs", "aifs", "gfs", "cams", "icon"])
         self.assertTrue(r["_falhou"])
         self.assertIn("aifs caiu", r["aifs"])
 
@@ -502,8 +502,60 @@ class Aifs(Temp):
             previsao, "ifs_andar", lambda st, ag, e, f=None, modelo="ifs": ordem.append(modelo) or "em dia"
         ), mock.patch.object(previsao, "cams_andar", andar("cams")):
             r = previsao.rodada(datetime(2026, 11, 4, 9, tzinfo=UTC))
-        self.assertEqual(ordem, ["ifs", "aifs", "cams"])
+        self.assertEqual(ordem, ["ifs", "aifs", "gfs", "cams", "icon"])
         self.assertFalse(r["_falhou"])
+
+
+class GfsIcon(Temp):
+    def test_endereco_do_filtro_e_do_icon(self):
+        t = datetime(2026, 11, 4, 12, tzinfo=UTC)
+        u = previsao.gfs_url(t, 9)
+        self.assertIn("dir=%2Fgfs.20261104%2F12%2Fatmos", u)
+        self.assertIn("file=gfs.t12z.pgrb2.0p25.f009", u)
+        self.assertIn("subregion=&toplat=8.5&leftlon=-76.5&rightlon=-41.5&bottomlat=-20.5", u)
+        self.assertEqual(
+            previsao.icon_url(t, "tot_prec", 6),
+            "https://opendata.dwd.de/weather/nwp/icon/grib/12/tot_prec/icon_global_icosahedral_single-level_2026110412_006_TOT_PREC.grib2.bz2",
+        )
+        self.assertEqual(len(previsao.GFS_PASSOS), 129)
+        self.assertEqual(len(previsao.ICON_PASSOS), 61)
+        self.assertEqual(previsao.dimensoes("icon"), (224, 272, 16))
+
+    def _campos(self, msgs, passo):
+        class Ec:
+            def ler(self, msg):
+                nome, unid, ini, fim, v = json.loads(msg[4:].decode())
+                return {**campo_global(lambda la, lo: np.full(la.shape, float(v))), "nome": nome, "unidade": unid, "inicio": ini, "passo": fim}
+
+        dados = [b"GRIB" + json.dumps(m).encode() for m in msgs]
+        with mock.patch.object(previsao, "mensagens", lambda d: dados):
+            return previsao.gfs_campos(b"", Ec(), passo)
+
+    def test_gfs_escolhe_a_chuva_desde_o_inicio_e_as_nuvens_do_instante(self):
+        base = [["2t", "K", 12, 12, 300], ["t", "K", 12, 12, 330], ["2d", "K", 12, 12, 290], ["10u", "m s**-1", 12, 12, 1], ["10v", "m s**-1", 12, 12, 2], ["gust", "m s**-1", 12, 12, 9]]
+        c = self._campos(base + [["tp", "kg m**-2", 6, 12, 40], ["tp", "kg m**-2", 0, 12, 60], ["tcc", "%", 6, 12, 10], ["tcc", "%", 12, 12, 80]], 12)
+        self.assertAlmostEqual(float(c["tp"][0, 0]), 0.060, places=5)  # 60 mm desde o início, em m
+        self.assertAlmostEqual(float(c["tcc"][0, 0]), 0.8, places=5)  # do instante, em fração
+        self.assertAlmostEqual(float(c["10fg"][0, 0]), 9.0, places=5)  # GUST vira a rajada
+        self.assertAlmostEqual(float(c["2t"][0, 0]), 300.0, places=3)  # 2 m, não a superfície
+        # Passo 0: sem chuva acumulada (zero); faltando outro campo, a rodada falha.
+        c0 = self._campos(base + [["tcc", "%", 0, 0, 50]], 0)
+        self.assertEqual(float(c0["tp"].max()), 0.0)
+        with self.assertRaises(ValueError):
+            self._campos(base[:-1] + [["tp", "kg m**-2", 0, 12, 60], ["tcc", "%", 12, 12, 80]], 12)
+
+    def test_celula_mais_proxima(self):
+        rng = np.random.default_rng(1)
+        clat = rng.uniform(-22, 10, 20000)
+        clon = rng.uniform(-78, -40, 20000)
+        lats = np.array([0.0, -10.0])
+        lons = np.array([-60.0, -50.0, -45.0])
+        idx = previsao.mais_proximos(clat, clon, lats, lons)
+        for i, la in enumerate(lats):
+            c = np.cos(np.radians(la))
+            for j, lo in enumerate(lons):
+                d = (clat - la) ** 2 + ((clon - lo) * c) ** 2
+                self.assertEqual(idx[i, j], int(np.argmin(d)))
 
 
 if __name__ == "__main__":

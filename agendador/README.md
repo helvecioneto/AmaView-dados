@@ -448,10 +448,11 @@ mesmas sinóticas em texto. Logs: `journalctl -u amaview-meteo`.
 
 Testes (sem rede): `python3 -m unittest discover -s agendador/meteo`.
 
-## Previsão (ECMWF e CAMS)
+## Previsão (ECMWF, NOAA, DWD e CAMS)
 
 A mesma máquina recorta na Amazônia Legal (8°N–20°S, 76°W–42°W) a previsão
-de tempo do **ECMWF IFS** e do **ECMWF AIFS** (dados abertos, CC BY 4.0) e a
+de tempo do **ECMWF IFS** e do **ECMWF AIFS** (dados abertos, CC BY 4.0), do
+**NOAA GFS** (domínio público) e do **DWD ICON** (CC BY 4.0) e a
 de fumaça do **CAMS** (Copernicus) para o modo "Próximos dias" do AmaView.
 
 - **IFS**: rodadas de 00 e 12 UTC, 0,25°, 85 passos (de 3 em 3 h até +144 h,
@@ -466,6 +467,19 @@ de fumaça do **CAMS** (Copernicus) para o modo "Próximos dias" do AmaView.
   kg/m² (o IFS, em m) e as nuvens em % (o IFS, em fração): `normalizar`
   converte pela unidade do próprio GRIB e recusa uma desconhecida. Uma rodada
   medida: 146 MB baixados em 6,4 min, 23 MB publicados.
+- **GFS** (NOAA, domínio público; 4/11/2026): rodadas de 00 e 12 UTC, 0,25°,
+  129 passos (de 3 em 3 h até +384 h). O filtro do NOMADS devolve só o
+  recorte (~220 KB por passo, um pedido a cada 0,5 s: o NOMADS bloqueia quem
+  passa de ~120 por minuto); a prontidão é conferida no `.idx` da cópia da
+  AWS. Chuva acumulada desde o início, nuvens do instante, rajada (`GUST`) do
+  instante. Rodada medida: 28 MB em 2,4 min.
+- **ICON** (DWD, CC BY 4.0, "Fonte: Deutscher Wetterdienst"; 4/11/2026):
+  rodadas de 00 e 12 UTC, ~13 km em grade icosaédrica, 61 passos (de 3 em 3 h
+  até +180 h). Um arquivo global por variável e passo (bz2), 4 downloads
+  simultâneos; publicado em **0,125°** (224 × 272, blocos de 16), cada ponto
+  com a célula mais próxima — a correspondência sai do CLAT/CLON e fica em
+  `/var/cache/amaview-previsao/icon-grade.npz` (refeita se a grade mudar).
+  O último da execução (IFS → AIFS → GFS → CAMS → ICON).
 - **CAMS**: rodadas de 00 e 12 UTC, 0,4°, 41 passos (até +120 h). O pedido
   entra na fila do ADS e a execução seguinte do timer confere; se a rodada
   nova ainda não está no ADS (HTTP 400), pede a anterior. **Aerossol de
@@ -484,7 +498,7 @@ de fumaça do **CAMS** (Copernicus) para o modo "Próximos dias" do AmaView.
 
 URLs (em `https://147.15.84.134/previsao/v1/`):
 
-- `indice.json`: `{"versao", "gerado", "semDado", "modelos": {"ifs"|"aifs"|"cams":
+- `indice.json`: `{"versao", "gerado", "semDado", "modelos": {"ifs"|"aifs"|"gfs"|"icon"|"cams":
   {"fonte", "rodadas", "passos", "grade": {"lat0", "lon0", "passo", "ni",
   "nj", "bloco"}, "vars": {nome: {"u", "off", "esc", "desc"}}, "faixas",
   "erro", "fila"}}}`.
@@ -492,7 +506,7 @@ URLs (em `https://147.15.84.134/previsao/v1/`):
   little-endian, valor = `off + esc × q`, 65535 = sem dado; linha i →
   lat0 − i·passo, coluna j → lon0 + j·passo (o centro do ponto).
 - `<modelo>/<AAAAMMDDHH>/serie/<bi>_<bj>.bin`: bloco de 2°×2° (8×8 pontos no
-  IFS e no AIFS, 5×5 no CAMS) com todos os passos e variáveis, `[var][passo][linha][coluna]`.
+  IFS, AIFS e GFS, 16×16 no ICON, 5×5 no CAMS) com todos os passos e variáveis, `[var][passo][linha][coluna]`.
 
 Instalar: `amaview instalar`. Logs: `journalctl -u amaview-previsao`.
 Testes (sem rede): `python3 -m unittest discover -s agendador/previsao`.
