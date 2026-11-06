@@ -33,8 +33,14 @@ permissions:
 #
 # A sondagem já esteve neste grupo e saiu (ver `sondagem.yml`): ela busca, e
 # este ciclo publica o que ela entrega pelo cache do Actions.
+#
+# O grupo virou `publicar-pages-2` em 06/11/2026: duas execuções de 05/11
+# (16:42 e 16:45 UTC) ficaram presas em "queued" com o job em "waiting" — a
+# API do GitHub não deixa aprovar, cancelar nem apagar — e seguravam o grupo
+# antigo, cancelando cada ciclo novo por 26 h (chuva, radar, rios e barcos
+# parados no ar). Se acontecer de novo, trocar o nome do grupo outra vez.
 concurrency:
-  group: publicar-pages
+  group: publicar-pages-2
   cancel-in-progress: false
 
 jobs:
