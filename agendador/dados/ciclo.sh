@@ -137,7 +137,7 @@ case "$GRUPO" in
     # O depósito entre ciclos (o papel do cache do Actions) fica em /var/lib.
     # Mesmo sistema de arquivos da saída: RADAR_LIGAR publica por hard link,
     # sem copiar ~60 MB a cada 5 min (os PNG do depósito nunca mudam).
-    RADAR_DEPOSITO="$ESTADO/radar-deposito" RADAR_LIGAR=1 PRAZO=4m30s \
+    RADAR_DEPOSITO="$ESTADO/radar-deposito" RADAR_LIGAR=1 PRAZO=270s \
       RADAR_PRAZO_MIN="${RADAR_PRAZO_MIN:-3.5}" rodar radar scripts/radar.mjs
     ;;
   chuva)
