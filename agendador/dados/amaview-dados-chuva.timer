@@ -1,0 +1,14 @@
+[Unit]
+Description=CEMADEN, embarcações e rios a cada 15 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/dados
+
+[Timer]
+# A mesma cadência do workflow: a PED do CEMADEN aceita 12 pedidos/min. Os
+# rios conferem o carimbo e só buscam de hora em hora.
+OnCalendar=*:3/15
+Persistent=true
+AccuracySec=30s
+Unit=amaview-dados@chuva.service
+
+[Install]
+WantedBy=timers.target

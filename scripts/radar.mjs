@@ -32,10 +32,11 @@
  *   RADAR_JANELA_H     Janela publicada, em horas (padrão 48).
  *   RADAR_MARGEM_MIN   Folga além da janela, em minutos (padrão 30).
  *   RADAR_PRAZO_MIN    Prazo para listar e baixar, em minutos (padrão 4).
+ *   RADAR_LIGAR        1 = publica por hard link em vez de copiar (Oracle; mesmo disco).
  *   SIPAM_URL          Raiz das listagens (padrão https://siger.sipam.gov.br/radar).
  *   SIPAM_WFS          URL da WFS de cobertura (extensão dos radares).
  */
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, existsSync, realpathSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -92,6 +93,9 @@ const MARGEM = numeroDoAmbiente('RADAR_MARGEM_MIN', MARGEM_MIN, 0);
  * chuva no grupo de concorrência do Pages.
  */
 const PRAZO_MIN = numeroDoAmbiente('RADAR_PRAZO_MIN', 4, 0.05);
+
+/** `RADAR_LIGAR=1`: publica por hard link (depósito e saída no mesmo disco; ver agendador/dados). */
+const LIGAR = process.env.RADAR_LIGAR === '1';
 const PRAZO_MS = PRAZO_MIN * 60_000;
 
 /**
@@ -522,8 +526,16 @@ async function publicar(manifesto) {
         const nome = nomeDeT(t);
         const destino = join(temp, id, p, nome);
         try {
-          // FICLONE: cópia por referência onde o sistema de arquivos deixa; cópia normal no resto.
-          await copyFile(join(DEPOSITO, id, p, nome), destino, constants.COPYFILE_FICLONE);
+          const origem = join(DEPOSITO, id, p, nome);
+          if (LIGAR) {
+            // Na Oracle (agendador/dados): hard link, sem copiar ~60 MB a cada
+            // ciclo. Seguro porque um PNG do depósito nunca muda — entra por
+            // nome provisório + rename e sai por unlink na poda.
+            await link(origem, destino);
+          } else {
+            // FICLONE: cópia por referência onde o sistema de arquivos deixa; cópia normal no resto.
+            await copyFile(origem, destino, constants.COPYFILE_FICLONE);
+          }
         } catch (e) {
           if (e.code !== 'ENOENT') throw e;
           ausentes.add(`${id}/${p}/${t}`);

@@ -1,0 +1,14 @@
+[Unit]
+Description=Radiossondas (Wyoming) 4 vezes por dia
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/dados
+
+[Timer]
+# Os horários do sondagem.yml: as sondagens de 00/12 UTC aparecem no Wyoming
+# ao longo das horas seguintes.
+OnCalendar=*-*-* 07,10,19,22:22:00
+Persistent=true
+AccuracySec=1min
+Unit=amaview-dados@sondagem.service
+
+[Install]
+WantedBy=timers.target

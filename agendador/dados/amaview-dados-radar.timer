@@ -1,0 +1,16 @@
+[Unit]
+Description=Radares do SIPAM a cada 5 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/dados
+
+[Timer]
+# O SIPAM publica cada varredura (de 10 em 10 min) com 10–21 min de atraso,
+# sem horário fixo. Olhar a cada 5 min põe a varredura no ar até ~5 min depois
+# de ela aparecer lá; cada olhada sem novidade custa 22 listagens (~12 KB cada
+# com gzip). No Pages eram 15 min de ciclo + até 10 min de CDN.
+OnCalendar=*:1/5
+Persistent=true
+AccuracySec=20s
+Unit=amaview-dados@radar.service
+
+[Install]
+WantedBy=timers.target

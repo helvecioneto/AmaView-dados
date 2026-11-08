@@ -6,14 +6,15 @@
 #   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios e o retrato da denúncia
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
-#   amaview token        grava o token (pede na tela, sem eco)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
 #   amaview chave F remover   apaga a chave (a fonte sai na próxima rodada)
 #   amaview chave gsmap [ftps]  grava a conta da JAXA (usuário e senha do GSMaP; sem eco; testa antes por SFTP, ou FTPS)
-#   amaview disparar [w] dispara um ciclo agora (chuva.yml; ou sondagem.yml)
+#   amaview chave cemaden       grava a conta da PED do CEMADEN (e-mail e senha; sem eco; testa antes)
+#   amaview chave openwaters    grava o token opcional do AIS (embarcações; sem eco)
+#   amaview disparar [g] roda um ciclo agora (chuva, radar ou sondagem)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
-#   amaview remover      desinstala tudo (menos o token)
+#   amaview remover      desinstala tudo (menos as chaves)
 #
 # O agendamento do GitHub Actions não é confiável — medido: 135 min de
 # intervalo médio quando o pedido era 15. Esta máquina é o relógio de verdade.
@@ -21,11 +22,16 @@ set -uo pipefail
 
 REPO_URL="https://github.com/helvecioneto/AmaView-dados"
 DESTINO="/opt/amaview"
-# Uma unidade por workflow. A sondagem entrou depois de passar 12 h sem
-# atualizar: dependia só do `schedule` do GitHub, que em 21/09/2026 entregou
-# 1 de 2 horários com ~4 h de atraso.
-UNIDADES="amaview-chuva amaview-sondagem"
+# Desde 08/11/2026 esta máquina RODA o AmaView-dados (agendador/dados) e
+# serve em /dados/, no lugar do GitHub Actions + Pages. Os disparos antigos
+# (amaview-chuva/amaview-sondagem → workflow_dispatch) saem no `instalar`.
+UNIDADES="amaview-dados-chuva amaview-dados-radar amaview-dados-sondagem"
+DISPAROS_ANTIGOS="amaview-chuva amaview-sondagem"
 TOKEN="/etc/amaview/token"
+DADOS_ENV="/etc/amaview/dados.env"
+# Node oficial, versão e checksum fixos (o do apt do Ubuntu 24.04 é o 18).
+NODE_VERSAO="24.22.2"
+NODE_SHA256="eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8"
 # Blocos do GOES-19 (agendador/blocos): o nome resolve para o IP desta máquina
 # pelo sslip.io, e é com ele que o certificado sai.
 BLOCOS_IP="147.15.84.134"
@@ -44,7 +50,7 @@ amarelo() { printf '\033[33m%s\033[0m\n' "$*"; }
 titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 timers() { for u in $UNIDADES; do printf '%s.timer ' "$u"; done; }
-filtro_journal() { for u in $UNIDADES; do printf -- '-u %s ' "$u"; done; }
+filtro_journal() { printf -- '-u amaview-dados@chuva -u amaview-dados@radar -u amaview-dados@sondagem '; }
 
 # `restart`, e não só `--now`: um timer já ativo não relê a unidade editada.
 ligar_timers() {
@@ -61,12 +67,16 @@ instalar() {
   else
     sudo git clone -q "$REPO_URL" "$DESTINO" && echo "  repositório clonado"
   fi
-  sudo chmod +x "$DESTINO/agendador/disparar.py"
-  for u in $UNIDADES; do
-    sudo cp "$DESTINO/agendador/$u.service" "$DESTINO/agendador/$u.timer" /etc/systemd/system/
+  sudo chmod +x "$DESTINO/agendador/disparar.py" "$DESTINO/agendador/dados/ciclo.sh"
+  # Os disparos do GitHub saíram: quem roda agora é o agendador/dados.
+  for u in $DISPAROS_ANTIGOS; do
+    if [ -e "/etc/systemd/system/$u.timer" ]; then
+      sudo systemctl disable --now "$u.timer" >/dev/null 2>&1
+      sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
+      echo "  $u.timer removido (o ciclo roda nesta máquina)"
+    fi
   done
   sudo systemctl daemon-reload
-  echo "  unidades instaladas"
 
   # Mantém este próprio script em dia junto com o resto.
   sudo install -m 755 "$DESTINO/agendador/amaview" /usr/local/bin/amaview 2>/dev/null \
@@ -82,12 +92,7 @@ instalar() {
   instalar_raios
   instalar_retrato
   instalar_blocos
-
-  if [ ! -s "$TOKEN" ]; then
-    amarelo "  token ausente — rode: amaview token"
-    return 0
-  fi
-  ligar_timers
+  instalar_dados
 }
 
 # Site do nginx: sempre a porta 80; a 443 só com o certificado já emitido.
@@ -101,6 +106,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/previsao/nginx-locais.conf" /etc/nginx/snippets/amaview-previsao.conf
   sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
   sudo install -m 644 "$DESTINO/agendador/rastreio-chuva/nginx-locais.conf" /etc/nginx/snippets/amaview-rastreio-chuva.conf
+  sudo install -m 644 "$DESTINO/agendador/dados/nginx-locais.conf" /etc/nginx/snippets/amaview-dados.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -137,6 +143,112 @@ gerar_site_blocos() {
     vermelho "  nginx recusou a configuração — nada recarregado"
     return 1
   fi
+}
+
+# AmaView-dados nesta máquina (agendador/dados): os mesmos scripts do
+# workflow, rodados por três timers, servidos pelo nginx em /dados/.
+instalar_node() {
+  if [ "$(/opt/node/bin/node --version 2>/dev/null)" = "v$NODE_VERSAO" ]; then return 0; fi
+  local arq="node-v$NODE_VERSAO-linux-arm64" tmp
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSAO/$arq.tar.xz" -o "$tmp/node.tar.xz" || { vermelho "  não baixei o Node"; return 1; }
+  if ! echo "$NODE_SHA256  $tmp/node.tar.xz" | sha256sum -c --quiet; then
+    vermelho "  checksum do Node não confere — nada instalado"; rm -rf "$tmp"; return 1
+  fi
+  sudo tar -xJf "$tmp/node.tar.xz" -C /opt
+  sudo ln -sfn "/opt/$arq" /opt/node
+  rm -rf "$tmp"
+  verde "  Node $(/opt/node/bin/node --version) em /opt/node"
+}
+
+instalar_dados() {
+  titulo "AmaView-dados (CEMADEN, radar, rios, embarcações, sondagem)"
+  instalar_node || return 1
+  getent passwd amaview-dados >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-dados
+  if sudo test -e "$DADOS_ENV"; then
+    sudo chown root:amaview-dados "$DADOS_ENV" && sudo chmod 640 "$DADOS_ENV"
+  fi
+  sudo cp "$DESTINO/agendador/dados/amaview-dados@.service" \
+    "$DESTINO/agendador/dados/amaview-dados-chuva.timer" \
+    "$DESTINO/agendador/dados/amaview-dados-radar.timer" \
+    "$DESTINO/agendador/dados/amaview-dados-sondagem.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  ligar_timers
+  sudo test -s "$DADOS_ENV" && sudo grep -q '^CEMADEN_EMAIL=' "$DADOS_ENV" \
+    || amarelo "  sem a conta da PED: o CEMADEN roda no modo público — rode: amaview chave cemaden"
+}
+
+situacao_dados() {
+  titulo "AmaView-dados (/dados/)"
+  for t in $(timers); do
+    systemctl is-active --quiet "$t" || amarelo "  $t desligado — rode: amaview instalar"
+  done
+  for g in chuva radar sondagem; do
+    if systemctl is-failed --quiet "amaview-dados@$g.service"; then
+      vermelho "  ciclo $g: a última rodada deixou camada sem publicar — amaview logs"
+    fi
+  done
+  frescor
+  echo "  em disco: $(sudo du -sh /var/cache/amaview-dados /var/lib/amaview-dados 2>/dev/null | cut -f1 | paste -sd' ' -) (publicação, depósito do radar)"
+}
+
+# Conta da PED (CEMADEN) e token do AIS em $DADOS_ENV (640 root:amaview-dados),
+# no formato do EnvironmentFile. Pedidos na tela sem eco; nunca na linha de
+# comando. A conta é testada pedindo um token à PED ANTES de gravar.
+gravar_env_dados() { # chave valor — troca (ou acrescenta) uma linha
+  local k="$1" v="$2" atual
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+  atual="$(sudo cat "$DADOS_ENV" 2>/dev/null | grep -v "^$k=" || true)"
+  sudo install -m 640 -o root -g amaview-dados /dev/null "$DADOS_ENV.novo"
+  { [ -n "$atual" ] && printf '%s\n' "$atual"; printf '%s="%s"\n' "$k" "$v"; } | sudo tee "$DADOS_ENV.novo" >/dev/null
+  sudo mv "$DADOS_ENV.novo" "$DADOS_ENV"
+}
+
+gravar_conta_dados() {
+  local fonte="$1" acao="${2:-}"
+  getent group amaview-dados >/dev/null || { vermelho "  rode antes: amaview instalar"; return 1; }
+  case "$fonte" in
+    cemaden)
+      titulo "Conta da PED do CEMADEN"
+      if [ "$acao" = "remover" ]; then
+        local resto; resto="$(sudo grep -v '^CEMADEN_' "$DADOS_ENV" 2>/dev/null || true)"
+        printf '%s\n' "$resto" | sudo tee "$DADOS_ENV" >/dev/null
+        verde "  conta apagada; o CEMADEN volta ao modo público no próximo ciclo"; return 0
+      fi
+      local email senha
+      read -rp "  E-mail da conta: " email
+      read -rsp "  Senha (não aparece na tela): " senha; echo
+      [ -n "$email" ] && [ -n "$senha" ] || { vermelho "  nada gravado"; return 1; }
+      echo "  Testando na PED…"
+      printf '%s\n%s' "$email" "$senha" | /opt/node/bin/node --input-type=module -e '
+        import { readFileSync } from "node:fs";
+        import { renovarToken } from "/opt/amaview/scripts/cemaden.mjs";
+        const [e, ...s] = readFileSync(0, "utf8").split("\n");
+        await renovarToken(e.trim(), s.join("\n"));
+      ' || { vermelho "  a PED recusou — nada gravado"; return 1; }
+      gravar_env_dados CEMADEN_EMAIL "$email"
+      gravar_env_dados CEMADEN_SENHA "$senha"
+      unset senha
+      verde "  gravada em $DADOS_ENV (640 root:amaview-dados)"
+      sudo systemctl start --no-block amaview-dados@chuva.service && echo "  ciclo da chuva disparado"
+      ;;
+    openwaters)
+      titulo "Token do AIS (OpenWaters)"
+      if [ "$acao" = "remover" ]; then
+        local resto; resto="$(sudo grep -v '^OPENWATERS_TOKEN=' "$DADOS_ENV" 2>/dev/null || true)"
+        printf '%s\n' "$resto" | sudo tee "$DADOS_ENV" >/dev/null
+        verde "  token apagado; as embarcações seguem no nível anônimo"; return 0
+      fi
+      local t
+      read -rsp "  Cole o token (não aparece na tela): " t; echo
+      t="$(printf '%s' "$t" | tr -d '[:space:]')"
+      [ -n "$t" ] || { vermelho "  nada gravado"; return 1; }
+      gravar_env_dados OPENWATERS_TOKEN "$t"
+      unset t
+      verde "  gravado em $DADOS_ENV (640 root:amaview-dados)"
+      ;;
+  esac
 }
 
 instalar_blocos() {
@@ -764,7 +876,7 @@ gravar_token() {
   echo
   echo "  Testando…"
   if sudo "$DESTINO/agendador/disparar.py" chuva.yml; then
-    ligar_timers
+    verde "  aceito"
   else
     vermelho "  o token não foi aceito — confira a permissão e rode 'amaview token' de novo"
     return 1
@@ -845,12 +957,14 @@ frescor() {
   python3 - <<'PY' 2>/dev/null || echo "  não consegui ler o dado publicado"
 import json, urllib.request
 from datetime import datetime, timezone
-base = "https://helvecioneto.github.io/AmaView-dados"
+base = "/var/cache/amaview-dados/dados"
 # Limites por produto, em minutos. A sondagem tem horas de idade por natureza:
-# roda 4×/dia, e o maior intervalo entre horários é de 9 h.
-for nome, cam, ok, velho in (("chuva", "cemaden", 45, 720), ("sondagem", "sondagem", 660, 1440)):
+# roda 4×/dia, e o maior intervalo entre horários é de 9 h. Os rios, de hora em hora.
+for nome, cam, ok, velho in (("chuva", "cemaden", 45, 720), ("radar", "radar", 20, 360),
+                             ("navios", "navios", 45, 720), ("rios", "rios", 150, 1440),
+                             ("sondagem", "sondagem", 660, 1440)):
     try:
-        with urllib.request.urlopen(f"{base}/{cam}/manifest.json", timeout=15) as r:
+        with open(f"{base}/{cam}/manifest.json") as r:
             m = json.load(r)
         idade = (datetime.now(timezone.utc) - datetime.fromisoformat(m["gerado"].replace("Z", "+00:00")))
         mins = idade.total_seconds() / 60
@@ -868,18 +982,10 @@ situacao() {
     systemctl is-enabled "$t" >/dev/null 2>&1 || amarelo "  $t desligado — rode: amaview instalar"
   done
 
-  titulo "Token"
-  if sudo test -s "$TOKEN" 2>/dev/null; then
-    verde "  presente ($(sudo stat -c %a "$TOKEN"))"
-  else
-    amarelo "  ausente — rode: amaview token"
-  fi
-
   titulo "Últimas execuções"
   journalctl $(filtro_journal) -n 8 --no-pager -o short 2>/dev/null | sed 's/^/  /' || echo "  (sem log ainda)"
 
-  titulo "Dado publicado"
-  frescor
+  situacao_dados
 
   situacao_blocos
   situacao_fumaca
@@ -899,11 +1005,17 @@ case "${1:-status}" in
   instalar | install) instalar ;;
   certificado) certificado ;;
   renovar-ip) renovar_ip ;;
-  token) gravar_token ;;
   chave | chaves)
-    if [ "${2:-}" = "gsmap" ]; then gravar_conta_gsmap "${3:-}"; else gravar_chave "${2:-}" "${3:-}"; fi
+    case "${2:-}" in
+      gsmap) gravar_conta_gsmap "${3:-}" ;;
+      cemaden | openwaters) gravar_conta_dados "$2" "${3:-}" ;;
+      *) gravar_chave "${2:-}" "${3:-}" ;;
+    esac
     ;;
-  disparar | run) sudo "$DESTINO/agendador/disparar.py" "${2:-chuva.yml}" ;;
+  disparar | run)
+    g="${2:-chuva}"; g="${g%.yml}"
+    sudo systemctl start "amaview-dados@$g.service"; journalctl -u "amaview-dados@$g" -n 40 --no-pager -o cat
+    ;;
   logs) journalctl $(filtro_journal) -n "${2:-30}" --no-pager ;;
   parar | stop) sudo systemctl disable --now $(timers) && verde "timers desligados" ;;
   remover)
@@ -911,6 +1023,7 @@ case "${1:-status}" in
     for u in $UNIDADES; do
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
+    sudo rm -f /etc/systemd/system/amaview-dados@.service
     sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-rastreio-chuva.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
@@ -924,10 +1037,10 @@ case "${1:-status}" in
     sudo rm -f /etc/systemd/system/amaview-blocos.service /etc/nginx/sites-enabled/amaview-blocos
     sudo systemctl reload nginx 2>/dev/null
     sudo systemctl daemon-reload
-    verde "removido (o token em $TOKEN foi mantido)"
+    verde "removido (as chaves em /etc/amaview foram mantidas)"
     ;;
   status | '') situacao ;;
   *)
-    sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

@@ -1,0 +1,32 @@
+[Unit]
+Description=AmaView-dados na Oracle: ciclo %i (no lugar do GitHub Actions + Pages)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/dados
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/amaview/agendador/dados/ciclo.sh %i
+User=amaview-dados
+Group=amaview-dados
+# /var/cache/amaview-dados: o que o nginx (www-data) lê — pastas 755, arquivos 644.
+CacheDirectory=amaview-dados
+CacheDirectoryMode=0755
+UMask=0022
+# Depósito do radar entre ciclos (o papel do cache do Actions). Não é cache:
+# apagar faz o próximo ciclo rebaixar as 48 h.
+StateDirectory=amaview-dados
+StateDirectoryMode=0755
+# Conta da PED do CEMADEN e token opcional do AIS (`amaview chave cemaden|openwaters`).
+EnvironmentFile=-/etc/amaview/dados.env
+Environment=NODE_OPTIONS=--max-old-space-size=768
+# A sondagem, na estreia, pode levar uns 20 min; os outros, poucos minutos.
+TimeoutStartSec=30min
+Nice=10
+MemoryMax=1500M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
