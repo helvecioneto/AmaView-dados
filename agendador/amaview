@@ -91,6 +91,7 @@ instalar() {
   instalar_terreno
   instalar_raios
   instalar_retrato
+  instalar_focos
   instalar_blocos
   instalar_dados
 }
@@ -107,6 +108,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/gsmap/nginx-locais.conf" /etc/nginx/snippets/amaview-gsmap.conf
   sudo install -m 644 "$DESTINO/agendador/rastreio-chuva/nginx-locais.conf" /etc/nginx/snippets/amaview-rastreio-chuva.conf
   sudo install -m 644 "$DESTINO/agendador/dados/nginx-locais.conf" /etc/nginx/snippets/amaview-dados.conf
+  sudo install -m 644 "$DESTINO/agendador/focos/nginx-locais.conf" /etc/nginx/snippets/amaview-focos.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -143,6 +145,33 @@ gerar_site_blocos() {
     vermelho "  nginx recusou a configuração — nada recarregado"
     return 1
   fi
+}
+
+# Focos do GOES-19 (agendador/focos): o FDC da NOAA, do S3, a cada minuto;
+# CSV por varredura em /var/cache/amaview-focos, que o nginx serve em /focos/.
+instalar_focos() {
+  titulo "Focos do GOES-19 (FDC da NOAA)"
+  getent passwd amaview-focos >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-focos
+  sudo cp "$DESTINO/agendador/focos/amaview-focos.service" "$DESTINO/agendador/focos/amaview-focos.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-focos.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-focos.timer && verde "  amaview-focos.timer ligado (a cada minuto)"
+}
+
+situacao_focos() {
+  titulo "Focos do GOES-19 (/focos/)"
+  systemctl is-active --quiet amaview-focos.timer || amarelo "  amaview-focos.timer desligado — rode: amaview instalar"
+  python3 - <<'PY2' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-focos"
+import json
+from datetime import datetime, timezone
+i = json.load(open("/var/cache/amaview-focos/focos/v1/indice.json"))
+a = i["arquivos"]
+u = datetime.strptime(a[-1]["n"], "%Y%m%d_%H%M").replace(tzinfo=timezone.utc)
+idade = (datetime.now(timezone.utc) - u).total_seconds() / 60
+print(f"  {len(a)} varreduras · mais nova {a[-1]['n']} UTC ({idade:.0f} min do início da varredura) · {a[-1]['focos']} pixels de fogo")
+PY2
+  echo "  em disco: $(du -sh /var/cache/amaview-focos 2>/dev/null | cut -f1)"
 }
 
 # AmaView-dados nesta máquina (agendador/dados): os mesmos scripts do
@@ -986,6 +1015,7 @@ situacao() {
   journalctl $(filtro_journal) -n 8 --no-pager -o short 2>/dev/null | sed 's/^/  /' || echo "  (sem log ainda)"
 
   situacao_dados
+  situacao_focos
 
   situacao_blocos
   situacao_fumaca
@@ -1024,6 +1054,8 @@ case "${1:-status}" in
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
     done
     sudo rm -f /etc/systemd/system/amaview-dados@.service
+    sudo systemctl disable --now amaview-focos.timer 2>/dev/null
+    sudo rm -f /etc/systemd/system/amaview-focos.service /etc/systemd/system/amaview-focos.timer /etc/nginx/snippets/amaview-focos.conf
     sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-rastreio-chuva.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer

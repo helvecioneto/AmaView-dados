@@ -1,0 +1,15 @@
+[Unit]
+Description=Focos do GOES-19 (FDC da NOAA) a cada minuto
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/focos
+
+[Timer]
+# A NOAA põe cada varredura do disco no S3 ~10 min depois do início dela
+# (1–2 min depois do fim), sem minuto fixo. Olhar a cada minuto põe o arquivo
+# no ar até ~1 min depois; cada olhada sem novidade é uma listagem do S3
+# (poucos KB) e ~0,1 s de processador.
+OnCalendar=*:*:20
+AccuracySec=5s
+Unit=amaview-focos.service
+
+[Install]
+WantedBy=timers.target

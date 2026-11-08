@@ -1,0 +1,27 @@
+[Unit]
+Description=Focos do GOES-19 para o AmaView (FDC da NOAA, direto do S3)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/focos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/focos/focos.py
+User=amaview-focos
+Group=amaview-focos
+# /var/cache/amaview-focos, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-focos
+CacheDirectoryMode=0755
+UMask=0022
+Environment=FOCOS_RAIZ=/var/cache/amaview-focos
+Environment=PYTHONUNBUFFERED=1
+# Preenchimento das 72 h: 432 varreduras de ~1,7 MB, 24 por rodada.
+TimeoutStartSec=10min
+Nice=5
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
