@@ -1,5 +1,26 @@
 # Agendador externo
 
+> **Desde 08/11/2026 esta máquina RODA o AmaView-dados** (`dados/`) e serve em
+> `https://147.15.84.134/dados/` — CEMADEN, radar, rios, embarcações e
+> sondagem —, no lugar do GitHub Actions + Pages. Os workflows `chuva.yml` e
+> `sondagem.yml` estão desligados no GitHub (`gh workflow enable` os traz de
+> volta). Motivo: em três dias o GitHub parou o dado duas vezes sem erro
+> nenhum (execuções fantasmas segurando o grupo de concorrência em 05/11; o
+> Pages aceitando deploys como "success" e servindo o site antigo em 08/11).
+>
+> | Unidade | Quando | O quê |
+> |---|---|---|
+> | `amaview-dados-radar.timer` | a cada 5 min | radares do SIPAM (`ciclo.sh radar`) |
+> | `amaview-dados-chuva.timer` | a cada 15 min | CEMADEN, embarcações, rios (1×/h) |
+> | `amaview-dados-sondagem.timer` | 07/10/19/22h22 UTC | radiossondas do Wyoming |
+> | `amaview-focos.timer` | a cada minuto | focos do GOES-19 (FDC da NOAA) em `/focos/v1/` |
+>
+> Cada camada só vai ao ar (troca atômica de link simbólico) se o script
+> terminou bem e passou na conferência; senão fica a anterior. Conta da PED:
+> `sudo amaview chave cemaden` (sem ela, o CEMADEN roda no modo público).
+> `amaview disparar radar|chuva|sondagem` roda um ciclo na hora. O texto abaixo
+> descreve o arranjo antigo (disparo do `workflow_dispatch`).
+
 O agendamento do GitHub Actions **não é confiável**. Medido neste repositório:
 pedindo um ciclo a cada 15 minutos, o intervalo real entre disparos foi de
 **135 minutos em média** (mediana 153). Um pedido anterior de 10 minutos não
