@@ -22,6 +22,12 @@ let ultima = 0;
 
 const dorme = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Esperas antes de repetir um pedido recusado por sobrecarga (503 e parentes). */
+const RECUOS_MS = (process.env.WYOMING_RECUOS_MS ?? '20000,60000')
+  .split(',')
+  .map(Number)
+  .filter((n) => Number.isFinite(n) && n >= 0);
+
 async function espacar() {
   const falta = ultima + INTERVALO_MS - Date.now();
   if (falta > 0) await dorme(falta);
@@ -66,11 +72,21 @@ export async function sondagem(idWmo, ms) {
     type: 'TEXT:LIST',
   });
 
+  // 503/429/502/504: o servidor está se protegendo (em 08/11/2026, da Oracle,
+  // 9 de 14 estações seguidas deram 503). Esperar e tentar de novo, com recuo,
+  // em vez de perder a estação no ciclo.
   let r;
-  try {
-    r = await fetch(`${BASE}?${q}`, { signal: AbortSignal.timeout(45_000) });
-  } catch (e) {
-    throw new Error(`rede: ${e.message}`);
+  for (let tentativa = 0; ; tentativa++) {
+    try {
+      r = await fetch(`${BASE}?${q}`, { signal: AbortSignal.timeout(45_000) });
+    } catch (e) {
+      throw new Error(`rede: ${e.message}`);
+    }
+    if (![429, 502, 503, 504].includes(r.status) || tentativa >= RECUOS_MS.length) break;
+    void r.text().catch(() => {});
+    const pedido = Number(r.headers.get('retry-after'));
+    await dorme(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido * 1000, 120_000) : RECUOS_MS[tentativa]);
+    ultima = Date.now();
   }
 
   // 400/404 com corpo curto = não há sondagem nesse horário.

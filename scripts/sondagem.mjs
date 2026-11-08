@@ -19,6 +19,24 @@ import { instantesDeSondagem, sondagem, trajetoria, urlSkewT } from './wyoming.m
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SAIDA = isAbsolute(process.env.SAIDA ?? '') ? process.env.SAIDA : join(RAIZ, process.env.SAIDA || 'site');
+/** De onde reler a publicação anterior (para herdar a estação que falhar). */
+const BASE_URL = (process.env.BASE_URL || 'https://helvecioneto.github.io/AmaView-dados').replace(/\/+$/, '');
+
+/**
+ * Perfis da publicação anterior, ou [] se não der para ler. Uma estação que
+ * falha neste ciclo (o Wyoming é acadêmico, sem SLA, e responde 503 em série)
+ * herda os perfis que ainda estão na janela, em vez de sumir do mapa.
+ */
+async function perfisAnteriores() {
+  try {
+    const r = await fetch(`${BASE_URL}/sondagem/perfis.json?t=${Date.now()}`, { signal: AbortSignal.timeout(30_000), cache: 'no-store' });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j.perfis) ? j.perfis : [];
+  } catch {
+    return [];
+  }
+}
 
 const ATRIBUICAO =
   'Sondagens: University of Wyoming, Department of Atmospheric Science (https://weather.uwyo.edu/upperair/)';
@@ -56,6 +74,8 @@ async function main() {
   const perfis = [];
   let comDado = 0;
   let comErro = 0;
+  let herdadas = 0;
+  const anteriores = await perfisAnteriores();
 
   for (const e of ESTACOES_SONDAGEM) {
     try {
@@ -109,6 +129,15 @@ async function main() {
       const idade = ((agora - lista[0].ms) / 3_600_000).toFixed(0);
       console.log(`  ${e.nome.padEnd(26)} ${lista.length} sondagens: ${resumo.join(' ')} · mais nova ${idade} h`);
     } catch (err) {
+      const limite = agora - JANELA_HORAS * 3_600_000;
+      const herdados = anteriores.filter((p) => p.wmo === e.wmo && p.ms && p.ms >= limite && p.niveis?.length);
+      if (herdados.length) {
+        herdadas++;
+        comDado++;
+        perfis.push(...herdados);
+        console.warn(`  ${e.nome.padEnd(26)} FALHOU (${err.message}); herdou ${herdados.length} do ciclo anterior`);
+        continue;
+      }
       comErro++;
       perfis.push({ wmo: e.wmo, ms: null, niveis: [], indices: {}, trilha: null, erro: String(err.message).slice(0, 120) });
       console.warn(`  ${e.nome.padEnd(26)} FALHOU: ${err.message}`);
@@ -141,12 +170,14 @@ async function main() {
     perfis: perfis.length,
     maxSondagens: MAX_SONDAGENS,
     comErro,
+    herdadas,
     janelaHoras: JANELA_HORAS,
     duracaoMs: Date.now() - inicio,
   });
 
   console.log(
     `\nOK — ${comDado} de ${ESTACOES_SONDAGEM.length} com sondagem` +
+      `${herdadas ? ` (${herdadas} herdadas do ciclo anterior)` : ''}` +
       `${comErro ? `, ${comErro} com erro` : ''} · ${((Date.now() - inicio) / 1000).toFixed(0)} s`,
   );
 
