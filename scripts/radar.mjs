@@ -531,7 +531,12 @@ async function publicar(manifesto) {
             // Na Oracle (agendador/dados): hard link, sem copiar ~60 MB a cada
             // ciclo. Seguro porque um PNG do depósito nunca muda — entra por
             // nome provisório + rename e sai por unlink na poda.
-            await link(origem, destino);
+            try {
+              await link(origem, destino);
+            } catch (e) {
+              if (e.code !== 'EXDEV' && e.code !== 'EPERM') throw e;
+              await copyFile(origem, destino);
+            }
           } else {
             // FICLONE: cópia por referência onde o sistema de arquivos deixa; cópia normal no resto.
             await copyFile(origem, destino, constants.COPYFILE_FICLONE);

@@ -13,8 +13,8 @@ Group=amaview-dados
 CacheDirectory=amaview-dados
 CacheDirectoryMode=0755
 UMask=0022
-# Depósito do radar entre ciclos (o papel do cache do Actions). Não é cache:
-# apagar faz o próximo ciclo rebaixar as 48 h.
+# O depósito do radar fica no CacheDirectory, ao lado da saída (hard link
+# entre os dois diretórios daria EXDEV); aqui, só a pasta de estado.
 StateDirectory=amaview-dados
 StateDirectoryMode=0755
 # Conta da PED do CEMADEN e token opcional do AIS (`amaview chave cemaden|openwaters`).

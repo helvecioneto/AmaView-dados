@@ -134,10 +134,13 @@ estrear() {
 FALHAS=0
 case "$GRUPO" in
   radar)
-    # O depósito entre ciclos (o papel do cache do Actions) fica em /var/lib.
-    # Mesmo sistema de arquivos da saída: RADAR_LIGAR publica por hard link,
-    # sem copiar ~60 MB a cada 5 min (os PNG do depósito nunca mudam).
-    RADAR_DEPOSITO="$ESTADO/radar-deposito" RADAR_LIGAR=1 PRAZO=270s \
+    # O depósito entre ciclos (o papel do cache do Actions). Fica AO LADO da
+    # saída, em $RAIZ (o nginx só serve $RAIZ/dados): o systemd monta o
+    # StateDirectory e o CacheDirectory separados, e hard link entre os dois
+    # dá EXDEV. No mesmo lugar, RADAR_LIGAR publica por hard link, sem copiar
+    # ~60 MB a cada 5 min (os PNG do depósito nunca mudam). Apagar o depósito
+    # não perde nada: o ciclo seguinte relê do /dados/ e do SIPAM.
+    RADAR_DEPOSITO="$RAIZ/radar-deposito" RADAR_LIGAR=1 PRAZO=270s \
       RADAR_PRAZO_MIN="${RADAR_PRAZO_MIN:-3.5}" rodar radar scripts/radar.mjs
     ;;
   chuva)
