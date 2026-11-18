@@ -2,6 +2,14 @@
  * Espelho dos radares meteorológicos do SIPAM: as últimas 48 h de PNG de
  * refletividade e taxa de chuva, com um manifesto que diz o que existe.
  *
+ * Desde 18/11/2026 também os radares da REDEMET (DECEA), só refletividade:
+ * reserva do SIPAM (o AmaView usa a varredura da REDEMET no quadro em que o
+ * SIPAM não tem uma) e os radares que só a REDEMET publica (Rio Branco,
+ * Vilhena, Chapada dos Guimarães). A REDEMET entra pela API (lista) e pelo
+ * estático (PNG, bytes idênticos), ver `redemet.mjs`. Dois manifestos:
+ * `manifest.json` só com o SIPAM, no formato de sempre (o app antigo em cache
+ * não sabe georreferenciar a REDEMET), e `manifest-v2.json` com todos.
+ *
  * **Por que espelhar, e não ler direto do SIPAM.** O SIPAM não manda
  * cabeçalho CORS. Sem ele o navegador não lê a listagem de arquivos, e um
  * PNG carregado sem CORS "suja" o canvas do mapa — a exportação de vídeo do
@@ -35,6 +43,9 @@
  *   RADAR_LIGAR        1 = publica por hard link em vez de copiar (Oracle; mesmo disco).
  *   SIPAM_URL          Raiz das listagens (padrão https://siger.sipam.gov.br/radar).
  *   SIPAM_WFS          URL da WFS de cobertura (extensão dos radares).
+ *   REDEMET_API_KEY    Chave da API da REDEMET (senão, lida de REDEMET_CHAVE_ARQ,
+ *                      padrão /etc/amaview/redemet-key). Sem chave, só o SIPAM.
+ *   REDEMET_API        Raiz da API (padrão https://api-redemet.decea.mil.br/produtos/radar).
  */
 import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, existsSync, realpathSync } from 'node:fs';
@@ -44,6 +55,8 @@ import { setTimeout as pausa } from 'node:timers/promises';
 import https from 'node:https';
 import zlib from 'node:zlib';
 import {
+  FONTE,
+  FONTE_URL,
   JANELA_H,
   MARGEM_MIN,
   PRODUTOS,
@@ -65,6 +78,21 @@ import {
   pngValido,
   tDeNome,
 } from './radares.mjs';
+import {
+  ANIMA,
+  API_REDEMET,
+  FONTE_REDEMET,
+  FONTE_REDEMET_URL,
+  MEIA_LARGURA_M,
+  RADARES_REDEMET,
+  TIPO_REDEMET,
+  TOLERANCIA_CENTRO,
+  escolherCentro,
+  extentAeqd,
+  horaDaApi,
+  horasAConsultar,
+  lerRespostaRedemet,
+} from './redemet.mjs';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const caminho = (v, padrao) => (isAbsolute(v ?? '') ? v : join(RAIZ, v || padrao));
@@ -76,6 +104,19 @@ const SIPAM_WFS =
   process.env.SIPAM_WFS ||
   'https://geoserverhidro.sipam.gov.br/geoserver/wfs?service=WFS&version=2.0.0&request=GetFeature' +
     '&typeNames=sipam:sipam_cobertura_radar&outputFormat=application/json&srsName=EPSG:4326';
+
+const REDEMET_URL = (process.env.REDEMET_API || API_REDEMET).replace(/\/+$/, '');
+const REDEMET_CHAVE_ARQ = process.env.REDEMET_CHAVE_ARQ || '/etc/amaview/redemet-key';
+
+/**
+ * Todos os radares espelhados: os do SIPAM (dois produtos) e os da REDEMET
+ * (só `dbz`, que é o `maxcappi` dela — a REDEMET não publica taxa de chuva).
+ */
+const TODOS = [
+  ...RADARES.map((r) => ({ ...r, fonte: 'sipam' })),
+  ...RADARES_REDEMET.map((r) => ({ ...r, fonte: 'redemet' })),
+];
+const produtosDe = (r) => (r.fonte === 'redemet' ? ['dbz'] : PRODUTOS);
 
 const JANELA = numeroDoAmbiente('RADAR_JANELA_H', JANELA_H, 0.01);
 const MARGEM = numeroDoAmbiente('RADAR_MARGEM_MIN', MARGEM_MIN, 0);
@@ -107,6 +148,8 @@ const PRAZO_MS = PRAZO_MIN * 60_000;
  */
 const CONCORRENCIA_SIPAM = 4;
 const CONCORRENCIA_PAGES = 16;
+/** A REDEMET (API e estático) tem o seu limite: um servidor lento não segura o outro. */
+const CONCORRENCIA_REDEMET = 4;
 const TENTATIVAS = 3;
 const TIMEOUT_MS = 20_000;
 const RECUO_MS = 1000;
@@ -121,6 +164,7 @@ const ALERTA_MB = 600;
 
 const limiteSipam = semaforo(CONCORRENCIA_SIPAM);
 const limitePages = semaforo(CONCORRENCIA_PAGES);
+const limiteRedemet = semaforo(CONCORRENCIA_REDEMET);
 
 function numeroDoAmbiente(nome, padrao, minimo) {
   const v = process.env[nome];
@@ -305,6 +349,95 @@ async function listarTudo(sinal) {
   return listagens;
 }
 
+/** A chave da API da REDEMET (ambiente ou arquivo), ou null. Nunca vai para o log. */
+async function chaveRedemet() {
+  const doAmbiente = process.env.REDEMET_API_KEY?.trim();
+  if (doAmbiente) return doAmbiente;
+  try {
+    const k = (await readFile(REDEMET_CHAVE_ARQ, 'utf8')).trim();
+    return k || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * As "listagens" da REDEMET, montadas pela API: Map chave → `{ itens }` (com
+ * a URL de cada PNG) ou `{ erro }`, e os centros que a API publica.
+ *
+ * Pede a hora corrente sempre e, para trás, só os blocos sem nenhuma
+ * varredura no depósito (`horasAConsultar`); o que cada pedido traz se soma.
+ * Um pedido que falha não apaga os outros. Se a hora corrente falhar, todos
+ * os radares ficam `herdado` (o depósito segura), como uma listagem do SIPAM
+ * que falha.
+ */
+async function listarRedemet(sinal, conjuntos, desde) {
+  const listagens = new Map();
+  const falhar = (erro) => {
+    for (const r of RADARES_REDEMET) listagens.set(chave(r.id, 'dbz'), { erro });
+    return { listagens, centros: new Map(), pedidos: 0, erro };
+  };
+  const k = await chaveRedemet();
+  if (!k) return falhar(`sem a chave da API (rode: sudo amaview chave redemet)`);
+
+  const arqConsultas = join(DEPOSITO, 'redemet-consultas.json');
+  const consultas = new Map(Object.entries((await lerJson(arqConsultas)) ?? {}).map(([h, ms]) => [Number(h), ms]));
+  const agora = Date.now();
+  const ids = new Set(RADARES_REDEMET.map((r) => r.id));
+  const instantes = [];
+  for (const [kk, ts] of conjuntos) if (ids.has(kk.split('/')[0])) instantes.push(...ts);
+  const horas = horasAConsultar({ agoraMs: agora, desdeS: desde, instantes, consultas });
+
+  const acumulado = new Map();
+  const centros = new Map();
+  let erroAtual = null;
+  let pedidos = 0;
+  await Promise.all(
+    horas.map(async (h, i) => {
+      const url = `${REDEMET_URL}/${TIPO_REDEMET}?api_key=${encodeURIComponent(k)}&data=${horaDaApi(h)}&anima=${ANIMA}`;
+      try {
+        pedidos++;
+        const r = await requisitar(url, {
+          limite: limiteRedemet,
+          sinal,
+          aceitar: (c) => {
+            try {
+              lerRespostaRedemet(JSON.parse(c.toString('utf8')));
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        });
+        if (r.status === 404) throw new Error('HTTP 404');
+        const lido = lerRespostaRedemet(JSON.parse(r.corpo.toString('utf8')));
+        consultas.set(h, agora);
+        for (const [local, c] of lido.centros) centros.set(local, c);
+        for (const [local, itens] of lido.porLocal) {
+          if (!acumulado.has(local)) acumulado.set(local, new Map());
+          for (const it of itens) acumulado.get(local).set(it.t, it.url);
+        }
+      } catch (e) {
+        // A chave vai na URL: a mensagem de erro nunca a repete.
+        const msg = mensagemDe(e).replaceAll(k, '…');
+        if (i === 0) erroAtual = msg;
+        else console.warn(`  [aviso] REDEMET ${horaDaApi(h)}: ${msg}`);
+      }
+    }),
+  );
+  // Esquece consultas antigas (fora da janela): o arquivo não cresce.
+  for (const h of consultas.keys()) if (h / 1000 < desde - 3600) consultas.delete(h);
+  await gravarAtomico(arqConsultas, JSON.stringify(Object.fromEntries(consultas)));
+
+  if (erroAtual) return { ...falhar(`API da REDEMET: ${erroAtual}`), pedidos };
+  for (const r of RADARES_REDEMET) {
+    const m = acumulado.get(r.local) ?? new Map();
+    const itens = [...m.entries()].sort((a, b) => a[0] - b[0]).map(([t, url]) => ({ nome: nomeDeT(t), t, bytes: null, url }));
+    listagens.set(chave(r.id, 'dbz'), { itens });
+  }
+  return { listagens, centros, pedidos, erro: null };
+}
+
 /** Extensões da WFS de cobertura, ou `null` (e aí vale a tabela). */
 async function lerWfs(sinal) {
   try {
@@ -335,11 +468,15 @@ async function lerWfs(sinal) {
  */
 async function manifestoNoAr() {
   try {
-    const r = await requisitar(`${BASE_URL}/radar/manifest.json?t=${Date.now()}`, {
-      aceitar: (c) => instantesDoManifesto(lerJsonDe(c)) !== null,
-    });
-    if (r.status === 404) return { ausente: true };
-    return { manifesto: JSON.parse(r.corpo.toString('utf8')) };
+    // O v2 tem todos os radares; o v1 é o de antes da REDEMET (transição).
+    for (const nome of ['manifest-v2.json', 'manifest.json']) {
+      const r = await requisitar(`${BASE_URL}/radar/${nome}?t=${Date.now()}`, {
+        aceitar: (c) => instantesDoManifesto(lerJsonDe(c)) !== null,
+      });
+      if (r.status === 404) continue;
+      return { manifesto: JSON.parse(r.corpo.toString('utf8')) };
+    }
+    return { ausente: true };
   } catch (e) {
     return { erro: mensagemDe(e) };
   }
@@ -373,8 +510,14 @@ async function baixarPng(item, sinal) {
     if (r?.status === 404) r = null;
   }
   if (!r && (item.fonte === 'sipam' || item.naListagem)) {
-    r = await requisitar(`${SIPAM_URL}/${item.id}/${item.produto}/${nome}`, { limite: limiteSipam, sinal, aceitar: pngValido });
-    origem = 'sipam';
+    if (item.url) {
+      // REDEMET: o endereço veio da API (o nome lá não sai de `t`).
+      r = await requisitar(item.url, { limite: limiteRedemet, sinal, aceitar: pngValido });
+      origem = 'redemet';
+    } else {
+      r = await requisitar(`${SIPAM_URL}/${item.id}/${item.produto}/${nome}`, { limite: limiteSipam, sinal, aceitar: pngValido });
+      origem = 'sipam';
+    }
   }
   if (!r || r.status === 404) return { origem: null };
   await gravarAtomico(join(DEPOSITO, item.id, item.produto, nome), r.corpo);
@@ -421,8 +564,8 @@ async function lerDeposito() {
   const dims = new Map();
   const tamanhos = new Map();
   const tarefas = [];
-  for (const r of RADARES) {
-    for (const p of PRODUTOS) {
+  for (const r of TODOS) {
+    for (const p of produtosDe(r)) {
       const k = chave(r.id, p);
       conjuntos.set(k, new Set());
       const dir = join(DEPOSITO, r.id, p);
@@ -469,8 +612,8 @@ async function lerDeposito() {
 async function podarDeposito(manifesto) {
   const manter = instantesDoManifesto(manifesto);
   let podados = 0;
-  for (const r of RADARES) {
-    for (const p of PRODUTOS) {
+  for (const r of TODOS) {
+    for (const p of produtosDe(r)) {
       const dir = join(DEPOSITO, r.id, p);
       const ficam = manter.get(chave(r.id, p)) ?? new Set();
       let nomes = [];
@@ -561,7 +704,8 @@ async function publicar(manifesto) {
       }
     }
     if (arquivos !== contarArquivos(manifesto)) throw new Error(`copiados ${arquivos}, manifesto lista ${contarArquivos(manifesto)}`);
-    await writeFile(join(temp, 'manifest.json'), JSON.stringify(manifesto));
+    await writeFile(join(temp, 'manifest-v2.json'), JSON.stringify(manifesto));
+    await writeFile(join(temp, 'manifest.json'), JSON.stringify(manifestoV1(manifesto)));
 
     await rm(join(SAIDA, 'radar'), { recursive: true, force: true });
     await rename(temp, join(SAIDA, 'radar'));
@@ -570,6 +714,16 @@ async function publicar(manifesto) {
     await rm(temp, { recursive: true, force: true });
   }
   return { manifesto, arquivos, bytes };
+}
+
+/**
+ * O manifesto de antes da REDEMET: só os radares do SIPAM, sem `fontes`. O
+ * AmaView antigo (ainda em cache no navegador de alguém) lê este, e não
+ * saberia georreferenciar um radar da REDEMET — desenharia no tamanho errado.
+ */
+function manifestoV1(m) {
+  const { fontes: _fontes, ...resto } = m;
+  return { ...resto, radares: m.radares.filter((r) => (r.fonte ?? 'sipam') === 'sipam') };
 }
 
 const mb = (b) => (b / 1024 / 1024).toFixed(1);
@@ -587,7 +741,7 @@ async function ciclo() {
   const sinal = prazo.signal;
 
   console.log(
-    `Radares — ${RADARES.length} radares × ${PRODUTOS.length} produtos (${PRODUTOS.join(', ')}), ` +
+    `Radares — ${RADARES.length} do SIPAM × ${PRODUTOS.length} produtos (${PRODUTOS.join(', ')}) e ${RADARES_REDEMET.length} da REDEMET (dbz), ` +
       `janela de ${JANELA} h + ${MARGEM} min, prazo de ${PRAZO_MIN} min`,
   );
   // Resto de um passo morto no meio da publicação: não pode ir para o Pages.
@@ -602,19 +756,27 @@ async function ciclo() {
       (dep.invalidos ? ` · ${dep.invalidos} inválido(s) apagado(s)` : ''),
   );
 
-  // 2. Listagens, extensão e o manifesto no ar, em paralelo.
-  const [listagens, wfs, ar] = await Promise.all([listarTudo(sinal), lerWfs(sinal), manifestoNoAr()]);
+  // 2. Listagens (SIPAM e REDEMET), extensão e o manifesto no ar, em paralelo.
+  const [listagens, red, wfs, ar] = await Promise.all([
+    listarTudo(sinal),
+    listarRedemet(sinal, dep.conjuntos, desde),
+    lerWfs(sinal),
+    manifestoNoAr(),
+  ]);
   const falhas = [...listagens.entries()].filter(([, l]) => l.erro).sort(([a], [b]) => (a < b ? -1 : 1));
-  console.log(`  listagens: ${listagens.size - falhas.length} de ${listagens.size}`);
+  console.log(`  listagens do SIPAM: ${listagens.size - falhas.length} de ${listagens.size}`);
   for (const [k, l] of falhas) console.warn(`  [aviso] listagem ${k}: ${l.erro}`);
+  if (red.erro) console.warn(`  [aviso] REDEMET: ${red.erro} — fica o depósito`);
+  else console.log(`  REDEMET: ${red.pedidos} pedido(s) à API`);
 
-  // Com TODAS as listagens fora, o problema é o SIPAM (ou a rede até ele), e
+  // Com TODAS as listagens fora (SIPAM e REDEMET), o problema é a rede, e
   // publicar só repetiria o ciclo anterior com um carimbo novo, mentindo sobre
   // o frescor. Falhar deixa o depósito intacto; o `--preservar` publica.
-  if (falhas.length === listagens.size) {
+  if (falhas.length === listagens.size && red.erro) {
     clearTimeout(relogio);
-    throw new Error(`nenhuma das ${listagens.size} listagens do SIPAM respondeu (${falhas[0][1].erro}) — depósito intacto`);
+    throw new Error(`nenhuma das ${listagens.size} listagens do SIPAM respondeu (${falhas[0][1].erro}), nem a REDEMET — depósito intacto`);
   }
+  for (const [k, l] of red.listagens) listagens.set(k, l);
 
   if (wfs.erro) console.warn(`  [aviso] WFS de cobertura: ${wfs.erro} — extensões da tabela`);
   const noAr = ar.manifesto ? instantesDoManifesto(ar.manifesto) : null;
@@ -622,13 +784,18 @@ async function ciclo() {
   else if (ar.ausente) console.log('  manifesto no ar: nenhum (estreia da pasta)');
 
   // 3. O plano: o que reaproveitar, o que buscar e em que ordem.
-  const plano = planejar({ deposito: dep.conjuntos, listagens, noAr, desde });
+  const plano = planejar({ radares: TODOS, produtosDe, deposito: dep.conjuntos, listagens, noAr, desde });
   const doPages = plano.fila.filter((x) => x.fonte === 'pages').length;
-  console.log(`  a buscar: ${plano.fila.length} (${plano.fila.length - doPages} do SIPAM, ${doPages} do Pages)`);
+  const buscarRedemet = plano.fila.filter((x) => x.fonte !== 'pages' && x.url).length;
+  console.log(
+    `  a buscar: ${plano.fila.length} (${plano.fila.length - doPages - buscarRedemet} do SIPAM, ${buscarRedemet} da REDEMET, ${doPages} do ar)`,
+  );
 
   // 4. Downloads, do mais novo para o mais antigo, até o prazo.
   const presentes = new Map([...plano.porChave].map(([k, e]) => [k, new Set(e.reaproveitar)]));
-  const contagem = new Map([...plano.porChave.keys()].map((k) => [k, { sipam: 0, pages: 0, sumiram: 0, falhas: 0, erro: null }]));
+  const contagem = new Map(
+    [...plano.porChave.keys()].map((k) => [k, { sipam: 0, redemet: 0, pages: 0, sumiram: 0, falhas: 0, erro: null }]),
+  );
   let feitos = 0;
   await emFila(
     plano.fila,
@@ -652,7 +819,7 @@ async function ciclo() {
       }
       if (++feitos % 500 === 0) console.log(`  ${feitos}/${plano.fila.length}…`);
     },
-    { concorrencia: CONCORRENCIA_SIPAM + CONCORRENCIA_PAGES, sinal },
+    { concorrencia: CONCORRENCIA_SIPAM + CONCORRENCIA_REDEMET + CONCORRENCIA_PAGES, sinal },
   );
   const esgotou = sinal.aborted;
   clearTimeout(relogio);
@@ -662,6 +829,43 @@ async function ciclo() {
   for (const id of naWfs.keys()) {
     if (!RADARES.some((r) => r.id === id)) console.warn(`  [aviso] a WFS tem o radar "${id}", que não está na tabela — acrescentar?`);
   }
+  const pxMaisNovo = (r) => {
+    let maisNovo = null;
+    for (const p of produtosDe(r)) {
+      for (const t of presentes.get(chave(r.id, p))) if (!maisNovo || t > maisNovo.t) maisNovo = { p, t };
+    }
+    const d = maisNovo ? dep.dims.get(`${chave(r.id, maisNovo.p)}/${maisNovo.t}`) : null;
+    return d ? [d.w, d.h] : null;
+  };
+  const produtosDoManifesto = (r) =>
+    Object.fromEntries(
+      produtosDe(r).map((p) => {
+        const e = plano.porChave.get(chave(r.id, p));
+        return [p, { t: presentes.get(chave(r.id, p)), herdado: e.herdado, erro: e.erro }];
+      }),
+    );
+  const daRedemet = RADARES_REDEMET.map((tab) => {
+    const r = { ...tab, fonte: 'redemet' };
+    const c = escolherCentro(r, red.centros.get(r.local));
+    if (c.divergencia !== null && c.divergencia > TOLERANCIA_CENTRO) {
+      console.warn(`  [aviso] ${r.id}: centro da API diverge da tabela em ${c.divergencia.toFixed(4)}° — o radar mudou? Atualizar a tabela.`);
+    }
+    return {
+      id: r.id,
+      nome: r.nome,
+      fonte: 'redemet',
+      reservaDe: r.reservaDe,
+      centro: c.centro,
+      meiaLarguraM: MEIA_LARGURA_M,
+      extent: extentAeqd(c.centro, MEIA_LARGURA_M),
+      extentFonte: `aeqd-${c.fonte}`,
+      px: pxMaisNovo(r),
+      produtos: {
+        ...produtosDoManifesto(r),
+        rate: { t: [], herdado: false, erro: 'a REDEMET não publica taxa de chuva' },
+      },
+    };
+  });
   const radares = RADARES.map((r) => {
     const ext = escolherExtent(r, naWfs.get(r.id));
     if (wfs.extents && ext.fonte === 'tabela') console.warn(`  [aviso] ${r.id}: extensão da WFS ausente ou inválida — tabela`);
@@ -669,25 +873,17 @@ async function ciclo() {
       console.warn(`  [aviso] ${r.id}: WFS diverge da tabela em ${ext.divergencia.toFixed(4)}° — o SIPAM mudou o recorte? Atualizar a tabela.`);
     }
     // `px` do PNG mais recente do radar, entre os produtos (dbz no empate).
-    let maisNovo = null;
-    for (const p of PRODUTOS) {
-      for (const t of presentes.get(chave(r.id, p))) if (!maisNovo || t > maisNovo.t) maisNovo = { p, t };
-    }
-    const d = maisNovo ? dep.dims.get(`${chave(r.id, maisNovo.p)}/${maisNovo.t}`) : null;
     return {
       id: r.id,
       nome: r.nome,
+      fonte: 'sipam',
       extent: ext.extent,
       extentFonte: ext.fonte,
-      px: d ? [d.w, d.h] : null,
-      produtos: Object.fromEntries(
-        PRODUTOS.map((p) => {
-          const e = plano.porChave.get(chave(r.id, p));
-          return [p, { t: presentes.get(chave(r.id, p)), herdado: e.herdado, erro: e.erro }];
-        }),
-      ),
+      px: pxMaisNovo({ ...r, fonte: 'sipam' }),
+      produtos: produtosDoManifesto({ ...r, fonte: 'sipam' }),
     };
   });
+  radares.push(...daRedemet);
   const gerado = new Date().toISOString();
   const manifesto = montarManifesto({
     gerado,
@@ -695,6 +891,10 @@ async function ciclo() {
     radares,
     desde,
     existe: (id, p, t) => presentes.get(chave(id, p))?.has(t) ?? false,
+    fontes: [
+      { id: 'sipam', nome: FONTE, url: FONTE_URL },
+      { id: 'redemet', nome: FONTE_REDEMET, url: FONTE_REDEMET_URL },
+    ],
   });
   const total = contarArquivos(manifesto);
 
@@ -727,14 +927,16 @@ async function ciclo() {
   let novosSipam = 0;
   let novosPages = 0;
   let pendentes = 0;
+  let novosRedemet = 0;
   for (const r of pub.manifesto.radares) {
-    for (const p of PRODUTOS) {
+    for (const p of produtosDe(r)) {
       const k = chave(r.id, p);
       const e = r.produtos[p];
       const pl = plano.porChave.get(k);
       const c = contagem.get(k);
-      const faltam = pl.buscar.length - c.sipam - c.pages - c.sumiram - c.falhas;
+      const faltam = pl.buscar.length - c.sipam - c.redemet - c.pages - c.sumiram - c.falhas;
       novosSipam += c.sipam;
+      novosRedemet += c.redemet;
       novosPages += c.pages;
       pendentes += faltam;
       const ult = e.t.at(-1);
@@ -743,12 +945,12 @@ async function ciclo() {
       const situacao = [
         e.herdado ? `herdado: ${e.erro}` : null,
         c.falhas ? `${c.falhas} falha(s): ${c.erro}` : null,
-        c.sumiram ? `${c.sumiram} sumiu(ram) do SIPAM` : null,
+        c.sumiram ? `${c.sumiram} sumiu(ram) da origem` : null,
         faltam ? `${faltam} para o próximo ciclo` : null,
       ].filter(Boolean);
       linhas.push({ r, p, n: e.t.length, c, reap: pl.reaproveitar.length, ult, idade, situacao });
       console.log(
-        `  ${r.id} ${p.padEnd(4)} ${String(e.t.length).padStart(4)} na janela · ${c.sipam} novos` +
+        `  ${r.id} ${p.padEnd(4)} ${String(e.t.length).padStart(4)} na janela · ${c.sipam + c.redemet} novos` +
           (c.pages ? ` · ${c.pages} do Pages` : '') +
           ` · ${pl.reaproveitar.length} reaproveitados` +
           (ult ? ` · última ${hhmm(ult)} UTC (${idade} min)` : ' · sem varredura') +
@@ -760,7 +962,7 @@ async function ciclo() {
 
   const duracao = ((Date.now() - inicio) / 1000).toFixed(1);
   console.log(
-    `\nOK — ${pub.arquivos} PNG, ${mb(pub.bytes)} MB publicados · ${novosSipam} do SIPAM, ${novosPages} do Pages · ` +
+    `\nOK — ${pub.arquivos} PNG, ${mb(pub.bytes)} MB publicados · ${novosSipam} do SIPAM, ${novosRedemet} da REDEMET, ${novosPages} do ar · ` +
       `${podados} podados · ${duracao} s${esgotou ? ` · PRAZO ESGOTADO, ${pendentes} para o próximo ciclo` : ''}`,
   );
   const alerta = pub.bytes / 1024 / 1024 > ALERTA_MB;
@@ -838,7 +1040,8 @@ async function preservar() {
   const faltam = [];
   for (const [k, ts] of instantesDoManifesto(ar.manifesto)) {
     const [id, produto] = k.split('/');
-    if (!RADARES.some((r) => r.id === id) || !PRODUTOS.includes(produto)) continue;
+    const r = TODOS.find((x) => x.id === id);
+    if (!r || !produtosDe(r).includes(produto)) continue;
     for (const t of ts) if (!dep.conjuntos.get(k)?.has(t)) faltam.push({ id, produto, t, fonte: 'pages', naListagem: false });
   }
   console.log(`  radar/: restaurando do Pages — ${faltam.length} PNG a baixar, ${dep.total} já no depósito`);

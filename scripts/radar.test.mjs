@@ -370,7 +370,7 @@ test('planejar: reaproveita o depósito e só busca o que falta', () => {
   const { porChave, fila } = planejar({ radares: [MANAUS], produtos: ['dbz'], deposito, listagens, desde: DESDE });
   const e = porChave.get('sbmn/dbz');
   assert.deepEqual(e.reaproveitar, [T0 - 24 * MIN, T0 - 12 * MIN]);
-  assert.deepEqual(fila, [{ id: 'sbmn', produto: 'dbz', t: T0, fonte: 'sipam', naListagem: true }]);
+  assert.deepEqual(fila, [{ id: 'sbmn', produto: 'dbz', t: T0, fonte: 'sipam', naListagem: true, url: null }]);
   assert.equal(e.herdado, false);
   assert.equal(e.erro, null);
 });
@@ -438,7 +438,7 @@ test('planejar: cache perdido E listagem falhou — o ar sustenta o radar, pelo 
   const listagens = new Map([[chave('sbmn', 'dbz'), { erro: 'sem resposta em 20 s' }]]);
   const { porChave, fila } = planejar({ radares: [MANAUS], produtos: ['dbz'], deposito: new Map(), listagens, noAr, desde: DESDE });
   assert.equal(porChave.get('sbmn/dbz').herdado, true);
-  assert.deepEqual(fila, [{ id: 'sbmn', produto: 'dbz', t: T0 - 12 * MIN, fonte: 'pages', naListagem: false }]);
+  assert.deepEqual(fila, [{ id: 'sbmn', produto: 'dbz', t: T0 - 12 * MIN, fonte: 'pages', naListagem: false, url: null }]);
 });
 
 test('planejar: arquivo de 0 byte na listagem não é buscado', () => {

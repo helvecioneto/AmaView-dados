@@ -3,7 +3,7 @@
 # Um ciclo de um grupo de camadas do AmaView-dados, rodado NA ORACLE e
 # servido pelo nginx dela em /dados/ — no lugar do GitHub Actions + Pages.
 #
-#   ciclo.sh radar      # radares do SIPAM (timer a cada 5 min)
+#   ciclo.sh radar      # radares do SIPAM e da REDEMET (timer a cada 5 min)
 #   ciclo.sh chuva      # CEMADEN, embarcações e rios (a cada 15 min; os rios se limitam a 1×/h)
 #   ciclo.sh sondagem   # radiossondas do Wyoming (4×/dia)
 #
@@ -55,7 +55,7 @@ const exigidos = {
   sondagem: ['estacoes.json', 'perfis.json', 'manifest.json'],
   navios: ['atual.json', 'cadastro.json', 'escuta.json', 'manifest.json'],
   rios: ['estacoes.json', 'atual.json', 'manifest.json'],
-  radar: ['manifest.json'],
+  radar: ['manifest.json', 'manifest-v2.json'],
 }[camada] ?? ['manifest.json'];
 const ler = (n) => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
 for (const n of exigidos) {
@@ -74,6 +74,9 @@ if (camada === 'sondagem') {
 if (camada === 'radar') {
   const j = ler('manifest.json');
   if (!Array.isArray(j.radares) || j.radares.length === 0) throw new Error('manifesto sem radares');
+  // O v2 (com a REDEMET) é o que o AmaView lê; precisa ter pelo menos os do v1.
+  const v2 = ler('manifest-v2.json');
+  if (!Array.isArray(v2.radares) || v2.radares.length < j.radares.length) throw new Error('manifest-v2 sem os radares do v1');
 }
 JS
 }

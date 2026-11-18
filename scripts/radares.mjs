@@ -319,13 +319,13 @@ export function instantesDoManifesto(m) {
  * primeiro, e não um radar inteiro. Na estreia a janela se preenche para trás
  * em poucos ciclos.
  */
-export function planejar({ radares = RADARES, produtos = PRODUTOS, deposito, listagens, noAr = null, desde }) {
+export function planejar({ radares = RADARES, produtos = PRODUTOS, produtosDe = null, deposito, listagens, noAr = null, desde }) {
   const porChave = new Map();
   const fila = [];
   const crescente = (a, b) => a - b;
 
   for (const r of radares) {
-    for (const p of produtos) {
+    for (const p of produtosDe ? produtosDe(r) : produtos) {
       const k = chave(r.id, p);
       const dep = deposito?.get(k) ?? new Set();
       const ar = noAr?.get(k) ?? new Set();
@@ -333,12 +333,18 @@ export function planejar({ radares = RADARES, produtos = PRODUTOS, deposito, lis
       const herdado = !lst || !Array.isArray(lst.itens);
 
       const naListagem = new Set();
+      // Endereço de origem de cada instante, quando a listagem o traz (a
+      // REDEMET: o nome do arquivo lá tem outro formato e não sai de `t`).
+      const urls = new Map();
       if (!herdado) {
         for (const it of lst.itens) {
           // Arquivo de 0 byte na listagem é produto que o SIPAM não conseguiu
           // gerar. Baixá-lo só daria um PNG inválido — a cada ciclo, para sempre.
           if (it.bytes === 0) continue;
-          if (naJanela(it.t, desde)) naListagem.add(it.t);
+          if (naJanela(it.t, desde)) {
+            naListagem.add(it.t);
+            if (it.url) urls.set(it.t, it.url);
+          }
         }
       }
 
@@ -351,7 +357,14 @@ export function planejar({ radares = RADARES, produtos = PRODUTOS, deposito, lis
       for (const t of ar) if (naJanela(t, desde)) candidatos.add(t);
       for (const t of candidatos) {
         if (dep.has(t)) continue;
-        const item = { id: r.id, produto: p, t, fonte: ar.has(t) ? 'pages' : 'sipam', naListagem: naListagem.has(t) };
+        const item = {
+          id: r.id,
+          produto: p,
+          t,
+          fonte: ar.has(t) ? 'pages' : 'sipam',
+          naListagem: naListagem.has(t),
+          url: urls.get(t) ?? null,
+        };
         buscar.push(item);
         fila.push(item);
       }
@@ -370,7 +383,7 @@ export function planejar({ radares = RADARES, produtos = PRODUTOS, deposito, lis
   }
 
   fila.sort(
-    (a, b) => b.t - a.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || produtos.indexOf(a.produto) - produtos.indexOf(b.produto),
+    (a, b) => b.t - a.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || PRODUTOS.indexOf(a.produto) - PRODUTOS.indexOf(b.produto),
   );
   return { porChave, fila };
 }
@@ -391,17 +404,32 @@ export function planejar({ radares = RADARES, produtos = PRODUTOS, deposito, lis
  * Radares em ordem alfabética de id; todo produto aparece em todo radar,
  * mesmo vazio (sbmq e sbtf hoje).
  */
-export function montarManifesto({ gerado, janelaHoras = JANELA_H, produtos = PRODUTOS, radares, existe = null, desde = null }) {
+export function montarManifesto({
+  gerado,
+  janelaHoras = JANELA_H,
+  produtos = PRODUTOS,
+  radares,
+  existe = null,
+  desde = null,
+  fontes = null,
+}) {
   const ordenados = [...radares].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     gerado,
     fonte: FONTE,
     fonteUrl: FONTE_URL,
+    ...(fontes ? { fontes } : {}),
     janelaHoras,
     produtos: [...produtos],
     radares: ordenados.map((r) => ({
       id: r.id,
       nome: r.nome,
+      // Campos da v2 (manifest-v2.json): de onde vem o radar e, fora do
+      // SIPAM, a georreferência e de quem ele é reserva.
+      ...(r.fonte ? { fonte: r.fonte } : {}),
+      ...(r.reservaDe ? { reservaDe: r.reservaDe } : {}),
+      ...(r.centro ? { centro: r.centro } : {}),
+      ...(r.meiaLarguraM ? { meiaLarguraM: r.meiaLarguraM } : {}),
       extent: r.extent,
       extentFonte: r.extentFonte,
       px: r.px ?? null,

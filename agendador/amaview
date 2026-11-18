@@ -11,6 +11,7 @@
 #   amaview chave gsmap [ftps]  grava a conta da JAXA (usuário e senha do GSMaP; sem eco; testa antes por SFTP, ou FTPS)
 #   amaview chave cemaden       grava a conta da PED do CEMADEN (e-mail e senha; sem eco; testa antes)
 #   amaview chave openwaters    grava o token opcional do AIS (embarcações; sem eco)
+#   amaview chave redemet       grava a chave da API da REDEMET (radares do DECEA; sem eco; testa antes)
 #   amaview disparar [g] roda um ciclo agora (chuva, radar ou sondagem)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -982,6 +983,41 @@ print("  saldo:", format(int(d.get("remaining_points") or 0), ",").replace(",", 
   sudo systemctl start amaview-ar.service && situacao_ar
 }
 
+# Chave da API da REDEMET (radares do DECEA: reserva do SIPAM e Rio Branco,
+# Vilhena, Chapada dos Guimarães — scripts/radar.mjs). Pedida sem eco,
+# testada ANTES de gravar (cabeçalho `api_key` pelo stdin: nunca na linha de
+# comando) e gravada 640 root:amaview-dados, que o ciclo do radar lê.
+gravar_chave_redemet() {
+  local arq="/etc/amaview/redemet-key" acao="${1:-}"
+  titulo "Chave da API da REDEMET"
+  if [ "$acao" = "remover" ]; then
+    sudo rm -f "$arq" && verde "  $arq apagado; o radar segue só com o SIPAM"
+    return 0
+  fi
+  echo "  Onde conseguir: cadastro em https://ajuda.decea.mil.br/base-de-conhecimento/api-redemet-produtos-radar/"
+  echo
+  read -rsp "  Cole a chave (não aparece na tela): " k
+  echo
+  k="$(printf '%s' "$k" | tr -d '[:space:]')"
+  if [ -z "$k" ]; then vermelho "  nada colado; nada gravado"; return 1; fi
+  echo "  Testando…"
+  local codigo
+  codigo="$(printf 'api_key: %s\n' "$k" | curl -s -m 30 -H @- -o /dev/null -w '%{http_code}' \
+    "https://api-redemet.decea.mil.br/produtos/radar/maxcappi?data=$(date -u +%Y%m%d%H)")"
+  if [ "$codigo" != "200" ]; then
+    unset k
+    vermelho "  chave recusada (HTTP $codigo) — nada gravado"
+    return 1
+  fi
+  sudo mkdir -p /etc/amaview
+  sudo install -m 640 -o root -g amaview-dados /dev/null "$arq"
+  printf '%s\n' "$k" | sudo tee "$arq" >/dev/null
+  unset k
+  verde "  aceita e gravada em $arq (640 root:amaview-dados)"
+  echo "  Rodando um ciclo do radar agora…"
+  sudo systemctl start amaview-dados@radar.service
+}
+
 frescor() {
   python3 - <<'PY' 2>/dev/null || echo "  não consegui ler o dado publicado"
 import json, urllib.request
@@ -1039,6 +1075,7 @@ case "${1:-status}" in
     case "${2:-}" in
       gsmap) gravar_conta_gsmap "${3:-}" ;;
       cemaden | openwaters) gravar_conta_dados "$2" "${3:-}" ;;
+      redemet) gravar_chave_redemet "${3:-}" ;;
       *) gravar_chave "${2:-}" "${3:-}" ;;
     esac
     ;;

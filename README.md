@@ -22,7 +22,8 @@ Consumido por [AmaView](https://helvecioneto.github.io/AmaView/).
 > rede telemétrica do SNIRH, <https://www.snirh.gov.br/hidroweb/>
 >
 > **Radar meteorológico:** SIPAM — Sistema de Proteção da Amazônia (Censipam),
-> <https://siger.sipam.gov.br/radar/>
+> <https://siger.sipam.gov.br/radar/>; e REDEMET — Rede de Meteorologia do
+> Comando da Aeronáutica (DECEA), <https://redemet.decea.mil.br/>
 >
 > **Embarcações (AIS):** Open Waters AIS (<https://openwaters.io/ais/>),
 > agregando AISHub (<https://www.aishub.net>) e aisstream.io.
@@ -303,6 +304,55 @@ ordem crescente, sem repetição; radares em ordem alfabética de id.
 ciclo e a lista veio do ciclo anterior, filtrada pela janela; `erro` diz por
 quê. `extent` vem da WFS de cobertura do SIPAM a cada ciclo, com uma tabela de
 reserva no código para quando ela não responder.
+
+#### `radar/manifest-v2.json`: SIPAM e REDEMET (desde 18/11/2026)
+
+O mesmo formato, com mais 14 radares da **REDEMET** (DECEA), só refletividade
+(`maxcappi`, a refletividade máxima na coluna — o mesmo produto do `dbz` do
+SIPAM): a reserva de cada radar do SIPAM (em 18/11/2026 os 11 do SIPAM
+pararam às 14:10 UTC e a REDEMET seguiu normal) e Rio Branco, Vilhena e
+Chapada dos Guimarães, que só a REDEMET publica. O `manifest.json` continua
+só com o SIPAM, no formato de antes: o AmaView antigo, em cache no navegador
+de alguém, não saberia georreferenciar a REDEMET.
+
+```jsonc
+{
+  // … os campos do v1, mais:
+  "fontes": [{ "id": "sipam", … }, { "id": "redemet", "nome": "REDEMET — …", "url": "https://redemet.decea.mil.br/" }],
+  "radares": [
+    { "id": "sbmn", "fonte": "sipam", … },
+    {
+      "id": "rdmn",                       // "rd" + a localidade da API da REDEMET
+      "nome": "Manaus",
+      "fonte": "redemet",
+      "reservaDe": "sbmn",                // ausente nos que só a REDEMET publica
+      "centro": [-59.991881, -3.149216],  // [lon, lat] da API
+      "meiaLarguraM": 400000,             // AEQD, esfera de 6371 km: o PNG cobre ±400 km
+      "extent": [-63.61, -6.75, -56.37, 0.45],  // bbox lon/lat desse quadrado (extentFonte "aeqd-api")
+      "px": [400, 400],
+      "produtos": {
+        "dbz":  { "t": [1795010269, …], "herdado": false, "erro": null },
+        "rate": { "t": [], "herdado": false, "erro": "a REDEMET não publica taxa de chuva" }
+      }
+    }
+  ]
+}
+```
+
+Os PNG da REDEMET também são **os mesmos bytes**, mas o nome no espelho sai de
+`t` como os do SIPAM (`radar/rdmn/dbz/AAAA_MM_DD_HH_MM_SS.png`): lá o nome é
+`AAAA-MM-DD--HH:MM:SS.png`, com os segundos da varredura, que só a API dá.
+
+**A API.** `produtos/radar/maxcappi?api_key=…&data=AAAAMMDDHH&anima=15`
+devolve, para todos os radares, até 15 quadros de 20 em 20 min terminando na
+hora pedida. Cada ciclo pede a hora corrente (a varredura mais nova de cada
+radar: com o ciclo de 5 min, a cadência real de ~10 min) e, para trás, só o
+bloco de 4 h com menos de 80% dos intervalos de 20 min cobertos (estreia,
+buraco) — normalmente um pedido por ciclo, ~290 por dia; os limites da
+chave são 100 mil/dia. Sem a chave (`/etc/amaview/redemet-key`, gravada com
+`sudo amaview chave redemet`), o ciclo segue só com o SIPAM. A georreferência
+e a escala de cores da REDEMET (150 cores, uma a cada 0,5 dBZ) foram medidas
+em 18/11/2026 — ver `scripts/redemet.mjs` e `docs/radar.md` no AmaView.
 
 A janela é de 48 h **mais 30 min**: o loop do AmaView termina na última imagem
 do satélite e casa cada quadro com a varredura mais próxima, até 12 min de
