@@ -14,6 +14,7 @@
 > | `amaview-dados-chuva.timer` | a cada 15 min | CEMADEN, embarcações, rios (1×/h) |
 > | `amaview-dados-sondagem.timer` | 07/10/19/22h22 UTC | radiossondas do Wyoming |
 > | `amaview-focos.timer` | a cada minuto | focos do GOES-19 (FDC da NOAA) em `/focos/v1/` |
+> | `amaview-area-queimada.timer` | todo dia às 3h de Brasília | área atingida pelo fogo (focos polares do INPE agrupados) em `/area-queimada/v1/` |
 >
 > Cada camada só vai ao ar (troca atômica de link simbólico) se o script
 > terminou bem e passou na conferência; senão fica a anterior. Conta da PED:

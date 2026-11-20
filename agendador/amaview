@@ -93,6 +93,7 @@ instalar() {
   instalar_raios
   instalar_retrato
   instalar_focos
+  instalar_area_queimada
   instalar_blocos
   instalar_dados
 }
@@ -110,6 +111,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/rastreio-chuva/nginx-locais.conf" /etc/nginx/snippets/amaview-rastreio-chuva.conf
   sudo install -m 644 "$DESTINO/agendador/dados/nginx-locais.conf" /etc/nginx/snippets/amaview-dados.conf
   sudo install -m 644 "$DESTINO/agendador/focos/nginx-locais.conf" /etc/nginx/snippets/amaview-focos.conf
+  sudo install -m 644 "$DESTINO/agendador/area-queimada/nginx-locais.conf" /etc/nginx/snippets/amaview-area-queimada.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -173,6 +175,30 @@ idade = (datetime.now(timezone.utc) - u).total_seconds() / 60
 print(f"  {len(a)} varreduras · mais nova {a[-1]['n']} UTC ({idade:.0f} min do início da varredura) · {a[-1]['focos']} pixels de fogo")
 PY2
   echo "  em disco: $(du -sh /var/cache/amaview-focos 2>/dev/null | cut -f1)"
+}
+
+# Área atingida pelo fogo (agendador/area-queimada): focos polares do INPE de
+# 3 a 60 dias agrupados e contornados, uma vez por dia às 3h de Brasília;
+# servida pelo nginx em /area-queimada/.
+instalar_area_queimada() {
+  titulo "Área atingida pelo fogo (focos do INPE agrupados)"
+  getent passwd amaview-area-queimada >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-area-queimada
+  sudo cp "$DESTINO/agendador/area-queimada/amaview-area-queimada.service" "$DESTINO/agendador/area-queimada/amaview-area-queimada.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-area-queimada.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-area-queimada.timer && verde "  amaview-area-queimada.timer ligado (todo dia às 3h de Brasília)"
+}
+
+situacao_area_queimada() {
+  titulo "Área atingida pelo fogo (/area-queimada/)"
+  systemctl is-active --quiet amaview-area-queimada.timer || amarelo "  amaview-area-queimada.timer desligado — rode: amaview instalar"
+  python3 - <<'PY2' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-area-queimada"
+import json
+i = json.load(open("/var/cache/amaview-area-queimada/area-queimada/v1/indice.json"))
+print(f"  gerado {i['gerado']} · " + " · ".join(f"{p['dias']} d: {p['areas']} áreas" for p in i["periodos"]))
+PY2
+  echo "  em disco: $(du -sh /var/cache/amaview-area-queimada 2>/dev/null | cut -f1)"
 }
 
 # AmaView-dados nesta máquina (agendador/dados): os mesmos scripts do
@@ -1052,6 +1078,7 @@ situacao() {
 
   situacao_dados
   situacao_focos
+  situacao_area_queimada
 
   situacao_blocos
   situacao_fumaca

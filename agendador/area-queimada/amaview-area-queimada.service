@@ -1,0 +1,28 @@
+[Unit]
+Description=Área atingida pelo fogo para o AmaView (focos polares do INPE agrupados e contornados)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/area-queimada
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/area-queimada/area_queimada.py
+User=amaview-area-queimada
+Group=amaview-area-queimada
+# /var/cache/amaview-area-queimada, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-area-queimada
+CacheDirectoryMode=0755
+UMask=0022
+Environment=AREA_RAIZ=/var/cache/amaview-area-queimada
+Environment=PYTHONUNBUFFERED=1
+# Medido na Oracle (20/11/2026): preenchimento dos 60 dias (359 MB do INPE)
+# + 5 períodos = 208 s; rodada diária ~3 min.
+TimeoutStartSec=20min
+Nice=10
+MemoryMax=2G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
