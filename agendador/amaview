@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios e o retrato da denúncia
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato, risco de fogo, medições, SWOT)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios, o retrato da denúncia, o risco de fogo, as medições do GOES-19 e o SWOT
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
@@ -12,6 +12,7 @@
 #   amaview chave cemaden       grava a conta da PED do CEMADEN (e-mail e senha; sem eco; testa antes)
 #   amaview chave openwaters    grava o token opcional do AIS (embarcações; sem eco)
 #   amaview chave redemet       grava a chave da API da REDEMET (radares do DECEA; sem eco; testa antes)
+#   amaview chave hydrocron     grava a chave opcional do Hydrocron (SWOT; sem eco; testa antes)
 #   amaview disparar [g] roda um ciclo agora (chuva, radar ou sondagem)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -93,9 +94,13 @@ instalar() {
   instalar_raios
   instalar_retrato
   instalar_focos
-  instalar_area_queimada
+  instalar_risco_fogo
+  instalar_goes_l2
+  instalar_swot
   instalar_blocos
   instalar_dados
+  # Depois do site do nginx refeito sem o include dela.
+  retirar_area_queimada
 }
 
 # Site do nginx: sempre a porta 80; a 443 só com o certificado já emitido.
@@ -111,7 +116,9 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/rastreio-chuva/nginx-locais.conf" /etc/nginx/snippets/amaview-rastreio-chuva.conf
   sudo install -m 644 "$DESTINO/agendador/dados/nginx-locais.conf" /etc/nginx/snippets/amaview-dados.conf
   sudo install -m 644 "$DESTINO/agendador/focos/nginx-locais.conf" /etc/nginx/snippets/amaview-focos.conf
-  sudo install -m 644 "$DESTINO/agendador/area-queimada/nginx-locais.conf" /etc/nginx/snippets/amaview-area-queimada.conf
+  sudo install -m 644 "$DESTINO/agendador/risco-fogo/nginx-locais.conf" /etc/nginx/snippets/amaview-risco-fogo.conf
+  sudo install -m 644 "$DESTINO/agendador/goes-l2/nginx-locais.conf" /etc/nginx/snippets/amaview-goes-l2.conf
+  sudo install -m 644 "$DESTINO/agendador/swot/nginx-locais.conf" /etc/nginx/snippets/amaview-swot.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -177,28 +184,183 @@ PY2
   echo "  em disco: $(du -sh /var/cache/amaview-focos 2>/dev/null | cut -f1)"
 }
 
-# Área atingida pelo fogo (agendador/area-queimada): focos polares do INPE de
-# 3 a 60 dias agrupados e contornados, uma vez por dia às 3h de Brasília;
-# servida pelo nginx em /area-queimada/.
-instalar_area_queimada() {
-  titulo "Área atingida pelo fogo (focos do INPE agrupados)"
-  getent passwd amaview-area-queimada >/dev/null \
-    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-area-queimada
-  sudo cp "$DESTINO/agendador/area-queimada/amaview-area-queimada.service" "$DESTINO/agendador/area-queimada/amaview-area-queimada.timer" /etc/systemd/system/
-  sudo systemctl daemon-reload
-  sudo systemctl enable amaview-area-queimada.timer >/dev/null 2>&1
-  sudo systemctl restart amaview-area-queimada.timer && verde "  amaview-area-queimada.timer ligado (todo dia às 3h de Brasília)"
+# A "Área atingida pelo fogo" saiu do AmaView em 21/11/2026 (obsoleta). Desliga
+# e limpa o que a instalação dela deixou: timer, unidades, snippet do nginx (o
+# site já foi refeito sem o include), cache, registro de acesso e usuário. Roda
+# em todo `instalar`; sem nada dela na máquina, não faz nada.
+retirar_area_queimada() {
+  local u=amaview-area-queimada
+  if [ -e "/etc/systemd/system/$u.timer" ] || [ -e "/etc/systemd/system/$u.service" ] \
+    || [ -e "/etc/nginx/snippets/$u.conf" ] || [ -d "/var/cache/$u" ] || getent passwd "$u" >/dev/null; then
+    titulo "Área atingida pelo fogo (retirada)"
+    sudo systemctl disable --now "$u.timer" >/dev/null 2>&1
+    sudo systemctl stop "$u.service" >/dev/null 2>&1
+    sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer"
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed "$u.service" "$u.timer" >/dev/null 2>&1
+    # O snippet só sai se nenhum site do nginx o inclui mais.
+    if sudo grep -rqs "snippets/$u.conf" /etc/nginx/sites-enabled/ /etc/nginx/sites-available/; then
+      amarelo "  o site do nginx ainda inclui $u.conf — o snippet fica; rode 'amaview instalar' de novo"
+    else
+      sudo rm -f "/etc/nginx/snippets/$u.conf"
+    fi
+    sudo rm -rf "/var/cache/$u"
+    sudo rm -f /var/log/nginx/$u.log*
+    getent passwd "$u" >/dev/null && sudo userdel "$u" 2>/dev/null
+    getent group "$u" >/dev/null && sudo groupdel "$u" 2>/dev/null
+    verde "  amaview-area-queimada desligada e apagada (timer, unidades, nginx, cache, usuário)"
+  fi
 }
 
-situacao_area_queimada() {
-  titulo "Área atingida pelo fogo (/area-queimada/)"
-  systemctl is-active --quiet amaview-area-queimada.timer || amarelo "  amaview-area-queimada.timer desligado — rode: amaview instalar"
-  python3 - <<'PY2' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-area-queimada"
+# Risco de fogo e dias sem chuva do INPE (agendador/risco-fogo): o dia anterior
+# observado, às 4h30 de Brasília (de novo às 7h30 se o INPE atrasou), recortado
+# na Amazônia Legal em PNG; 3 dias em /var/cache/amaview-risco-fogo, que o
+# nginx serve em /risco-fogo/.
+instalar_risco_fogo() {
+  titulo "Risco de fogo (INPE)"
+  getent passwd amaview-risco-fogo >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-risco-fogo
+  local falta=""
+  for p in python3-numpy python3-h5py; do
+    dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
+  done
+  [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null
+  sudo install -d -m 755 -o amaview-risco-fogo -g amaview-risco-fogo /var/cache/amaview-risco-fogo
+  sudo cp "$DESTINO/agendador/risco-fogo/amaview-risco-fogo.service" "$DESTINO/agendador/risco-fogo/amaview-risco-fogo.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-risco-fogo.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-risco-fogo.timer && verde "  amaview-risco-fogo.timer ligado (4h30 e 7h30 de Brasília)"
+  if ! sudo test -s /var/cache/amaview-risco-fogo/risco-fogo/v1/indice.json; then
+    sudo systemctl start --no-block amaview-risco-fogo.service && echo "  primeira rodada disparada (journalctl -u amaview-risco-fogo)"
+  fi
+}
+
+situacao_risco_fogo() {
+  titulo "Risco de fogo (/risco-fogo/)"
+  systemctl is-active --quiet amaview-risco-fogo.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-risco-fogo"
 import json
-i = json.load(open("/var/cache/amaview-area-queimada/area-queimada/v1/indice.json"))
-print(f"  gerado {i['gerado']} · " + " · ".join(f"{p['dias']} d: {p['areas']} áreas" for p in i["periodos"]))
-PY2
-  echo "  em disco: $(du -sh /var/cache/amaview-area-queimada 2>/dev/null | cut -f1)"
+i = json.load(open("/var/cache/amaview-risco-fogo/risco-fogo/v1/indice.json"))
+for nome, p in i["produtos"].items():
+    print(f"  {nome:6} dias no ar: {', '.join(d['data'] for d in p['dias'])}")
+PY
+  journalctl -u amaview-risco-fogo -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-risco-fogo 2>/dev/null | cut -f1)"
+}
+
+# Medições do GOES-19 (agendador/goes-l2): AOD, LST, TPW e CAPE da NOAA, do
+# S3, a cada 10 min, em PNG por quadro (48 h) em /var/cache/amaview-goes-l2,
+# que o nginx serve em /goes-l2/.
+instalar_goes_l2() {
+  titulo "Medições do GOES-19 (produtos L2 da NOAA)"
+  getent passwd amaview-goes-l2 >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-goes-l2
+  local falta=""
+  for p in python3-numpy python3-h5py; do
+    dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
+  done
+  [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null
+  sudo install -d -m 755 -o amaview-goes-l2 -g amaview-goes-l2 /var/cache/amaview-goes-l2
+  sudo cp "$DESTINO/agendador/goes-l2/amaview-goes-l2.service" "$DESTINO/agendador/goes-l2/amaview-goes-l2.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-goes-l2.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-goes-l2.timer && verde "  amaview-goes-l2.timer ligado (a cada 10 min)"
+}
+
+situacao_goes_l2() {
+  titulo "Medições do GOES-19 (/goes-l2/)"
+  systemctl is-active --quiet amaview-goes-l2.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-goes-l2"
+import json, os
+from datetime import datetime, timezone
+base = "/var/cache/amaview-goes-l2/goes-l2/v1"
+agora = datetime.now(timezone.utc)
+for p, esperados in (("aod", 288), ("lst", 48), ("tpw", 288), ("cape", 288)):
+    try:
+        q = json.load(open(f"{base}/{p}/indice.json"))["quadros"]
+    except OSError:
+        print(f"  {p:5} sem índice ainda")
+        continue
+    mb = sum(os.path.getsize(f"{base}/{p}/{x['arquivo']}") for x in q if os.path.exists(f"{base}/{p}/{x['arquivo']}")) / 1e6
+    txt = f"  {p:5} {len(q)} quadros em 48 h (esperados {esperados}), {mb:.0f} MB"
+    if q:
+        t = datetime.strptime(q[-1]["c"], "%Y%j%H%M").replace(tzinfo=timezone.utc)
+        txt += f" · mais novo {t:%d/%m %H:%M} UTC ({(agora - t).total_seconds() / 60:.0f} min atrás)"
+    print(txt)
+PY
+  journalctl -u amaview-goes-l2 -n 4 --no-pager -o cat 2>/dev/null | grep -E '^(aod|lst|tpw|cape):' | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-goes-l2 2>/dev/null | cut -f1)"
+}
+
+# Nível dos rios pelo SWOT (agendador/swot): séries do Hydrocron (NASA PO.DAAC)
+# por trecho de rio, todo dia às 5h de Brasília, pedindo só as passagens novas;
+# /var/cache/amaview-swot, que o nginx serve em /swot/. A chave do Hydrocron é
+# opcional (`amaview chave hydrocron`).
+HYDROCRON_CHAVE="/etc/amaview/hydrocron-key"
+instalar_swot() {
+  titulo "Nível dos rios (SWOT)"
+  getent passwd amaview-swot >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-swot
+  dpkg -s python3-shapely >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-shapely >/dev/null
+  sudo install -d -m 755 -o amaview-swot -g amaview-swot /var/cache/amaview-swot
+  if sudo test -s "$HYDROCRON_CHAVE"; then
+    sudo chown root:amaview-swot "$HYDROCRON_CHAVE" && sudo chmod 640 "$HYDROCRON_CHAVE"
+  fi
+  sudo cp "$DESTINO/agendador/swot/amaview-swot.service" "$DESTINO/agendador/swot/amaview-swot.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-swot.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-swot.timer && verde "  amaview-swot.timer ligado (todo dia às 5h de Brasília)"
+  if ! sudo test -s /var/cache/amaview-swot/estado.json && ! systemctl is-active --quiet amaview-swot.service; then
+    sudo systemctl start --no-block amaview-swot.service \
+      && echo "  primeiro percurso da rede disparado (~1 h; journalctl -u amaview-swot)"
+  fi
+}
+
+situacao_swot() {
+  titulo "Nível dos rios (/swot/)"
+  systemctl is-active --quiet amaview-swot.timer \
+    && verde "  timer ligado" || vermelho "  timer desligado — rode: amaview instalar"
+  sudo test -s "$HYDROCRON_CHAVE" && echo "  com a chave do Hydrocron" || echo "  sem a chave do Hydrocron (opcional: amaview chave hydrocron)"
+  systemctl is-active --quiet amaview-swot.service && amarelo "  rodando agora"
+  journalctl -u amaview-swot -n 20 --no-pager -o cat 2>/dev/null | grep '^rodada' | tail -1 | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-swot 2>/dev/null | cut -f1)"
+}
+
+# Chave opcional do Hydrocron (NASA PO.DAAC): a PO.DAAC pede que uso contínuo
+# com muitos pedidos por dia peça uma (issue no GitHub do Hydrocron). Pedida sem
+# eco, testada num pedido de verdade ANTES de gravar (o cabeçalho vai ao curl
+# pelo stdin, `-H @-`: nunca na linha de comando) e gravada 640 root:amaview-swot.
+gravar_chave_hydrocron() {
+  local arq="$HYDROCRON_CHAVE" acao="${1:-}"
+  titulo "Chave do Hydrocron (SWOT)"
+  if [ "$acao" = "remover" ]; then
+    sudo rm -f "$arq" && verde "  $arq apagado; o SWOT segue sem chave"
+    return 0
+  fi
+  getent group amaview-swot >/dev/null || { vermelho "  rode antes: amaview instalar"; return 1; }
+  echo "  Onde conseguir: issue em https://github.com/podaac/hydrocron (a PO.DAAC manda a chave)"
+  echo
+  read -rsp "  Cole a chave (não aparece na tela): " k
+  echo
+  k="$(printf '%s' "$k" | tr -d '[:space:]')"
+  if [ -z "$k" ]; then vermelho "  nada colado; nada gravado"; return 1; fi
+  echo "  Testando…"
+  local codigo
+  codigo="$(printf 'x-hydrocron-key: %s\n' "$k" | curl -s -m 60 -H @- -H 'Accept: application/geo+json' -o /dev/null -w '%{http_code}' \
+    "https://soto.podaac.earthdatacloud.nasa.gov/hydrocron/v1/timeseries?feature=Reach&feature_id=62293900091&start_time=2025-01-01T00:00:00Z&end_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)&fields=reach_id,time_str,wse&collection_name=SWOT_L2_HR_RiverSP_reach_D&compact=true")"
+  if [ "$codigo" != "200" ]; then
+    unset k
+    vermelho "  o Hydrocron recusou (HTTP $codigo) — nada gravado"
+    return 1
+  fi
+  sudo mkdir -p /etc/amaview
+  sudo install -m 640 -o root -g amaview-swot /dev/null "$arq"
+  printf '%s\n' "$k" | sudo tee "$arq" >/dev/null
+  unset k
+  verde "  aceita e gravada em $arq (640 root:amaview-swot); vale a partir da próxima rodada"
 }
 
 # AmaView-dados nesta máquina (agendador/dados): os mesmos scripts do
@@ -1078,7 +1240,9 @@ situacao() {
 
   situacao_dados
   situacao_focos
-  situacao_area_queimada
+  situacao_risco_fogo
+  situacao_goes_l2
+  situacao_swot
 
   situacao_blocos
   situacao_fumaca
@@ -1103,6 +1267,7 @@ case "${1:-status}" in
       gsmap) gravar_conta_gsmap "${3:-}" ;;
       cemaden | openwaters) gravar_conta_dados "$2" "${3:-}" ;;
       redemet) gravar_chave_redemet "${3:-}" ;;
+      hydrocron) gravar_chave_hydrocron "${3:-}" ;;
       *) gravar_chave "${2:-}" "${3:-}" ;;
     esac
     ;;
@@ -1120,6 +1285,10 @@ case "${1:-status}" in
     sudo rm -f /etc/systemd/system/amaview-dados@.service
     sudo systemctl disable --now amaview-focos.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-focos.service /etc/systemd/system/amaview-focos.timer /etc/nginx/snippets/amaview-focos.conf
+    for u in amaview-risco-fogo amaview-goes-l2 amaview-swot; do
+      sudo systemctl disable --now "$u.timer" 2>/dev/null
+      sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" "/etc/nginx/snippets/$u.conf"
+    done
     sudo systemctl disable --now amaview-blocos amaview-fumaca.timer amaview-ar.timer amaview-meteo.timer amaview-previsao.timer amaview-previsao-wn2.timer amaview-gsmap.timer amaview-rastreio-chuva.timer amaview-terreno amaview-terreno-preparar amaview-certificado-ip.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-certificado-ip.service /etc/systemd/system/amaview-certificado-ip.timer
     sudo rm -f /etc/systemd/system/amaview-fumaca.service /etc/systemd/system/amaview-fumaca.timer
@@ -1137,6 +1306,6 @@ case "${1:-status}" in
     ;;
   status | '') situacao ;;
   *)
-    sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

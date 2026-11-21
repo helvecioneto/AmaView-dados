@@ -14,7 +14,12 @@
 > | `amaview-dados-chuva.timer` | a cada 15 min | CEMADEN, embarcações, rios (1×/h) |
 > | `amaview-dados-sondagem.timer` | 07/10/19/22h22 UTC | radiossondas do Wyoming |
 > | `amaview-focos.timer` | a cada minuto | focos do GOES-19 (FDC da NOAA) em `/focos/v1/` |
-> | `amaview-area-queimada.timer` | todo dia às 3h de Brasília | área atingida pelo fogo (focos polares do INPE agrupados) em `/area-queimada/v1/` |
+> | `amaview-risco-fogo.timer` | 4h30 de Brasília (7h30 se o INPE atrasar) | risco de fogo e dias sem chuva do INPE em `/risco-fogo/v1/` |
+> | `amaview-goes-l2.timer` | a cada 10 min | medições do GOES-19 (AOD, LST, TPW, CAPE da NOAA) em `/goes-l2/v1/` |
+> | `amaview-swot.timer` | todo dia às 5h de Brasília | nível dos rios pelo SWOT (Hydrocron) em `/swot/v1/` |
+>
+> A "Área atingida pelo fogo" (`amaview-area-queimada`) saiu em 21/11/2026:
+> ver [Retirada da área atingida pelo fogo](#retirada-da-área-atingida-pelo-fogo-21112026).
 >
 > Cada camada só vai ao ar (troca atômica de link simbólico) se o script
 > terminou bem e passou na conferência; senão fica a anterior. Conta da PED:
@@ -63,6 +68,7 @@ Tudo pelo `amaview`, que fica em `~` e em `/usr/local/bin`:
 | `amaview instalar` | clona/atualiza, instala as unidades e liga os timers |
 | `amaview token` | grava o token (pede na tela, sem eco) |
 | `amaview chave purpleair` / `amaview chave openaq` | grava a chave opcional da qualidade do ar (sem eco; testa com uma chamada grátis antes; `… remover` apaga) |
+| `amaview chave hydrocron` | grava a chave opcional do Hydrocron, para o SWOT (sem eco; testa num pedido antes; `… remover` apaga) |
 | `amaview disparar [workflow]` | dispara um ciclo agora (`chuva.yml`, ou `sondagem.yml`) |
 | `amaview logs [n]` | últimas execuções |
 | `amaview parar` | desliga os timers |
@@ -83,6 +89,12 @@ este repositório e permissão **Actions: Read and write**.
 ```sh
 amaview instalar     # git pull + reinstala as unidades e o próprio script, e religa os timers
 ```
+
+A rodada que traz um `amaview` novo ainda roda a versão antiga dele (o bash já
+leu o script). Quando o próprio `amaview` ou um site do nginx muda — um
+snippet novo, por exemplo —, rode `amaview instalar` **duas vezes**: na
+primeira o nginx pode recusar o site novo (o snippet ainda não foi instalado;
+o nginx segue com a configuração anterior), na segunda fica tudo em dia.
 
 ## Blocos do GOES-19
 
@@ -834,6 +846,166 @@ máximo 72 pontos (12 h). O `iuid` passou a ter 2 casas.
 
 Instalar: `docker compose up -d --build` em `containers/pyfortracc_IR` (ver o
 README de lá) e `amaview instalar` para o nginx. Logs: `docker logs pyfortracc_ir`.
+
+## Risco de fogo (INPE)
+
+`risco-fogo/risco_fogo.py` (timer `amaview-risco-fogo`) publica o **risco de
+fogo** observado e os **dias sem chuva** do Programa Queimadas do INPE,
+recortados na Amazônia Legal, para a camada `src/riscoFogo` do AmaView. É o
+`scripts/risco_fogo.py` do app levado para cá, com a mesma saída.
+
+- **Fonte**: `dataserver-coids.inpe.br/queimadas/queimadas/riscofogo_meteorologia/observado/`,
+  publicada ~3h30 de Brasília com o dia anterior: `risco_fogo/…FireRisk_AAAAMMDD.nc`
+  (NetCDF4, `rf` 0–1, 0,01°, ~12 MB) e `numero_dias_sem_chuva/…NDWR_AAAAMMDD.nc`
+  (NetCDF3, `ndsc120` 0–120, 0,1°, ~3 MB).
+- **Leve**: o arquivo é baixado para a memória e descartado (nenhum NetCDF toca
+  o disco); o NetCDF4 é lido pelo `h5py` só nas linhas da caixa, e o NetCDF3
+  por um leitor do próprio script (a máquina não tem `netCDF4`, `scipy` nem
+  `Pillow`; o PNG também sai do próprio script).
+- **Recorte**: a caixa da Amazônia Legal (`AMAZONIA_LEGAL_BBOX_LONLAT` do app)
+  com 0,5° de folga, sem reamostrar. PNG em tons de cinza com o valor no byte:
+  risco = `round(rf × 200)`, dias = `round(ndsc120)`, **255 = sem dado**.
+- **3 dias** (os mais recentes publicados); o resto é apagado. Dia que já está
+  no índice não é baixado de novo. Às 4h30 a rodada pede o dia novo; às 7h30
+  (nova tentativa) ela só pede algo ao INPE se o dia ainda não saiu.
+- **Medido em 21/11/2026**: risco 3110 × 2440 px, ~1,8 MB por dia; dias sem
+  chuva 311 × 244, ~22 KB; 3 dias ≈ **5,4 MB** no disco. Um dia novo baixa
+  ~15 MB e gasta ~5 s de processador.
+
+| Peça | Onde |
+|---|---|
+| `risco-fogo/risco_fogo.py` | uma rodada: baixa o que falta, recorta, grava o PNG, indexa e apaga o velho |
+| `risco-fogo/amaview-risco-fogo.{service,timer}` | 4h30 e 7h30 de Brasília; usuário `amaview-risco-fogo`, `/var/cache/amaview-risco-fogo` |
+| `risco-fogo/nginx-locais.conf` | `/risco-fogo/`: CORS `*`, PNG imutável, índice `no-cache` |
+
+URLs (`https://dados.amaview.com.br/risco-fogo/v1/`): `indice.json`
+(`{"versao", "gerado", "fonte", "produtos": {"risco" | "dias": {"grade": {"caixa",
+"largura", "altura"}, "escala", "semDado", "maximo", "dias": [{"data",
+"arquivo"}]}}}`; `caixa` = bordas dos pixels, oeste, sul, leste, norte) e
+`risco/AAAA-MM-DD.png`, `dias/AAAA-MM-DD.png`. Logs: `journalctl -u amaview-risco-fogo`.
+
+Testes (sem rede): `python3 -I -m unittest discover -s agendador/risco-fogo`.
+
+## Medições do GOES-19 (produtos L2)
+
+`goes-l2/goes_l2.py` (timer `amaview-goes-l2`, a cada 10 min) publica quatro
+produtos L2 da NOAA, do balde público `noaa-goes19`, para a camada
+`src/medicoes` do AmaView (o `scripts/goes_l2.py` do app levado para cá):
+
+| Produto | NOAA | Grade | Cadência | PNG (R = valor) | Recorte |
+|---|---|---|---|---|---|
+| `aod` | ABI-L2-AODF | 2 km | 10 min | 0,02 por unidade | Amazônia Legal + 1° (1642 × 1371) |
+| `lst` | ABI-L2-LSTF | 10 km | 1 h | 0,25 °C, a partir de −10 °C | setor NSA (688 × 432) |
+| `tpw` | ABI-L2-TPWF | 10 km | 10 min | 0,4 mm | setor NSA |
+| `cape` | ABI-L2-DSIF | 10 km | 10 min | 20 J/kg | setor NSA |
+
+- **Na grade da NOAA, sem reamostrar**: a grade fixa do ABI é a projeção do
+  mapa. PNG RGB: R = valor codificado (255 = sem valor), G = qualidade (0 alta,
+  1 média, 2 baixa/degradada, 3 inválida; o `DQF_Overall` do TPW e do CAPE vira
+  0 → 0, 2–3 → 2, resto → 3), B = 0. Nada é corrigido.
+- **AOD só na Amazônia Legal**: o setor NSA inteiro dava 3437 × 2160 px e
+  ~4 MB por quadro de dia; a caixa da Amazônia Legal com 1° de folga é 30% da
+  área. O app lê a caixa (metros na projeção) do índice.
+- **Leve**: o NetCDF (o AOD de dia tem ~42 MB) vai para a memória e é
+  descartado; nenhum NetCDF toca o disco.
+- **48 h, no máximo** (a janela mais longa do loop do app). O que falta é
+  preenchido do mais novo para o mais velho (AOD 12, outros 24 por rodada, e no
+  máximo 5,5 min de rodada); o preenchimento inteiro leva ~4 h. Arquivo que
+  falha espera 30 min. Grade nova (recorte mudado) apaga os quadros antigos do
+  produto.
+- **Medido em 21/11/2026** (um quadro por hora nas 24 h anteriores, estendido
+  às 48 h): AOD ~1 MB de dia e ~9 KB de noite, **~130 MB** nas 48 h; TPW
+  ~120 KB, **~35 MB**; CAPE ~75 KB, **~21 MB**; LST ~95 KB, **~5 MB**. Total
+  **~190 MB**. Download ~3,2 GB por dia (2,5 GB do AOD). AOD de dia: ~3,5 s
+  por quadro (download e processamento).
+
+| Peça | Onde |
+|---|---|
+| `goes-l2/goes_l2.py` | uma rodada: lista, baixa, recorta, grava o PNG, indexa e apaga o velho |
+| `goes-l2/amaview-goes-l2.{service,timer}` | a cada 10 min (minuto 4); usuário `amaview-goes-l2`, `/var/cache/amaview-goes-l2`, `MemoryMax=1G` |
+| `goes-l2/nginx-locais.conf` | `/goes-l2/`: CORS `*`, PNG imutável, índice `no-cache` |
+
+URLs (`https://dados.amaview.com.br/goes-l2/v1/`): `<produto>/indice.json`
+(`{"versao", "gerado", "fonte", "produto", "unidade", "escala",
+"deslocamento", "semValor", "cadencia_min", "grade": {"caixa", "largura",
+"altura"}, "quadros": [{"c", "arquivo", "cob"}]}`; valor = byte × escala +
+deslocamento) e `<produto>/AAAADDDHHMM.png`. Logs: `journalctl -u amaview-goes-l2`.
+
+Testes (sem rede): `python3 -I -m unittest discover -s agendador/goes-l2`.
+
+## Nível dos rios (SWOT)
+
+`swot/swot.py` (timer `amaview-swot`, todo dia às 5h de Brasília) publica a
+cota da água dos rios grandes da Amazônia Legal medida pelo satélite SWOT, por
+trecho de ~10 km do SWORD, para a camada `src/swot` do AmaView.
+
+- **Fonte**: [Hydrocron](https://podaac.github.io/hydrocron/) (NASA PO.DAAC),
+  coleção `SWOT_L2_HR_RiverSP_reach_D`. `wse` é a cota sobre o geoide EGM2008
+  (não é a régua da ANA). Passagens com `reach_q` = 3, `partial_f` = 1 ou sem
+  cota ficam de fora; nada é corrigido.
+- **Percurso da rede, uma vez**: sem estado, o script percorre a rede pelo
+  próprio Hydrocron, como o `scripts/swot_rios.py` do app: das sementes (um
+  trecho por rio grande), rio abaixo e rio acima, enquanto o centro do trecho
+  está na Amazônia Legal (+0,3°) e a largura prevista é ≥ 400 m. ~2.700
+  pedidos, 2 de cada vez: **~1 h** na primeira rodada (`swot.py percurso`
+  refaz, mantendo as séries). Sem completar, nada é gravado.
+- **Dia a dia, incremental**: o estado (`/var/cache/amaview-swot/estado.json`,
+  fora do que o nginx serve) guarda, por trecho, o traçado, a série e a última
+  passagem de cada órbita (`pass_id`). A órbita se repete a cada 20,86 dias; um
+  trecho só é pedido quando uma órbita que já deu cota válida no ano passou
+  por ele há mais de 5 dias (o Hydrocron recebe a passagem ~4–5 dias depois),
+  e só desde essa passagem. Passagem que não chega em 16 dias fica para o ciclo
+  seguinte; com duas faltas seguidas a órbita para de disparar pedidos (há
+  órbitas que o Hydrocron deixou de trazer para um trecho). Cada trecho também
+  é revisto a cada dois ciclos (~42 dias, escalonado), para o que chegou
+  atrasado, órbita nova ou reprocessamento. Teto de 1.500 pedidos por rodada,
+  2 de cada vez.
+- **12 meses** de série por trecho: o que passa disso sai a cada rodada.
+- **Medido em 21/11/2026** (no Mac): o percurso fez 2.703 pedidos em 58 min e
+  achou o mesmo que o protótipo (1.995 trechos, 1.756 com passagem, 50.909
+  passagens); `trechos.json` 1,74 MB (0,46 MB o `.gz`), estado 2 MB. A rodada
+  incremental seguinte fez 76 pedidos em 28 s; simulando os 84 dias seguintes
+  com o estado real (passagem chegando 4–6 dias depois), **~280 pedidos por
+  dia** (de 130 a 530), contra os ~2.700 do percurso.
+- **Chave**: o Hydrocron funciona sem chave; a PO.DAAC pede que uso contínuo
+  com muitos pedidos por dia peça uma `x-hydrocron-key` (issue no GitHub do
+  Hydrocron). Com ela: `sudo amaview chave hydrocron` (gravada 640
+  root:amaview-swot em `/etc/amaview/hydrocron-key`; nunca no repositório). O
+  Hydrocron aceita qualquer valor no cabeçalho, então o teste só confere que o
+  pedido passa.
+
+| Peça | Onde |
+|---|---|
+| `swot/swot.py` | uma rodada: percurso (sem estado) ou incremental; publica e apara |
+| `swot/amazonia_legal.json` | contorno da Amazônia Legal (o mesmo do `meteo/`) para o percurso |
+| `swot/amaview-swot.{service,timer}` | 5h de Brasília; usuário `amaview-swot`, `/var/cache/amaview-swot`, `MemoryMax=512M` |
+| `swot/nginx-locais.conf` | `/swot/`: CORS `*`, `gzip_static`, `no-cache` (revalida) |
+
+URL (`https://dados.amaview.com.br/swot/v1/trechos.json`, e o `.gz` ao lado):
+`{"versao", "gerado", "fonte", "inicio", "fim", "larguraMin", "referencia",
+"campos": ["t", "wse", "u", "q"], "trechos": [{"id", "rio", "larg", "linhas",
+"serie": [[t (epoch s), cota (m), incerteza | null, qualidade]]}]}`. Logs:
+`journalctl -u amaview-swot`.
+
+Testes (sem rede): `python3 -I -m unittest discover -s agendador/swot`.
+
+## Retirada da área atingida pelo fogo (21/11/2026)
+
+A camada "Área atingida pelo fogo" saiu do AmaView (obsoleta) e o
+`agendador/area-queimada` saiu do repositório. O `amaview instalar` (a segunda
+rodada, já com o script novo) faz a limpeza sozinho, uma vez — depois de refazer
+o site do nginx sem o include dela:
+
+```sh
+sudo systemctl disable --now amaview-area-queimada.timer
+sudo systemctl stop amaview-area-queimada.service
+sudo rm -f /etc/systemd/system/amaview-area-queimada.{service,timer}
+sudo systemctl daemon-reload
+sudo rm -f /etc/nginx/snippets/amaview-area-queimada.conf     # só se nenhum site o inclui mais
+sudo rm -rf /var/cache/amaview-area-queimada
+sudo rm -f /var/log/nginx/amaview-area-queimada.log*
+sudo userdel amaview-area-queimada
+```
 
 ## Segurança
 
