@@ -28,7 +28,7 @@ Environment=PYTHONUNBUFFERED=1
 TimeoutStartSec=4h
 Nice=10
 CPUQuota=50%
-MemoryMax=512M
+MemoryMax=1G
 
 NoNewPrivileges=true
 ProtectSystem=strict

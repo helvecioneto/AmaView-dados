@@ -19,19 +19,24 @@ em tons de cinza com o valor no byte, sem reamostrar nem corrigir nada:
 - dias:  byte = round(ndsc120) (0–120);
 - 255 = sem dado (o −999 do INPE, ou NaN).
 
-Ficam só os 3 dias publicados mais recentes; o resto é apagado. Dia que já está
-no índice não é baixado de novo: a rodada das 7h30 (nova tentativa, se o dia
-ainda não tinha saído às 4h30) não pede nada ao INPE quando o dia já está lá.
+Ficam os 3 dias publicados mais recentes (com o INPE parado, os últimos que já
+estavam aqui). O índice é gravado antes de apagar, e o arquivo que ele deixou
+de citar sai na rodada seguinte. O nome do PNG leva 6 letras da grade (o cache
+é imutável: caixa nova, nome novo). Um dia quebrado não derruba os outros. Dia
+que já está no índice não é baixado de novo: a rodada das 7h30 (nova
+tentativa, se o dia ainda não tinha saído às 4h30) não pede nada ao INPE
+quando o dia já está lá.
 
 Saída (abaixo de RISCO_RAIZ, servida pelo nginx em /risco-fogo/v1/):
 
   risco-fogo/v1/indice.json
-  risco-fogo/v1/risco/AAAA-MM-DD.png
-  risco-fogo/v1/dias/AAAA-MM-DD.png
+  risco-fogo/v1/risco/AAAA-MM-DD_<g>.png
+  risco-fogo/v1/dias/AAAA-MM-DD_<g>.png
 
   risco_fogo.py                 uma rodada (o que o timer chama)
   risco_fogo.py dia PROD ARQ.nc recorta um arquivo local e grava o PNG ao lado (teste)
 """
+import hashlib
 import io
 import json
 import os
@@ -58,6 +63,8 @@ PROCURAR = 10
 # em `src/map/projection.ts` do AmaView) e a folga do recorte, em graus.
 AMAZONIA_LEGAL = (-74.0, -18.1, -43.9, 5.3)
 FOLGA_GRAUS = 0.5
+# Resto de escrita interrompida (`*.parcial-PID`) mais velho que isto é apagado.
+PARCIAL_VELHO_S = 3600
 # Horário de Brasília (sem horário de verão desde 2019).
 BRASILIA = timezone(timedelta(hours=-3))
 
@@ -295,59 +302,86 @@ def dia_mais_novo_esperado(agora: datetime) -> date:
     return agora.astimezone(BRASILIA).date() - timedelta(days=1)
 
 
+def limpar_parciais(pasta: str, idade_s: float = PARCIAL_VELHO_S) -> int:
+    """Apaga restos de escritas interrompidas (`*.parcial-PID`) mais velhos que `idade_s`."""
+    n = 0
+    for nome in os.listdir(pasta):
+        caminho = os.path.join(pasta, nome)
+        if ".parcial-" in nome and time.time() - os.path.getmtime(caminho) > idade_s:
+            os.remove(caminho)
+            n += 1
+    return n
+
+
+def sufixo_da_grade(grade: dict) -> str:
+    """Seis letras da grade: o nome do PNG muda quando a caixa muda (o cache é imutável)."""
+    return hashlib.sha1(json.dumps(grade, sort_keys=True).encode()).hexdigest()[:6]
+
+
+def dias_no_disco(publicado: dict | None) -> list[dict]:
+    """Os dias de um produto publicado cujo PNG está no disco."""
+    return [
+        d for d in (publicado or {}).get("dias", [])
+        if isinstance(d, dict) and isinstance(d.get("arquivo"), str) and ".." not in d["arquivo"]
+        and os.path.exists(os.path.join(PASTA, d["arquivo"]))
+    ]
+
+
 def rodada_produto(produto: str, anterior: dict | None, agora: datetime) -> tuple[dict | None, dict]:
+    """Os DIAS dias mais recentes do produto: o que já está no disco fica, o que falta é baixado."""
     pasta_inpe, prefixo, variavel, escala, maximo = PRODUTOS[produto]
-    pasta = os.path.join(PASTA, produto)
-    os.makedirs(pasta, exist_ok=True)
-    # O que já está publicado (e no disco) não é baixado de novo.
+    os.makedirs(os.path.join(PASTA, produto), exist_ok=True)
     grade = (anterior or {}).get("grade")
-    prontos = {
-        d["data"]: d for d in (anterior or {}).get("dias", [])
-        if isinstance(d, dict) and os.path.exists(os.path.join(PASTA, str(d.get("arquivo", ""))))
-    }
+    prontos = {d["data"]: d for d in dias_no_disco(anterior)} if grade else {}
     dias: list[dict] = []
-    baixados = ausentes = 0
+    baixados = ausentes = erros = 0
     mais_novo = dia_mais_novo_esperado(agora)
     for k in range(PROCURAR):
         if len(dias) >= DIAS:
             break
         data = mais_novo - timedelta(days=k)
         chave = f"{data:%Y-%m-%d}"
-        if chave in prontos and grade:
+        if chave in prontos:
             dias.append(prontos[chave])
             continue
-        nome = f"{prefixo}_{data:%Y%m%d}.nc"
-        dado = baixar(f"{BASE}/{pasta_inpe}/{nome}")
-        if dado is None:
-            ausentes += 1
-            continue
-        baixados += 1
-        codigo, borda = recortar(dado, variavel, escala, maximo)
-        del dado  # nunca vai para o disco
-        g = {"caixa": borda, "largura": int(codigo.shape[1]), "altura": int(codigo.shape[0])}
-        if grade and g != grade:
-            if dias:
-                # Grade nova num dia mais velho que os já guardados: fica de fora.
-                print(f"{produto} {chave}: grade diferente da dos dias mais novos — fora", file=sys.stderr)
+        # Um dia por vez: arquivo quebrado ou fora do ar não derruba os outros.
+        try:
+            dado = baixar(f"{BASE}/{pasta_inpe}/{prefixo}_{data:%Y%m%d}.nc")
+            if dado is None:
+                ausentes += 1
                 continue
-            # O dia mais novo manda: os antigos (outra grade) saem.
-            print(f"{produto}: grade mudou ({grade} → {g})")
-            prontos = {}
-        grade = g
-        rel = f"{produto}/{chave}.png"
-        imagem = png(codigo)
-        escrever_atomico(os.path.join(PASTA, rel), imagem)
-        dias.append({"data": chave, "arquivo": rel})
-        print(f"{produto} {chave}: {g['largura']}×{g['altura']}, {len(imagem) / 1e3:.0f} KB")
+            baixados += 1
+            codigo, borda = recortar(dado, variavel, escala, maximo)
+            del dado  # nunca vai para o disco
+            g = {"caixa": borda, "largura": int(codigo.shape[1]), "altura": int(codigo.shape[0])}
+            if grade and g != grade:
+                if dias:
+                    # Grade nova num dia mais velho que os já guardados: fica de fora.
+                    print(f"{produto} {chave}: grade diferente da dos dias mais novos — fora", file=sys.stderr)
+                    continue
+                # O dia mais novo manda: os antigos (outra grade) saem do índice.
+                print(f"{produto}: grade mudou ({grade} → {g})")
+                prontos = {}
+            grade = g
+            rel = f"{produto}/{chave}_{sufixo_da_grade(g)}.png"
+            imagem = png(codigo)
+            escrever_atomico(os.path.join(PASTA, rel), imagem)
+            dias.append({"data": chave, "arquivo": rel})
+            print(f"{produto} {chave}: {g['largura']}×{g['altura']}, {len(imagem) / 1e3:.0f} KB")
+        except Exception as e:  # noqa: BLE001
+            erros += 1
+            print(f"{produto} {chave}: falhou — {e}", file=sys.stderr)
+    # INPE parado há mais de PROCURAR dias: os mais recentes que já estão no
+    # disco continuam (o app avisa que o dia mais novo é velho).
+    if len(dias) < DIAS:
+        tem = {d["data"] for d in dias}
+        for data in sorted(prontos, reverse=True):
+            if len(dias) >= DIAS:
+                break
+            if data not in tem:
+                dias.append(prontos[data])
     dias.sort(key=lambda d: d["data"])
-    # Só os dias do índice ficam na pasta.
-    guardados = {os.path.basename(d["arquivo"]) for d in dias}
-    removidos = 0
-    for nome in os.listdir(pasta):
-        if nome not in guardados:
-            os.remove(os.path.join(pasta, nome))
-            removidos += 1
-    resumo = {"baixados": baixados, "ausentes": ausentes, "removidos": removidos, "dias": [d["data"] for d in dias]}
+    resumo = {"baixados": baixados, "ausentes": ausentes, "erros": erros, "dias": [d["data"] for d in dias]}
     if not dias:
         return None, resumo
     return {"grade": grade, "escala": escala, "semDado": SEM_DADO, "maximo": maximo, "dias": dias}, resumo
@@ -360,15 +394,12 @@ def rodada(agora: datetime | None = None) -> dict:
     for nome in os.listdir(os.path.dirname(PASTA)):
         if nome != os.path.basename(PASTA):
             shutil.rmtree(os.path.join(os.path.dirname(PASTA), nome), ignore_errors=True)
+    for pasta in [PASTA] + [os.path.join(PASTA, p) for p in PRODUTOS if os.path.isdir(os.path.join(PASTA, p))]:
+        limpar_parciais(pasta)
     caminho = os.path.join(PASTA, "indice.json")
     anterior = ler_json(caminho, {}).get("produtos", {})
     esperado = f"{dia_mais_novo_esperado(agora):%Y-%m-%d}"
-    em_dia = all(
-        any(d.get("data") == esperado for d in (anterior.get(p) or {}).get("dias", []))
-        and os.path.exists(os.path.join(PASTA, p, f"{esperado}.png"))
-        for p in PRODUTOS
-    )
-    if em_dia:
+    if all(any(d["data"] == esperado for d in dias_no_disco(anterior.get(p))) for p in PRODUTOS):
         return {"em_dia": True, "esperado": esperado, "produtos": {}}
     indice = {"versao": VERSAO, "gerado": agora.strftime("%Y-%m-%dT%H:%M:%SZ"), "fonte": FONTE, "produtos": {}}
     resumos = {}
@@ -378,11 +409,25 @@ def rodada(agora: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001 — um produto falhando não derruba o outro
             print(f"{produto}: falhou — {e}", file=sys.stderr)
             resumos[produto] = {"erro": str(e)}
-            publicado = anterior.get(produto)  # o que já estava no ar continua
-        if publicado:
+            # O que já estava no ar continua, se o arquivo ainda está lá.
+            publicado = dict(anterior[produto], dias=dias_no_disco(anterior[produto])) if anterior.get(produto) else None
+        if publicado and publicado["dias"]:
             indice["produtos"][produto] = publicado
-    if indice["produtos"]:
-        escrever_atomico(caminho, json.dumps(indice, ensure_ascii=False, separators=(",", ":")).encode())
+    # O índice sempre reflete o disco (produto sem dia sai dele) e é gravado
+    # ANTES de apagar: o que o anterior citava fica até a próxima rodada, para
+    # quem leu o índice há pouco.
+    escrever_atomico(caminho, json.dumps(indice, ensure_ascii=False, separators=(",", ":")).encode())
+    manter = {d["arquivo"] for p in (indice["produtos"], anterior) for x in p.values() if isinstance(x, dict) for d in x.get("dias", []) if isinstance(d, dict)}
+    for produto in PRODUTOS:
+        pasta = os.path.join(PASTA, produto)
+        if not os.path.isdir(pasta):
+            continue
+        removidos = 0
+        for nome in os.listdir(pasta):
+            if f"{produto}/{nome}" not in manter and ".parcial-" not in nome:
+                os.remove(os.path.join(pasta, nome))
+                removidos += 1
+        resumos.setdefault(produto, {})["removidos"] = removidos
     return {"em_dia": False, "esperado": esperado, "produtos": resumos}
 
 
@@ -405,8 +450,9 @@ def main() -> None:
         if "erro" in x:
             print(f"{produto}: erro — {x['erro']}")
         else:
-            print(f"{produto}: {x['baixados']} baixados, {x['ausentes']} ainda não publicados, {x['removidos']} apagados; no ar: {', '.join(x['dias']) or 'nada'}")
-    falhou = any("erro" in x for x in r["produtos"].values())
+            print(f"{produto}: {x['baixados']} baixados, {x['ausentes']} ainda não publicados, {x['erros']} com erro, "
+                  f"{x.get('removidos', 0)} apagados; no ar: {', '.join(x['dias']) or 'nada'}")
+    falhou = any("erro" in x or x.get("erros") for x in r["produtos"].values())
     atrasado = all(r["esperado"] not in x.get("dias", []) for x in r["produtos"].values())
     if atrasado:
         print(f"o INPE ainda não publicou {r['esperado']}")

@@ -11,9 +11,11 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.parse
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import swot  # noqa: E402
@@ -47,15 +49,19 @@ def resposta(rid, passagens, up="", dn="", larg=800, centro=(-63.0, -3.5), rio="
 class HydrocronFalso(swot.Hydrocron):
     """Responde de uma tabela {id: (lista de passagens, up, dn, larg, centro)} filtrando pelo período."""
 
-    def __init__(self, rede):
-        super().__init__(None)
+    def __init__(self, rede, falhar=None, chave=None):
+        super().__init__(chave)
         self.rede = rede
+        self.falhar = dict(falhar or {})  # id → código HTTP que ele devolve sempre
         self.urls = []
 
     def abrir(self, url):
         self.urls.append(url)
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
         rid = q["feature_id"]
+        if rid in self.falhar or "*" in self.falhar:
+            codigo = self.falhar.get(rid, self.falhar.get("*"))
+            raise urllib.error.HTTPError(url, codigo, "erro", {}, io.BytesIO(b"{}"))
         ini, fim = swot.epoch(q["start_time"]), swot.epoch(q["end_time"])
         if rid not in self.rede:
             raise urllib.error.HTTPError(url, 400, "not found", {}, io.BytesIO(b"{}"))
@@ -238,6 +244,124 @@ class Rodada(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             swot.rodada(AGORA, h=HydrocronFalso({}))
         self.assertFalse(os.path.exists(swot.ESTADO))
+
+
+class Robustez(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.antes = (swot.RAIZ, swot.PASTA, swot.ESTADO, swot.SEMENTES, swot.PARALELO)
+        swot.RAIZ = self.dir
+        swot.PASTA = os.path.join(self.dir, "swot", "v1")
+        swot.ESTADO = os.path.join(self.dir, "estado.json")
+        swot.PARALELO = 1
+        self.dormir = mock.patch.object(swot.time, "sleep")  # os recuos não esperam de verdade
+        self.dormir.start()
+        # Uma cadeia de 30 trechos rio acima, cada um com um traçado de 800 pontos.
+        self.ult = AGORA - 10 * DIA
+        ids = [f"622939{n:04d}1" for n in range(100, 130)]
+        self.rede = {}
+        for k, rid in enumerate(ids):
+            up = ids[k + 1] if k + 1 < len(ids) else ""
+            dn = ids[k - 1] if k else ""
+            self.rede[rid] = ([obs(self.ult, "145")], up, dn, 900, (-63.0 + 0.01 * k, -3.5))
+        self.ids = ids
+        swot.SEMENTES = [ids[0]]
+
+    def tearDown(self):
+        self.dormir.stop()
+        swot.RAIZ, swot.PASTA, swot.ESTADO, swot.SEMENTES, swot.PARALELO = self.antes
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def estado(self):
+        with open(swot.ESTADO) as f:
+            return json.load(f)
+
+    def test_percurso_guarda_so_o_tracado_simplificado(self):
+        original = resposta
+
+        def resposta_longa(rid, passagens, up="", dn="", larg=800, centro=(-63.0, -3.5), rio="Amazon River"):
+            fc = original(rid, passagens, up, dn, larg, centro, rio)
+            fc["features"][0]["geometry"]["coordinates"] = [[centro[0] + i * 1e-4, centro[1] + 1e-6 * (i % 2)] for i in range(800)]
+            return fc
+
+        with mock.patch.object(sys.modules[__name__], "resposta", side_effect=resposta_longa):
+            aceitos, vistos, falhados = swot.percorrer(HydrocronFalso(self.rede), AGORA - swot.JANELA_S, AGORA, swot.poligono_amazonia())
+        self.assertEqual(len(aceitos), len(self.ids))
+        for est in aceitos.values():
+            self.assertNotIn("geom", est)
+            self.assertNotIn("obs", est)
+            self.assertLess(sum(len(l) for l in est["linhas"]), 20)  # 800 pontos quase retos → poucos
+            self.assertEqual(len(est["serie"]), 1)
+
+    def test_502_num_trecho_nao_derruba_o_percurso_e_a_rodada_seguinte_retoma(self):
+        # Estrela: a semente tem 29 afluentes; um deles (quebrado) leva a mais um trecho.
+        rede = {self.ids[0]: (self.rede[self.ids[0]][0], ",".join(self.ids[1:]), "", 900, (-63.0, -3.5))}
+        for k, rid in enumerate(self.ids[1:], 1):
+            rede[rid] = (self.rede[rid][0], "", self.ids[0], 900, (-63.0 + 0.01 * k, -3.5))
+        quebrado, alem = self.ids[2], "62293999991"
+        rede[quebrado] = (rede[quebrado][0], alem, self.ids[0], 900, (-62.98, -3.5))
+        rede[alem] = (self.rede[self.ids[1]][0], "", quebrado, 900, (-62.9, -3.4))
+        swot.rodada(AGORA, h=HydrocronFalso(rede, falhar={quebrado: 502}))  # 1 de 30: < 10%
+        e = self.estado()
+        self.assertEqual(sorted(e["trechos"]), sorted(set(self.ids) - {quebrado}))
+        self.assertEqual([x[0] for x in e["retomar"]], [quebrado])
+        # O Hydrocron voltou: a rodada seguinte continua dali, sem repedir os vistos.
+        h = HydrocronFalso(rede)
+        r = swot.rodada(AGORA + DIA, h=h)
+        e = self.estado()
+        self.assertEqual(sorted(e["trechos"]), sorted(self.ids + [alem]))
+        self.assertEqual((e["retomar"], r["retomar"]), ([], 0))
+        pedidos = [dict(urllib.parse.parse_qsl(urllib.parse.urlparse(u).query))["feature_id"] for u in h.urls]
+        self.assertEqual(sorted(set(pedidos) - set(self.ids[:1])), sorted([quebrado, alem]))
+
+    def test_muitas_falhas_no_percurso_nao_gravam_nada(self):
+        falhar = {rid: 502 for rid in self.ids[1:]}
+        falhar[self.ids[1]] = 502
+        rede = dict(self.rede)
+        # A semente tem 6 vizinhos rio acima, 5 deles quebrados: 5 de 7 pedidos falham.
+        vizinhos = self.ids[1:7]
+        rede[self.ids[0]] = (rede[self.ids[0]][0], ",".join(vizinhos), "", 900, (-63.0, -3.5))
+        with self.assertRaises(RuntimeError):
+            swot.rodada(AGORA, h=HydrocronFalso(rede, falhar={v: 502 for v in vizinhos[1:]}))
+        self.assertFalse(os.path.exists(swot.ESTADO))
+
+    def test_401_403_param_na_hora(self):
+        h = HydrocronFalso(self.rede, falhar={"*": 403}, chave="errada")
+        with self.assertRaises(swot.Recusado) as ctx:
+            h.serie(self.ids[0], AGORA - DIA, AGORA)
+        self.assertEqual(h.pedidos, 1)  # sem repetir
+        self.assertIn("hydrocron-key", str(ctx.exception))
+        # No percurso: para tudo, nada gravado.
+        with self.assertRaises(swot.Recusado):
+            swot.rodada(AGORA, h=HydrocronFalso(self.rede, falhar={"*": 401}))
+        self.assertFalse(os.path.exists(swot.ESTADO))
+
+    def test_403_no_dia_a_dia_grava_o_que_veio_e_avisa(self):
+        swot.rodada(AGORA, h=HydrocronFalso(self.rede))
+        e = self.estado()
+        for est in e["trechos"].values():
+            est["revisto"] = AGORA - swot.REVISAO_S - 1  # todos devidos
+        with open(swot.ESTADO, "w") as f:
+            json.dump(e, f)
+        h = HydrocronFalso(self.rede, falhar={"*": 403})
+        r = swot.rodada(AGORA + DIA, h=h)
+        self.assertIn("recusado", r)
+        self.assertLessEqual(h.pedidos, swot.PARALELO + 1)  # parou logo, sem pedir os 30
+        self.assertTrue(os.path.exists(swot.ESTADO))
+        self.assertTrue(os.path.exists(os.path.join(swot.PASTA, "trechos.json")))
+
+    def test_parciais_velhos_sao_apagados(self):
+        os.makedirs(swot.PASTA)
+        velhos = [os.path.join(self.dir, "estado.json.parcial-1"), os.path.join(swot.PASTA, "trechos.json.gz.parcial-2")]
+        recente = os.path.join(swot.PASTA, "trechos.json.parcial-3")
+        for c in velhos + [recente]:
+            with open(c, "w") as f:
+                f.write("x")
+        for c in velhos:
+            os.utime(c, (time.time() - 7200, time.time() - 7200))
+        swot.rodada(AGORA, h=HydrocronFalso(self.rede))
+        self.assertFalse(any(os.path.exists(c) for c in velhos))
+        self.assertTrue(os.path.exists(recente))
 
 
 if __name__ == "__main__":

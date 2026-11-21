@@ -12,6 +12,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -258,8 +259,10 @@ class Rodada(unittest.TestCase):
         self.assertEqual(ind["semValor"], 255)
         self.assertEqual(len(ind["grade"]["caixa"]), 4)
         self.assertEqual([q["c"] for q in ind["quadros"]], sorted(chaves))
+        sufixo = goes_l2.sufixo_da_grade(ind["grade"])
         for q in ind["quadros"]:
-            self.assertEqual(q["arquivo"], f"{q['c']}.png")
+            # O app usa o `arquivo` do índice; o nome leva a grade (cache imutável).
+            self.assertEqual(q["arquivo"], f"{q['c']}_{sufixo}.png")
             self.assertTrue(os.path.exists(os.path.join(goes_l2.PASTA, "tpw", q["arquivo"])))
             self.assertGreater(q["cob"], 0)
 
@@ -273,44 +276,88 @@ class Rodada(unittest.TestCase):
         r = self.rodar(chaves)  # a fila continua na próxima rodada
         self.assertEqual(r["quadros"], len(chaves))
 
-    def test_apaga_o_que_sai_das_48_h(self):
+    def test_o_que_sai_das_48_h_sai_do_indice_antes_do_disco(self):
         self.rodar(self.chaves(1))
         velho = goes_l2.carimbo_de(self.agora - timedelta(hours=49))
         pasta = os.path.join(goes_l2.PASTA, "tpw")
-        with open(os.path.join(pasta, f"{velho}.png"), "wb") as f:
+        nome_velho = f"{velho}_abcdef.png"
+        with open(os.path.join(pasta, nome_velho), "wb") as f:
             f.write(b"x")
         ind = self.indice()
-        ind["quadros"].insert(0, {"c": velho, "arquivo": f"{velho}.png", "cob": 0.5})
+        ind["quadros"].insert(0, {"c": velho, "arquivo": nome_velho, "cob": 0.5})
         with open(os.path.join(pasta, "indice.json"), "w") as f:
             json.dump(ind, f)
+        self.rodar(self.chaves(1))
+        # Sai do índice já; o arquivo fica uma rodada (quem leu o índice anterior ainda o acha).
+        self.assertNotIn(velho, [q["c"] for q in self.indice()["quadros"]])
+        self.assertTrue(os.path.exists(os.path.join(pasta, nome_velho)))
         r = self.rodar(self.chaves(1))
         self.assertEqual(r["removidos"], 1)
-        self.assertNotIn(velho, [q["c"] for q in self.indice()["quadros"]])
-        self.assertFalse(os.path.exists(os.path.join(pasta, f"{velho}.png")))
+        self.assertFalse(os.path.exists(os.path.join(pasta, nome_velho)))
+        # Nada que o índice no ar cita falta no disco.
+        for q in self.indice()["quadros"]:
+            self.assertTrue(os.path.exists(os.path.join(pasta, q["arquivo"])))
 
-    def test_falha_espera_e_nao_derruba(self):
+    def test_falha_espera_cada_vez_mais_e_desiste(self):
         chaves = self.chaves(1)
         ruim = sorted(chaves)[-1]
         r = self.rodar(chaves, falhar=(ruim,))
-        self.assertEqual(r["falhas"], 1)
-        self.assertEqual(r["novos"], len(chaves) - 1)
-        r = self.rodar(chaves)  # dentro dos 30 min de espera: nem tenta
+        self.assertEqual((r["falhas"], r["novos"]), (1, len(chaves) - 1))
+        r = self.rodar(chaves, falhar=(ruim,))  # dentro dos 30 min de espera: nem tenta
         self.assertEqual((r["novos"], r["falhas"]), (0, 0))
 
-    def test_grade_nova_apaga_os_quadros_antigos(self):
+        def envelhecer(segundos):
+            with open(goes_l2.ESTADO) as f:
+                e = json.load(f)
+            e["falhados"]["tpw"][ruim][1] -= segundos
+            with open(goes_l2.ESTADO, "w") as f:
+                json.dump(e, f)
+
+        for n, espera in ((2, 1800), (3, 3600), (4, 7200)):
+            envelhecer(espera - 60)  # ainda falta 1 min: não tenta
+            self.assertEqual(self.rodar(chaves, falhar=(ruim,))["falhas"], 0)
+            envelhecer(120)
+            r = self.rodar(chaves, falhar=(ruim,))
+            self.assertEqual(r["falhas"], 1, n)
+        self.assertEqual(r["desistidos"], 1)
+        envelhecer(10 * 86400)  # desistido: nunca mais
+        r = self.rodar(chaves)
+        self.assertEqual((r["novos"], r["falhas"], r["fila"]), (0, 0, 0))
+
+    def test_falhas_seguidas_param_o_produto_na_rodada(self):
+        chaves = self.chaves(2)
+        r = self.rodar(chaves, falhar=tuple(chaves))
+        self.assertEqual((r["falhas"], r["novos"]), (goes_l2.FALHAS_SEGUIDAS_MAX, 0))
+
+    def test_grade_nova_tira_os_quadros_antigos_do_indice_e_depois_do_disco(self):
         chaves = self.chaves(1)
         self.rodar(chaves)
         pasta = os.path.join(goes_l2.PASTA, "tpw")
-        ind = self.indice()
-        ind["grade"]["largura"] += 1  # como se o recorte tivesse mudado
-        with open(os.path.join(pasta, "indice.json"), "w") as f:
-            json.dump(ind, f)
+        antigos = {q["arquivo"] for q in self.indice()["quadros"]}
+        # A NOAA (ou o recorte) muda a grade: outra caixa, outro nome de arquivo.
+        v = np.full((N10, N10), 65535, np.uint16)
+        v[400:420, 600:620] = 20000
+        self.nc = netcdf_sintetico(valores=v, offset=OFFSET10 + PASSO10 / 2)
         novo = goes_l2.carimbo_de(self.agora - timedelta(minutes=4))
         chaves[novo] = chaves[sorted(chaves)[-1]].replace(sorted(chaves)[-1], novo)
         r = self.rodar(chaves)
         self.assertEqual(r["quadros"], 1)
-        self.assertEqual([q["c"] for q in self.indice()["quadros"]], [novo])
-        self.assertEqual(sorted(os.listdir(pasta)), sorted([f"{novo}.png", "indice.json"]))
+        ind = self.indice()
+        self.assertEqual([q["c"] for q in ind["quadros"]], [novo])
+        self.assertNotIn(ind["quadros"][0]["arquivo"], antigos)
+        self.assertTrue(antigos <= set(os.listdir(pasta)))  # ainda no disco nesta rodada
+        # Na seguinte, os horários antigos voltam na grade nova e os arquivos velhos somem.
+        r = self.rodar(chaves)
+        self.assertEqual(r["quadros"], len(chaves))
+        self.assertFalse(antigos & set(os.listdir(pasta)))
+        sufixo = goes_l2.sufixo_da_grade(self.indice()["grade"])
+        self.assertTrue(all(q["arquivo"].endswith(f"_{sufixo}.png") for q in self.indice()["quadros"]))
+
+    def test_nome_muda_com_a_grade(self):
+        g = {"caixa": [1.0, 2.0, 3.0, 4.0], "largura": 10, "altura": 5}
+        g2 = dict(g, largura=11)
+        self.assertNotEqual(goes_l2.nome_do_quadro("20263251440", g), goes_l2.nome_do_quadro("20263251440", g2))
+        self.assertEqual(goes_l2.nome_do_quadro("20263251440", g), goes_l2.nome_do_quadro("20263251440", dict(g)))
 
     def test_png_sem_indice_volta_para_a_fila(self):
         chaves = self.chaves(1)
@@ -319,6 +366,67 @@ class Rodada(unittest.TestCase):
         r = self.rodar(chaves)
         self.assertEqual(r["novos"], len(chaves))
         self.assertEqual(r["quadros"], len(chaves))
+
+    def test_parciais_velhos_sao_apagados(self):
+        self.rodar(self.chaves(1))
+        pasta = os.path.join(goes_l2.PASTA, "tpw")
+        velho = os.path.join(pasta, "indice.json.parcial-123")
+        novo = os.path.join(self.dir, "estado.json.parcial-456")
+        recente = os.path.join(pasta, "x.png.parcial-789")
+        for c in (velho, novo, recente):
+            with open(c, "w") as f:
+                f.write("x")
+        os.utime(velho, (time.time() - 7200, time.time() - 7200))
+        os.utime(novo, (time.time() - 7200, time.time() - 7200))
+        self.rodar(self.chaves(1))
+        self.assertFalse(os.path.exists(velho))
+        self.assertFalse(os.path.exists(novo))
+        self.assertTrue(os.path.exists(recente))  # pode ser de uma escrita em andamento
+
+
+class Revezamento(unittest.TestCase):
+    """Com o S3 lento, cada produto ganha o quadro mais novo antes de qualquer preenchimento."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.antes = (goes_l2.RAIZ, goes_l2.PASTA, goes_l2.ESTADO, goes_l2.TEMPO_RODADA_S)
+        goes_l2.RAIZ = self.dir
+        goes_l2.PASTA = os.path.join(self.dir, "goes-l2", "v1")
+        goes_l2.ESTADO = os.path.join(self.dir, "estado.json")
+        self.nc = netcdf_sintetico(valores=np.full((N10, N10), 20000, np.uint16))
+        self.cape = netcdf_sintetico("CAPE", valores=np.full((N10, N10), 2000, np.uint16), escala=0.07630093)
+
+    def tearDown(self):
+        goes_l2.RAIZ, goes_l2.PASTA, goes_l2.ESTADO, goes_l2.TEMPO_RODADA_S = self.antes
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_mais_novo_de_cada_produto_primeiro(self):
+        agora = datetime(2026, 11, 21, 15, 4, tzinfo=timezone.utc)
+        relogio = [1_000_000.0]
+
+        def listar(p, prefixo):
+            out = {}
+            t = agora.replace(minute=0) - timedelta(hours=1)
+            while t <= agora - timedelta(minutes=14):
+                c = goes_l2.carimbo_de(t)
+                k = f"{p.noaa}/{t:%Y}/{c[4:7]}/{t:%H}/OR_{p.noaa}-M6_G19_s{c}217_e{c}526_c{c}540.nc"
+                if k.startswith(prefixo):
+                    out[c] = k
+                t += timedelta(minutes=10)
+            return out
+
+        def baixar(url):
+            relogio[0] += 100  # cada quadro leva 100 s (S3 lento)
+            return self.cape if "DSIF" in url else self.nc
+
+        goes_l2.TEMPO_RODADA_S = 150  # dá para o 1º de cada um, não para o preenchimento
+        with mock.patch.object(goes_l2, "listar", side_effect=listar), mock.patch.object(goes_l2, "baixar", side_effect=baixar), \
+                mock.patch.object(goes_l2.time, "time", side_effect=lambda: relogio[0]):
+            r = goes_l2.rodada(agora, [goes_l2.PRODUTOS["tpw"], goes_l2.PRODUTOS["cape"]])
+        self.assertEqual((r["tpw"]["novos"], r["cape"]["novos"]), (1, 1))
+        for pid in ("tpw", "cape"):
+            with open(os.path.join(goes_l2.PASTA, pid, "indice.json")) as f:
+                self.assertEqual([q["c"] for q in json.load(f)["quadros"]], [goes_l2.carimbo_de(agora.replace(minute=50, hour=14))])
 
 
 if __name__ == "__main__":

@@ -92,9 +92,14 @@ amaview instalar     # git pull + reinstala as unidades e o próprio script, e r
 
 A rodada que traz um `amaview` novo ainda roda a versão antiga dele (o bash já
 leu o script). Quando o próprio `amaview` ou um site do nginx muda — um
-snippet novo, por exemplo —, rode `amaview instalar` **duas vezes**: na
-primeira o nginx pode recusar o site novo (o snippet ainda não foi instalado;
-o nginx segue com a configuração anterior), na segunda fica tudo em dia.
+snippet novo, por exemplo —, rode `amaview instalar` **duas vezes seguidas**,
+uma logo depois da outra: na primeira o nginx pode recusar o site novo (o
+snippet ainda não foi instalado; o nginx segue no ar com a configuração já
+carregada), na segunda fica tudo em dia. Desde 21/11/2026 o `instalar` guarda
+o site e os snippets do AmaView antes de trocá-los e, se o `nginx -t` recusar
+o novo, põe os anteriores de volta: um restart do nginx no meio não derruba
+nada. A primeira rodada que roda um script anterior a isso não tem essa
+proteção — por isso as duas seguidas.
 
 ## Blocos do GOES-19
 
@@ -865,9 +870,15 @@ recortados na Amazônia Legal, para a camada `src/riscoFogo` do AmaView. É o
 - **Recorte**: a caixa da Amazônia Legal (`AMAZONIA_LEGAL_BBOX_LONLAT` do app)
   com 0,5° de folga, sem reamostrar. PNG em tons de cinza com o valor no byte:
   risco = `round(rf × 200)`, dias = `round(ndsc120)`, **255 = sem dado**.
-- **3 dias** (os mais recentes publicados); o resto é apagado. Dia que já está
-  no índice não é baixado de novo. Às 4h30 a rodada pede o dia novo; às 7h30
-  (nova tentativa) ela só pede algo ao INPE se o dia ainda não saiu.
+- **3 dias** (os mais recentes publicados; com o INPE parado mais de 10 dias,
+  os últimos que já estavam aqui continuam). Dia que já está no índice não é
+  baixado de novo, e um dia quebrado não derruba os outros. Às 4h30 a rodada
+  pede o dia novo; às 7h30 (nova tentativa) ela só pede algo ao INPE se o dia
+  ainda não saiu.
+- **O índice sempre bate com o disco**: é gravado antes de apagar, produto sem
+  dia sai dele, e o PNG que ele deixou de citar some na rodada seguinte (quem
+  leu o índice anterior ainda o acha). O nome do PNG leva 6 letras da grade
+  (`AAAA-MM-DD_<g>.png`): o cache é imutável, e caixa nova tem nome novo.
 - **Medido em 21/11/2026**: risco 3110 × 2440 px, ~1,8 MB por dia; dias sem
   chuva 311 × 244, ~22 KB; 3 dias ≈ **5,4 MB** no disco. Um dia novo baixa
   ~15 MB e gasta ~5 s de processador.
@@ -882,7 +893,8 @@ URLs (`https://dados.amaview.com.br/risco-fogo/v1/`): `indice.json`
 (`{"versao", "gerado", "fonte", "produtos": {"risco" | "dias": {"grade": {"caixa",
 "largura", "altura"}, "escala", "semDado", "maximo", "dias": [{"data",
 "arquivo"}]}}}`; `caixa` = bordas dos pixels, oeste, sul, leste, norte) e
-`risco/AAAA-MM-DD.png`, `dias/AAAA-MM-DD.png`. Logs: `journalctl -u amaview-risco-fogo`.
+`risco/AAAA-MM-DD_<g>.png`, `dias/AAAA-MM-DD_<g>.png` (o app usa o `arquivo` do
+índice). Logs: `journalctl -u amaview-risco-fogo`.
 
 Testes (sem rede): `python3 -I -m unittest discover -s agendador/risco-fogo`.
 
@@ -908,11 +920,18 @@ produtos L2 da NOAA, do balde público `noaa-goes19`, para a camada
   área. O app lê a caixa (metros na projeção) do índice.
 - **Leve**: o NetCDF (o AOD de dia tem ~42 MB) vai para a memória e é
   descartado; nenhum NetCDF toca o disco.
-- **48 h, no máximo** (a janela mais longa do loop do app). O que falta é
-  preenchido do mais novo para o mais velho (AOD 12, outros 24 por rodada, e no
-  máximo 5,5 min de rodada); o preenchimento inteiro leva ~4 h. Arquivo que
-  falha espera 30 min. Grade nova (recorte mudado) apaga os quadros antigos do
-  produto.
+- **48 h, no máximo** (a janela mais longa do loop do app). Primeiro o quadro
+  mais novo de cada produto; depois o que falta é preenchido do mais novo para
+  o mais velho, um quadro de cada produto por vez (AOD 12, outros 24 por
+  rodada, e no máximo 5,5 min de rodada), para um S3 lento no AOD não deixar os
+  outros sem o quadro novo. O preenchimento inteiro leva ~4 h.
+- **O índice é gravado antes de apagar**: o quadro que sai da janela (ou de
+  uma grade velha) sai do índice já, e o arquivo some na rodada seguinte. O
+  nome leva 6 letras da grade (`AAAADDDHHMM_<g>.png`): caixa nova, nome novo,
+  e o cache imutável nunca mostra o PNG velho na caixa nova.
+- **Arquivo que falha** espera 30 min, depois 1 h e 2 h; na 4ª falha fica de
+  lado (um formato novo da NOAA não vira ~3 GB por hora de download). 3 falhas
+  seguidas param o produto até a rodada seguinte.
 - **Medido em 21/11/2026** (um quadro por hora nas 24 h anteriores, estendido
   às 48 h): AOD ~1 MB de dia e ~9 KB de noite, **~130 MB** nas 48 h; TPW
   ~120 KB, **~35 MB**; CAPE ~75 KB, **~21 MB**; LST ~95 KB, **~5 MB**. Total
@@ -929,7 +948,8 @@ URLs (`https://dados.amaview.com.br/goes-l2/v1/`): `<produto>/indice.json`
 (`{"versao", "gerado", "fonte", "produto", "unidade", "escala",
 "deslocamento", "semValor", "cadencia_min", "grade": {"caixa", "largura",
 "altura"}, "quadros": [{"c", "arquivo", "cob"}]}`; valor = byte × escala +
-deslocamento) e `<produto>/AAAADDDHHMM.png`. Logs: `journalctl -u amaview-goes-l2`.
+deslocamento) e `<produto>/AAAADDDHHMM_<g>.png` (o app usa o `arquivo` do índice).
+Logs: `journalctl -u amaview-goes-l2`.
 
 Testes (sem rede): `python3 -I -m unittest discover -s agendador/goes-l2`.
 
@@ -948,7 +968,11 @@ trecho de ~10 km do SWORD, para a camada `src/swot` do AmaView.
   trecho por rio grande), rio abaixo e rio acima, enquanto o centro do trecho
   está na Amazônia Legal (+0,3°) e a largura prevista é ≥ 400 m. ~2.700
   pedidos, 2 de cada vez: **~1 h** na primeira rodada (`swot.py percurso`
-  refaz, mantendo as séries). Sem completar, nada é gravado.
+  refaz, mantendo as séries). Trecho cujo pedido falha (502 depois das
+  tentativas, rede) fica de fora e a rodada seguinte retoma o percurso dele,
+  sem repedir o que já viu; com mais de 10% de falhas, nada é gravado. Só o
+  traçado simplificado fica na memória: simulando 2.000 trechos de 800 pontos,
+  ~25 MB de objetos Python.
 - **Dia a dia, incremental**: o estado (`/var/cache/amaview-swot/estado.json`,
   fora do que o nginx serve) guarda, por trecho, o traçado, a série e a última
   passagem de cada órbita (`pass_id`). A órbita se repete a cada 20,86 dias; um
@@ -972,13 +996,14 @@ trecho de ~10 km do SWORD, para a camada `src/swot` do AmaView.
   Hydrocron). Com ela: `sudo amaview chave hydrocron` (gravada 640
   root:amaview-swot em `/etc/amaview/hydrocron-key`; nunca no repositório). O
   Hydrocron aceita qualquer valor no cabeçalho, então o teste só confere que o
-  pedido passa.
+  pedido passa. Um 401/403 para a rodada na hora (`PARADO:` no diário, com o
+  que fazer); o que já tinha vindo fica gravado.
 
 | Peça | Onde |
 |---|---|
 | `swot/swot.py` | uma rodada: percurso (sem estado) ou incremental; publica e apara |
 | `swot/amazonia_legal.json` | contorno da Amazônia Legal (o mesmo do `meteo/`) para o percurso |
-| `swot/amaview-swot.{service,timer}` | 5h de Brasília; usuário `amaview-swot`, `/var/cache/amaview-swot`, `MemoryMax=512M` |
+| `swot/amaview-swot.{service,timer}` | 5h de Brasília; usuário `amaview-swot`, `/var/cache/amaview-swot`, `MemoryMax=1G` |
 | `swot/nginx-locais.conf` | `/swot/`: CORS `*`, `gzip_static`, `no-cache` (revalida) |
 
 URL (`https://dados.amaview.com.br/swot/v1/trechos.json`, e o `.gz` ao lado):

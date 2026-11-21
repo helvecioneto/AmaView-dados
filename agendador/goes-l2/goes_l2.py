@@ -22,17 +22,23 @@ produtos L2 da NOAA em PNG, um por quadro, com o valor no byte.
   lido só no recorte (os blocos que o cobrem) e descartado: nenhum NetCDF toca
   o disco.
 - **48 h, no máximo** (a janela mais longa do loop do app). O que sai da
-  janela é apagado a cada rodada; o que falta nela é preenchido do mais novo
-  para o mais velho, com teto por rodada para o quadro novo nunca esperar.
+  janela sai do índice e o arquivo é apagado na rodada seguinte (quem leu o
+  índice há pouco ainda o acha). Primeiro o quadro mais novo de cada produto;
+  depois o que falta é preenchido do mais novo para o mais velho, um quadro de
+  cada produto por vez, com teto por rodada.
+- **Arquivo que falha** espera 30 min, 1 h, 2 h e, na 4ª falha, é deixado de
+  lado; 3 falhas seguidas param o produto até a rodada seguinte.
 
 Saída (abaixo de GOESL2_RAIZ, servida pelo nginx em /goes-l2/v1/):
 
   goes-l2/v1/<produto>/indice.json        quadros, caixa, escala (o app lê a cada minuto)
-  goes-l2/v1/<produto>/AAAADDDHHMM.png    um por quadro (imutável; o carimbo é o do STAR)
+  goes-l2/v1/<produto>/AAAADDDHHMM_<g>.png  um por quadro (imutável; o carimbo é o do STAR,
+                                          <g> = 6 letras da grade: caixa nova, nome novo)
 
   goes_l2.py                    uma rodada (o que o timer chama)
   goes_l2.py quadro PROD ARQ.nc processa um arquivo local e grava o PNG ao lado (teste)
 """
+import hashlib
 import io
 import json
 import math
@@ -60,8 +66,15 @@ JANELA = timedelta(hours=48)
 # Hora com quadro faltando: relistar no S3 no máximo a cada 30 min (as duas
 # horas mais novas são listadas em toda rodada).
 RELISTAR_S = 1800
-# Arquivo que falhou: tentar de novo só depois disto.
+# Arquivo que falhou: espera 30 min, 1 h, 2 h… e, na MAX_FALHAS-ésima, desiste
+# dele (sem isto, um formato novo da NOAA seria baixado de novo a cada 30 min,
+# ~3 GB por hora só do AOD).
 ESPERA_FALHA_S = 1800
+MAX_FALHAS = 4
+# Falhas seguidas de um produto na mesma rodada que o param até a próxima.
+FALHAS_SEGUIDAS_MAX = 3
+# Resto de escrita interrompida (`*.parcial-PID`) mais velho que isto é apagado.
+PARCIAL_VELHO_S = 3600
 # Tempo de trabalho por rodada (o timer é de 10 min): passado disto, o que
 # falta fica para a próxima.
 TEMPO_RODADA_S = float(os.environ.get("GOESL2_TEMPO_RODADA_S", "330"))
@@ -318,34 +331,24 @@ def ler_json(caminho: str, padrao):
         return padrao
 
 
-def pasta_do(p: Produto) -> str:
-    return os.path.join(PASTA, p.id)
-
-
-def no_disco(p: Produto) -> set[str]:
-    return {n[:-4] for n in os.listdir(pasta_do(p)) if n.endswith(".png") and re.fullmatch(r"\d{11}", n[:-4])}
-
-
-def limpar(p: Produto, agora: datetime, conhecidos: set[str]) -> int:
-    """Apaga quadros fora das 48 h, os que o índice não conhece e restos de escritas interrompidas."""
-    removidos = 0
-    limite = agora - JANELA
-    for nome in os.listdir(pasta_do(p)):
-        caminho = os.path.join(pasta_do(p), nome)
-        if nome == "indice.json":
-            continue
-        if ".parcial-" in nome:
-            apagar = time.time() - os.path.getmtime(caminho) > 600
-        else:
-            c = nome[:-4] if nome.endswith(".png") else ""
-            try:
-                apagar = instante(c) < limite or c not in conhecidos
-            except ValueError:
-                apagar = True
-        if apagar:
+def limpar_parciais(pasta: str, idade_s: float = PARCIAL_VELHO_S) -> int:
+    """Apaga restos de escritas interrompidas (`*.parcial-PID`) mais velhos que `idade_s`."""
+    n = 0
+    for nome in os.listdir(pasta):
+        caminho = os.path.join(pasta, nome)
+        if ".parcial-" in nome and time.time() - os.path.getmtime(caminho) > idade_s:
             os.remove(caminho)
-            removidos += 1
-    return removidos
+            n += 1
+    return n
+
+
+def sufixo_da_grade(grade: dict) -> str:
+    """Seis letras da grade: o nome do PNG muda quando a caixa muda (o cache é imutável)."""
+    return hashlib.sha1(json.dumps(grade, sort_keys=True).encode()).hexdigest()[:6]
+
+
+def nome_do_quadro(c: str, grade: dict) -> str:
+    return f"{c}_{sufixo_da_grade(grade)}.png"
 
 
 def montar_indice(p: Produto, quadros: dict[str, dict], grade: dict | None, agora: datetime) -> dict:
@@ -370,88 +373,157 @@ def horas_da_janela(agora: datetime) -> list[datetime]:
     return [base - timedelta(hours=k) for k in range(n + 1)]
 
 
-def rodada_produto(p: Produto, agora: datetime, estado: dict, prazo: float) -> dict:
-    os.makedirs(pasta_do(p), exist_ok=True)
-    caminho_indice = os.path.join(pasta_do(p), "indice.json")
-    anterior = ler_json(caminho_indice, {})
-    grade = anterior.get("grade")
-    # O índice publicado guarda o resumo (cobertura) de cada quadro; PNG que ele
-    # não conhece (estado perdido no meio de uma rodada) sai e volta pela fila.
-    quadros = {q["c"]: q for q in anterior.get("quadros", []) if isinstance(q, dict) and "c" in q}
-    removidos = limpar(p, agora, set(quadros))
-    disco = no_disco(p)
-    quadros = {c: q for c, q in quadros.items() if c in disco}
-    limite = agora - JANELA
+def espera_da_falha(n: int) -> float:
+    """30 min depois da 1ª falha, 1 h depois da 2ª, 2 h depois da 3ª…"""
+    return ESPERA_FALHA_S * 2 ** (n - 1)
 
-    listadas: dict[str, float] = estado.setdefault("listadas", {})
-    pendentes: dict[str, str] = estado.setdefault("pendentes", {}).setdefault(p.id, {})
-    falhados: dict[str, float] = estado.setdefault("falhados", {}).setdefault(p.id, {})
-    for c in [c for c, t in falhados.items() if time.time() - t >= ESPERA_FALHA_S]:
-        del falhados[c]
 
-    for k, hora in enumerate(horas_da_janela(agora)):
-        prefixo = prefixo_da_hora(p, hora)
-        esperados = {carimbo_de(hora + timedelta(minutes=m)) for m in range(0, 60, p.cadencia_min)}
-        falta = any(c not in disco and limite <= instante(c) <= agora for c in esperados)
-        if k >= 2 and (not falta or time.time() - listadas.get(prefixo, 0) < RELISTAR_S):
-            continue
-        try:
-            pendentes.update(listar(p, prefixo))
-            listadas[prefixo] = time.time()
-        except Exception as e:  # noqa: BLE001 — uma hora falhando não para as outras
-            print(f"{p.id}: falha ao listar {prefixo}: {e}", file=sys.stderr)
+class Trabalho:
+    """Uma rodada de um produto: o que falta, um quadro de cada vez, e o fechamento."""
 
-    for c in list(pendentes):
-        if c in disco or instante(c) < limite:
-            del pendentes[c]
-    fila = sorted((c for c in pendentes if c not in falhados), reverse=True)
-    feitos = falhas = 0
-    for c in fila[: p.max_por_rodada]:
-        if time.time() > prazo:
-            break
+    def __init__(self, p: Produto, agora: datetime, estado: dict):
+        self.p, self.agora = p, agora
+        self.pasta = os.path.join(PASTA, p.id)
+        os.makedirs(self.pasta, exist_ok=True)
+        self.caminho_indice = os.path.join(self.pasta, "indice.json")
+        anterior = ler_json(self.caminho_indice, {})
+        self.grade = anterior.get("grade")
+        limite = agora - JANELA
+        # O índice publicado é a fonte dos resumos (cobertura); só fica o que
+        # está na janela e no disco. PNG sem índice (escrita interrompida) volta
+        # pela fila e é reescrito com o mesmo nome.
+        self.publicados_antes = {q.get("arquivo") for q in anterior.get("quadros", []) if isinstance(q, dict)}
+        self.quadros = {}
+        for q in anterior.get("quadros", []):
+            try:
+                if isinstance(q, dict) and instante(q["c"]) >= limite and os.path.exists(os.path.join(self.pasta, q["arquivo"])):
+                    self.quadros[q["c"]] = q
+            except (KeyError, TypeError, ValueError):
+                continue
+        self.pendentes: dict[str, str] = estado.setdefault("pendentes", {}).setdefault(p.id, {})
+        falhados = estado.setdefault("falhados", {}).setdefault(p.id, {})
+        for c, f in list(falhados.items()):
+            if isinstance(f, (int, float)):  # formato antigo: só o horário da falha
+                falhados[c] = f = [1, f]
+            try:
+                fora = instante(c) < limite
+            except ValueError:
+                fora = True
+            if fora:
+                del falhados[c]
+        self.falhados: dict[str, list] = falhados
+        listadas: dict[str, float] = estado.setdefault("listadas", {})
+
+        for k, hora in enumerate(horas_da_janela(agora)):
+            prefixo = prefixo_da_hora(p, hora)
+            esperados = {carimbo_de(hora + timedelta(minutes=m)) for m in range(0, 60, p.cadencia_min)}
+            falta = any(c not in self.quadros and limite <= instante(c) <= agora for c in esperados)
+            if k >= 2 and (not falta or time.time() - listadas.get(prefixo, 0) < RELISTAR_S):
+                continue
+            try:
+                self.pendentes.update(listar(p, prefixo))
+                listadas[prefixo] = time.time()
+            except Exception as e:  # noqa: BLE001 — uma hora falhando não para as outras
+                print(f"{p.id}: falha ao listar {prefixo}: {e}", file=sys.stderr)
+
+        for c in list(self.pendentes):
+            if c in self.quadros or instante(c) < limite:
+                del self.pendentes[c]
+        agora_s = time.time()
+        self.fila = sorted(
+            (c for c in self.pendentes
+             if c not in self.falhados
+             or (self.falhados[c][0] < MAX_FALHAS and agora_s - self.falhados[c][1] >= espera_da_falha(self.falhados[c][0]))),
+            reverse=True,
+        )
+        self.feitos = self.falhas = self.seguidas = 0
+        self.parado = False
+
+    def um(self) -> bool:
+        """Processa o próximo da fila (o mais novo primeiro). False quando não há o que fazer."""
+        if self.parado or not self.fila or self.feitos + self.falhas >= self.p.max_por_rodada:
+            return False
+        c = self.fila.pop(0)
         t0 = time.time()
         try:
-            nc = baixar(f"{BALDE}/{pendentes[c]}")
+            nc = baixar(f"{BALDE}/{self.pendentes[c]}")
             mb = len(nc) / 1e6
-            imagem, g, cob = processar(p, nc)
+            imagem, g, cob = processar(self.p, nc)
             del nc  # nunca vai para o disco
-            if grade is not None and g != grade:
-                # Recorte ou grade nova: os quadros antigos não cabem na caixa nova.
-                print(f"{p.id}: grade mudou ({grade} → {g}); apagando os {len(quadros)} quadros antigos")
-                for velho in quadros:
-                    os.remove(os.path.join(pasta_do(p), f"{velho}.png"))
-                quadros = {}
-            grade = g
-            escrever_atomico(os.path.join(pasta_do(p), f"{c}.png"), imagem)
-            quadros[c] = {"c": c, "arquivo": f"{c}.png", "cob": cob}
-            del pendentes[c]
-            feitos += 1
-            print(f"{p.id} {c}: {len(imagem) / 1e3:.0f} KB, cobertura {cob:.0%} (NetCDF {mb:.1f} MB, {time.time() - t0:.1f} s)")
         except Exception as e:  # noqa: BLE001
-            falhas += 1
-            falhados[c] = time.time()
-            print(f"{p.id} {c}: falhou — {e}", file=sys.stderr)
+            self.falhas += 1
+            self.seguidas += 1
+            n = (self.falhados.get(c) or [0])[0] + 1
+            self.falhados[c] = [n, time.time()]
+            fim = "desisto dele" if n >= MAX_FALHAS else f"tento de novo em {espera_da_falha(n) / 60:.0f} min"
+            print(f"{self.p.id} {c}: falhou ({n}ª vez; {fim}) — {e}", file=sys.stderr)
+            if self.seguidas >= FALHAS_SEGUIDAS_MAX:
+                # Tudo falhando (S3 fora, formato novo?): o resto fica para a próxima rodada.
+                print(f"{self.p.id}: {self.seguidas} falhas seguidas — o produto para nesta rodada", file=sys.stderr)
+                self.parado = True
+            return True
+        if self.grade is not None and g != self.grade:
+            # Recorte ou grade nova: os quadros antigos não cabem na caixa nova.
+            # Saem do índice; os arquivos (outro nome) somem na limpeza.
+            print(f"{self.p.id}: grade mudou ({self.grade} → {g}); {len(self.quadros)} quadros antigos saem do índice")
+            self.quadros = {}
+        self.grade = g
+        nome = nome_do_quadro(c, g)
+        escrever_atomico(os.path.join(self.pasta, nome), imagem)
+        self.quadros[c] = {"c": c, "arquivo": nome, "cob": cob}
+        del self.pendentes[c]
+        self.falhados.pop(c, None)
+        self.feitos += 1
+        self.seguidas = 0
+        print(f"{self.p.id} {c}: {len(imagem) / 1e3:.0f} KB, cobertura {cob:.0%} (NetCDF {mb:.1f} MB, {time.time() - t0:.1f} s)")
+        return True
 
-    if quadros or grade:
-        escrever_atomico(caminho_indice, json.dumps(montar_indice(p, quadros, grade, agora), separators=(",", ":"), ensure_ascii=False).encode())
-    tamanho = sum(os.path.getsize(os.path.join(pasta_do(p), f"{c}.png")) for c in quadros)
-    return {"novos": feitos, "falhas": falhas, "fila": len([c for c in pendentes if c not in falhados]),
-            "removidos": removidos, "quadros": len(quadros), "mb": tamanho / 1e6}
+    def fechar(self) -> dict:
+        """Grava o índice e SÓ DEPOIS apaga o que nem ele nem o anterior citam."""
+        if self.quadros or self.grade:
+            escrever_atomico(self.caminho_indice, json.dumps(montar_indice(self.p, self.quadros, self.grade, self.agora), separators=(",", ":"), ensure_ascii=False).encode())
+        # O que o índice anterior citava fica até a próxima rodada: quem leu o
+        # índice há pouco ainda pode pedir o quadro.
+        manter = {q["arquivo"] for q in self.quadros.values()} | self.publicados_antes | {"indice.json"}
+        removidos = limpar_parciais(self.pasta)
+        for nome in os.listdir(self.pasta):
+            if nome not in manter and ".parcial-" not in nome:
+                os.remove(os.path.join(self.pasta, nome))
+                removidos += 1
+        tamanho = sum(os.path.getsize(os.path.join(self.pasta, q["arquivo"])) for q in self.quadros.values())
+        agora_s = time.time()
+        bloqueados = {c for c, f in self.falhados.items() if f[0] >= MAX_FALHAS or agora_s - f[1] < espera_da_falha(f[0])}
+        return {"novos": self.feitos, "falhas": self.falhas, "fila": len([c for c in self.pendentes if c not in bloqueados]),
+                "desistidos": sum(1 for f in self.falhados.values() if f[0] >= MAX_FALHAS),
+                "removidos": removidos, "quadros": len(self.quadros), "mb": tamanho / 1e6}
 
 
 def rodada(agora: datetime | None = None, produtos=None) -> dict:
     agora = agora or datetime.now(timezone.utc)
-    prazo = time.time() + TEMPO_RODADA_S
     os.makedirs(PASTA, exist_ok=True)
     # Versões antigas do formato: o app já não as pede.
     for nome in os.listdir(os.path.dirname(PASTA)):
         if nome != os.path.basename(PASTA):
             shutil.rmtree(os.path.join(os.path.dirname(PASTA), nome), ignore_errors=True)
+    limpar_parciais(RAIZ)
     estado = ler_json(ESTADO, {})
-    resultado = {}
-    # Primeiro o quadro novo de cada produto; o preenchimento do passado vem depois.
-    for p in produtos or PRODUTOS.values():
-        resultado[p.id] = rodada_produto(p, agora, estado, prazo)
+    trabalhos = [Trabalho(p, agora, estado) for p in produtos or PRODUTOS.values()]
+    # O prazo conta depois das listagens (na 1ª rodada são ~200, das 48 h).
+    prazo = time.time() + TEMPO_RODADA_S
+    # Primeiro o quadro mais novo de cada produto; depois o preenchimento do
+    # passado, um quadro de cada produto por vez, até o prazo da rodada. Assim
+    # um S3 lento no AOD (~42 MB por quadro) não deixa os outros sem o novo.
+    for t in trabalhos:
+        if time.time() < prazo:
+            t.um()
+    andou = True
+    while andou and time.time() < prazo:
+        andou = False
+        for t in trabalhos:
+            if time.time() >= prazo:
+                break
+            andou = t.um() or andou
+    resultado = {t.p.id: t.fechar() for t in trabalhos}
     corte = time.time() - JANELA.total_seconds() - 3600
     estado["listadas"] = {k: t for k, t in estado.get("listadas", {}).items() if t > corte}
     escrever_atomico(ESTADO, json.dumps(estado).encode())
@@ -470,7 +542,8 @@ def main() -> None:
         return
     r = rodada()
     for pid, x in r.items():
-        print(f"{pid}: {x['novos']} novos, {x['falhas']} falhas, {x['fila']} na fila, {x['removidos']} apagados, {x['quadros']} quadros em 48 h ({x['mb']:.1f} MB)")
+        print(f"{pid}: {x['novos']} novos, {x['falhas']} falhas, {x['fila']} na fila, {x['desistidos']} desistidos, "
+              f"{x['removidos']} apagados, {x['quadros']} quadros em 48 h ({x['mb']:.1f} MB)")
     novos, falhas = sum(x["novos"] for x in r.values()), sum(x["falhas"] for x in r.values())
     sys.exit(1 if falhas and not novos else 0)
 

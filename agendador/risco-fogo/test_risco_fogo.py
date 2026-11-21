@@ -12,6 +12,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from datetime import datetime, timezone
@@ -202,6 +203,15 @@ class Rodada(unittest.TestCase):
         with open(os.path.join(risco_fogo.PASTA, "indice.json")) as f:
             return json.load(f)
 
+    def arquivos(self, produto):
+        return sorted(os.listdir(os.path.join(risco_fogo.PASTA, produto)))
+
+    def coerente(self):
+        """Tudo o que o índice no ar cita existe no disco."""
+        for p in self.indice()["produtos"].values():
+            for d in p["dias"]:
+                self.assertTrue(os.path.exists(os.path.join(risco_fogo.PASTA, d["arquivo"])), d["arquivo"])
+
     def test_formato_do_indice_e_tres_dias(self):
         # 21/11 às 4h30 de Brasília: o mais novo esperado é o dia 20.
         agora = datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc)
@@ -214,18 +224,26 @@ class Rodada(unittest.TestCase):
             self.assertEqual((p["escala"], p["semDado"], p["maximo"]), (escala, 255, maximo))
             self.assertEqual(len(p["grade"]["caixa"]), 4)
             self.assertEqual([d["data"] for d in p["dias"]], ["2026-11-18", "2026-11-19", "2026-11-20"])
-            self.assertEqual(p["dias"][0]["arquivo"], f"{produto}/2026-11-18.png")
-            self.assertEqual(sorted(os.listdir(os.path.join(risco_fogo.PASTA, produto))),
-                             ["2026-11-18.png", "2026-11-19.png", "2026-11-20.png"])
+            # O app usa o `arquivo` do índice; o nome leva a grade (cache imutável).
+            g = risco_fogo.sufixo_da_grade(p["grade"])
+            self.assertEqual(p["dias"][0]["arquivo"], f"{produto}/2026-11-18_{g}.png")
+            self.assertEqual(self.arquivos(produto), [f"2026-11-{d}_{g}.png" for d in (18, 19, 20)])
+        self.coerente()
 
-    def test_dia_novo_entra_e_o_velho_sai_sem_baixar_de_novo(self):
+    def test_dia_novo_entra_e_o_velho_sai_depois_sem_baixar_de_novo(self):
         self.rodar(datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc), {"20261120", "20261119", "20261118"})
         self.pedidos.clear()
         self.rodar(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc), {"20261121", "20261120", "20261119", "20261118"})
         self.assertEqual(len(self.pedidos), 2)  # só o dia 21, dos dois produtos
         p = self.indice()["produtos"]["risco"]
         self.assertEqual([d["data"] for d in p["dias"]], ["2026-11-19", "2026-11-20", "2026-11-21"])
-        self.assertNotIn("2026-11-18.png", os.listdir(os.path.join(risco_fogo.PASTA, "risco")))
+        # O dia 18 saiu do índice, mas o arquivo fica até a rodada seguinte (índice anterior).
+        self.assertEqual(len(self.arquivos("risco")), 4)
+        self.rodar(datetime(2026, 11, 23, 7, 30, tzinfo=timezone.utc), {"20261122", "20261121", "20261120", "20261119"})
+        nomes = self.arquivos("risco")
+        self.assertFalse(any(n.startswith("2026-11-18") for n in nomes))  # fora dos dois índices: apagado
+        self.assertTrue(any(n.startswith("2026-11-19") for n in nomes))  # o anterior ainda o cita
+        self.coerente()
 
     def test_inpe_atrasado_e_nova_tentativa(self):
         # 4h30: o dia 21 ainda não saiu; ficam os três anteriores.
@@ -241,15 +259,71 @@ class Rodada(unittest.TestCase):
         self.assertTrue(r["em_dia"])
         self.assertEqual(self.pedidos, [])
 
+    def test_inpe_parado_mais_de_dez_dias_mantem_os_ultimos(self):
+        self.rodar(datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc), {"20261120", "20261119", "20261118"})
+        # 12 dias depois, nada novo: os três de antes continuam no índice e no disco.
+        r = self.rodar(datetime(2026, 12, 3, 7, 30, tzinfo=timezone.utc), set())
+        self.assertEqual(r["produtos"]["risco"]["ausentes"], risco_fogo.PROCURAR)
+        for p in self.indice()["produtos"].values():
+            self.assertEqual([d["data"] for d in p["dias"]], ["2026-11-18", "2026-11-19", "2026-11-20"])
+        self.coerente()
+
+    def test_dia_quebrado_nao_derruba_o_produto(self):
+        risco_bom = self.risco
+
+        def baixar(url):
+            self.pedidos.append(url)
+            if url.endswith("20261120.nc"):
+                return b"lixo"  # o dia 20 do INPE veio quebrado
+            return self.dias if "_NDWR_" in url else risco_bom
+
+        with mock.patch.object(risco_fogo, "baixar", side_effect=baixar):
+            r = risco_fogo.rodada(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc))
+        self.assertEqual(r["produtos"]["risco"]["erros"], 1)
+        # O dia novo (21) entra; o 20 fica de fora; completa com os anteriores.
+        self.assertEqual([d["data"] for d in self.indice()["produtos"]["risco"]["dias"]], ["2026-11-18", "2026-11-19", "2026-11-21"])
+        self.coerente()
+
     def test_um_produto_falhando_mantem_o_outro_e_o_anterior(self):
         agora = datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc)
         self.rodar(agora, {"20261120", "20261119", "20261118"})
-        self.dias = b"lixo"
-        r = self.rodar(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc), {"20261121", "20261120", "20261119", "20261118"})
-        self.assertIn("erro", r["produtos"]["dias"])
+        with mock.patch.object(risco_fogo, "rodada_produto", side_effect=[RuntimeError("disco"), (None, {"baixados": 0, "ausentes": 0, "erros": 0, "dias": []})]):
+            r = risco_fogo.rodada(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc))
+        self.assertIn("erro", r["produtos"]["risco"])
         ind = self.indice()
-        self.assertEqual(ind["produtos"]["risco"]["dias"][-1]["data"], "2026-11-21")
-        self.assertEqual(ind["produtos"]["dias"]["dias"][-1]["data"], "2026-11-20")  # o que estava no ar
+        self.assertEqual(ind["produtos"]["risco"]["dias"][-1]["data"], "2026-11-20")  # o que estava no ar
+        self.assertNotIn("dias", ind["produtos"])  # sem nenhum dia: sai do índice
+        self.coerente()
+
+    def test_produto_cujos_arquivos_sumiram_sai_do_indice(self):
+        self.rodar(datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc), {"20261120", "20261119", "20261118"})
+        shutil.rmtree(os.path.join(risco_fogo.PASTA, "dias"))
+        with mock.patch.object(risco_fogo, "rodada_produto", side_effect=[(self.indice()["produtos"]["risco"], {"dias": []}), RuntimeError("x")]):
+            risco_fogo.rodada(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc))
+        self.assertEqual(set(self.indice()["produtos"]), {"risco"})
+        self.coerente()
+
+    def test_grade_nova_muda_o_nome(self):
+        self.rodar(datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc), {"20261120", "20261119", "20261118"})
+        antes = self.indice()["produtos"]["risco"]["dias"][-1]["arquivo"]
+        self.risco = netcdf4(np.full((1000, 1000), 0.3, np.float32), lon=LON4 + 0.01)
+        self.rodar(datetime(2026, 11, 22, 7, 30, tzinfo=timezone.utc), {"20261121", "20261120", "20261119", "20261118"})
+        p = self.indice()["produtos"]["risco"]
+        self.assertTrue(all(risco_fogo.sufixo_da_grade(p["grade"]) in d["arquivo"] for d in p["dias"]))
+        self.assertNotIn(antes, [d["arquivo"] for d in p["dias"]])
+        self.coerente()
+
+    def test_parciais_velhos_sao_apagados(self):
+        os.makedirs(risco_fogo.PASTA)
+        velho = os.path.join(risco_fogo.PASTA, "indice.json.parcial-123")
+        recente = os.path.join(risco_fogo.PASTA, "indice.json.parcial-456")
+        for c in (velho, recente):
+            with open(c, "w") as f:
+                f.write("x")
+        os.utime(velho, (time.time() - 7200, time.time() - 7200))
+        self.rodar(datetime(2026, 11, 21, 7, 30, tzinfo=timezone.utc), {"20261120"})
+        self.assertFalse(os.path.exists(velho))
+        self.assertTrue(os.path.exists(recente))
 
 
 if __name__ == "__main__":

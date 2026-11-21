@@ -15,7 +15,10 @@ vizinhos (`rch_id_up`, `rch_id_dn`) enquanto o centro do trecho está na
 Amazônia Legal (com folga de 0,3°) e a largura prevista é ≥ 400 m, e pula os
 trechos que o Hydrocron não conhece pela numeração do SWORD. São ~2.700
 pedidos, ~1 h com 2 de cada vez. `swot.py percurso` refaz (as séries que
-já estão no estado continuam).
+já estão no estado continuam). Trecho cujo pedido falha (502 depois das
+tentativas, rede) fica de fora e a rodada seguinte retoma o percurso dele;
+só com mais de 10% de falhas nada é gravado. Só o traçado simplificado de
+cada trecho fica na memória (a geometria bruta sai assim que a resposta chega).
 
 **Dia a dia (incremental).** O estado guarda, por trecho, o traçado, a série e
 o horário da última passagem de cada órbita (`pass_id`) que o cobre. A órbita
@@ -39,6 +42,8 @@ Chave opcional (`x-hydrocron-key`): a PO.DAAC não exige, mas pede que uso
 contínuo com muitos pedidos por dia peça uma (issue no GitHub do Hydrocron).
 Com o arquivo SWOT_CHAVE (padrão /etc/amaview/hydrocron-key, gravado pelo
 `amaview chave hydrocron`), ela vai no cabeçalho; sem ele, tudo funciona igual.
+Um 401/403 (chave recusada) para a rodada na hora, com o motivo no diário; o
+que já tinha vindo fica gravado.
 
 Saída (abaixo de SWOT_RAIZ, servida pelo nginx em /swot/v1/):
 
@@ -88,6 +93,11 @@ LATENCIA_S = 5 * DIA  # a passagem chega ao Hydrocron ~4–5 dias depois (medido
 DESISTIR_S = 16 * DIA  # passagem que não chegou nisso fica para o ciclo seguinte
 REVISAO_S = 2 * CICLO_S  # revisão de cada trecho, escalonada
 FALTAS_MAX = 2  # passagens seguidas que não chegaram: a órbita para de disparar pedidos
+# Fração dos pedidos do percurso que pode falhar (502 depois das tentativas,
+# rede) sem perder a rodada: o resto é gravado e a próxima retoma dos que falharam.
+FALHAS_PERCURSO_MAX = 0.10
+# Resto de escrita interrompida (`*.parcial-PID`) mais velho que isto é apagado.
+PARCIAL_VELHO_S = 3600
 MARGEM_S = 2 * DIA
 
 #: Um trecho de cada rio grande, de onde o percurso parte (ids conferidos no
@@ -148,6 +158,10 @@ def ler_chave() -> str | None:
         return None
 
 
+class Recusado(RuntimeError):
+    """401/403: o Hydrocron recusou (chave inválida ou acesso cortado). Não adianta repetir."""
+
+
 class Hydrocron:
     """Pedidos ao Hydrocron, contados, com a chave opcional e recuo no 429/5xx."""
 
@@ -179,6 +193,12 @@ class Hydrocron:
             except urllib.error.HTTPError as e:
                 if e.code in (400, 404):
                     return None
+                if e.code in (401, 403):
+                    raise Recusado(
+                        f"o Hydrocron recusou o pedido (HTTP {e.code}) — "
+                        + ("confira a chave em " + CHAVE + " ou apague-a (amaview chave hydrocron remover)" if self.chave
+                           else "sem chave: talvez agora ele peça uma (amaview chave hydrocron)")
+                    ) from None
                 if k == tentativas - 1:
                     raise
                 # 429 ou 5xx: o serviço pediu calma.
@@ -374,15 +394,53 @@ def simplificar(geom: dict | None, tol: float = SIMPLIFICAR) -> list:
     return out
 
 
-def percorrer(h: Hydrocron, inicio: float, fim: float, area, limite: int = LIMITE_PERCURSO) -> dict:
-    """Busca em largura a partir das sementes; devolve {id: trecho do Hydrocron} dos aceitos."""
+def compactar(tr: dict) -> dict | None:
+    """Resposta do percurso → o estado do trecho (traçado simplificado, série): a geometria bruta não fica."""
+    linhas = simplificar(tr["geom"])
+    if not linhas:
+        return None
+    est = novo_trecho(tr, linhas)
+    mesclar(est, tr["obs"])
+    return est
+
+
+def juntar(est: dict, novo: dict) -> dict:
+    """O trecho que já estava no estado com o que o percurso acabou de trazer."""
+    serie = {s[0]: s for s in est["serie"]}
+    serie.update({s[0]: s for s in novo["serie"]})
+    est.update({"rio": novo["rio"], "larg": novo["larg"], "linhas": novo["linhas"], "serie": [serie[t] for t in sorted(serie)]})
+    for campo in ("passes", "validos"):
+        for k, v in novo[campo].items():
+            est[campo][k] = max(est[campo].get(k, 0.0), v)
+    return est
+
+
+def percorrer(h: Hydrocron, inicio: float, fim: float, area, fronteira=None, vistos=None,
+              limite: int = LIMITE_PERCURSO) -> tuple[dict, set, list]:
+    """
+    Busca em largura a partir das sementes (ou de `fronteira`, para retomar);
+    devolve ({id: estado do trecho} dos aceitos, ids vistos, pedidos que
+    falharam). Trecho cujo pedido falha (502 depois das tentativas, rede) não
+    derruba o percurso: fica fora agora e na lista para a rodada seguinte
+    retomar dali. Só o 401/403 (Recusado) para tudo.
+    """
     from shapely.geometry import Point
 
-    vistos: dict[str, dict | None] = {}
+    vistos = set(vistos or ())
     aceitos: dict[str, dict] = {}
+    falhados: list[tuple[str, str, int]] = []
     # (id, direção, saltos já usados para atravessar trechos que o Hydrocron não conhece)
-    fronteira: list[tuple[str, str, int]] = [(s, "ambos", 0) for s in SEMENTES]
+    fronteira = [tuple(x) for x in (fronteira or [(s, "ambos", 0) for s in SEMENTES])]
     t0 = time.time()
+
+    def pedir(it):
+        try:
+            return it, h.serie(it[0], inicio, fim, CAMPOS_PERCURSO), None
+        except Recusado:
+            raise
+        except Exception as e:  # noqa: BLE001
+            return it, None, e
+
     with cf.ThreadPoolExecutor(PARALELO) as ex:
         while fronteira and h.pedidos < limite:
             lote = []
@@ -391,9 +449,12 @@ def percorrer(h: Hydrocron, inicio: float, fim: float, area, limite: int = LIMIT
                     lote.append(item)
             lote = lote[: max(0, limite - h.pedidos)]
             fronteira = []
-            resultados = list(ex.map(lambda it: (it, h.serie(it[0], inicio, fim, CAMPOS_PERCURSO)), lote))
-            for (rid, direcao, saltos), tr in resultados:
-                vistos[rid] = tr
+            for (rid, direcao, saltos), tr, erro in ex.map(pedir, lote):
+                if erro is not None:
+                    falhados.append((rid, direcao, saltos))
+                    print(f"  percurso: {rid} falhou ({erro}); fica para a próxima rodada", file=sys.stderr, flush=True)
+                    continue
+                vistos.add(rid)
                 if tr is None:
                     if saltos < 2 and direcao in ("up", "dn"):
                         fronteira += [(a, direcao, saltos + 1) for a in alternativas(rid, direcao) if a not in vistos]
@@ -401,11 +462,13 @@ def percorrer(h: Hydrocron, inicio: float, fim: float, area, limite: int = LIMIT
                 dentro = tr["centro"] is not None and area.contains(Point(tr["centro"]))
                 if not dentro or tr["larg"] < LARGURA_MIN:
                     continue
-                aceitos[rid] = tr
-                fronteira += [(v, "up", 0) for v in tr["up"] if v not in vistos]
-                fronteira += [(v, "dn", 0) for v in tr["dn"] if v not in vistos]
-            print(f"  percurso: {h.pedidos} pedidos, {len(aceitos)} trechos aceitos ({time.time() - t0:.0f} s)", flush=True)
-    return aceitos
+                vizinhos = [(v, "up", 0) for v in tr["up"]] + [(v, "dn", 0) for v in tr["dn"]]
+                est = compactar(tr)  # a geometria bruta (centenas de pontos) sai da memória já
+                if est is not None:
+                    aceitos[rid] = est
+                fronteira += [v for v in vizinhos if v[0] not in vistos]
+            print(f"  percurso: {h.pedidos} pedidos, {len(aceitos)} trechos aceitos, {len(falhados)} falhas ({time.time() - t0:.0f} s)", flush=True)
+    return aceitos, vistos, falhados
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +488,19 @@ def ler_json(caminho: str, padrao):
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return padrao
+
+
+def limpar_parciais(pasta: str, idade_s: float = PARCIAL_VELHO_S) -> int:
+    """Apaga restos de escritas interrompidas (`*.parcial-PID`) mais velhos que `idade_s`."""
+    n = 0
+    if not os.path.isdir(pasta):
+        return 0
+    for nome in os.listdir(pasta):
+        caminho = os.path.join(pasta, nome)
+        if ".parcial-" in nome and time.time() - os.path.getmtime(caminho) > idade_s:
+            os.remove(caminho)
+            n += 1
+    return n
 
 
 def publicar(trechos: dict, agora: float) -> dict:
@@ -457,28 +533,44 @@ def publicar(trechos: dict, agora: float) -> dict:
 def rodada(agora: float | None = None, refazer_percurso: bool = False, h: Hydrocron | None = None) -> dict:
     agora = agora or time.time()
     h = h or Hydrocron(ler_chave())
+    limpar_parciais(RAIZ)
+    limpar_parciais(PASTA)
     estado = ler_json(ESTADO, {})
     trechos: dict[str, dict] = estado.get("trechos", {})
-    resumo = {"percurso": False, "pedidos": 0, "novas": 0, "puladas": 0, "pedidos_trecho": 0}
+    resumo = {"percurso": False, "pedidos": 0, "novas": 0, "puladas": 0, "pedidos_trecho": 0, "falhas": 0, "retomar": 0}
 
     if refazer_percurso or not trechos:
         resumo["percurso"] = True
-        aceitos = percorrer(h, agora - JANELA_S, agora, poligono_amazonia())
-        if not aceitos:
-            raise RuntimeError("o percurso não aceitou nenhum trecho (Hydrocron fora do ar?)")
+        aceitos, vistos, falhados = percorrer(h, agora - JANELA_S, agora, poligono_amazonia())
+        total = len(vistos) + len(falhados)
+        if not aceitos or len(falhados) > FALHAS_PERCURSO_MAX * total:
+            raise RuntimeError(f"percurso: {len(falhados)} de {total} pedidos falharam e {len(aceitos)} trechos aceitos "
+                               "(Hydrocron fora do ar?) — nada gravado; a próxima rodada tenta de novo")
         novo = {}
-        for rid, tr in aceitos.items():
-            linhas = simplificar(tr["geom"])
-            if not linhas:
-                continue
-            est = trechos.get(rid) or novo_trecho(tr, linhas)
-            est.update({"rio": tr["rio"], "larg": round(tr["larg"]), "linhas": linhas})
-            resumo["novas"] += mesclar(est, tr["obs"])
+        for rid, est in aceitos.items():
+            if rid in trechos:
+                est = juntar(trechos[rid], est)
+            resumo["novas"] += len(est["serie"])
             est["revisto"] = revisao_inicial(rid, agora)
             novo[rid] = est
         trechos = novo
         estado["percurso"] = agora
+        estado["vistos"] = sorted(vistos)
+        estado["retomar"] = falhados
+        resumo["falhas"] = len(falhados)
     else:
+        if estado.get("retomar"):
+            # O percurso deixou trechos sem resposta: continua dali, sem repedir o que já viu.
+            aceitos, vistos, falhados = percorrer(h, agora - JANELA_S, agora, poligono_amazonia(),
+                                                  fronteira=estado["retomar"], vistos=set(estado.get("vistos", [])) | set(trechos))
+            for rid, est in aceitos.items():
+                if rid not in trechos:
+                    est["revisto"] = revisao_inicial(rid, agora)
+                    trechos[rid] = est
+                    resumo["novas"] += len(est["serie"])
+            estado["vistos"] = sorted(vistos)
+            estado["retomar"] = falhados
+            print(f"  percurso retomado: {len(aceitos)} trechos a mais, {len(falhados)} ainda sem resposta", flush=True)
         fila = []
         for rid, est in trechos.items():
             pedido = pedido_do_trecho(rid, est, agora)
@@ -486,20 +578,32 @@ def rodada(agora: float | None = None, refazer_percurso: bool = False, h: Hydroc
                 fila.append((pedido[1], rid, pedido[0]))
         fila.sort()  # o que está esperando há mais tempo primeiro
         fila = fila[:LIMITE_RODADA]
+        recusado = threading.Event()
 
         def um(item):
+            if recusado.is_set():
+                return item, None, None, True
             inicio, rid, motivo = item
-            return item, h.serie(rid, max(inicio, agora - JANELA_S), agora)
+            return item, h.serie(rid, max(inicio, agora - JANELA_S), agora), None, False
 
-        falhas = 0
+        erro_recusa = None
         with cf.ThreadPoolExecutor(PARALELO) as ex:
             futuros = [ex.submit(um, it) for it in fila]
             for fut in cf.as_completed(futuros):
                 try:
-                    (inicio, rid, motivo), tr = fut.result()
+                    (inicio, rid, motivo), tr, _, pulado = fut.result()
+                except Recusado as e:
+                    # Chave ou acesso: nada mais vai passar; o que já veio fica gravado.
+                    if not recusado.is_set():
+                        recusado.set()
+                        erro_recusa = e
+                        print(f"PARADO: {e}", file=sys.stderr, flush=True)
+                    continue
                 except Exception as e:  # noqa: BLE001 — um trecho falhando não para os outros
-                    falhas += 1
+                    resumo["falhas"] += 1
                     print(f"falha num pedido: {e}", file=sys.stderr)
+                    continue
+                if pulado:
                     continue
                 est = trechos[rid]
                 if tr is not None:
@@ -508,7 +612,9 @@ def rodada(agora: float | None = None, refazer_percurso: bool = False, h: Hydroc
                     est["revisto"] = agora
                 resumo["puladas"] += desistir(est, agora)
         resumo["pedidos_trecho"] = len(fila)
-        resumo["falhas"] = falhas
+        if erro_recusa is not None:
+            resumo["recusado"] = str(erro_recusa)
+    resumo["retomar"] = len(estado.get("retomar", []))
 
     for est in trechos.values():
         aparar(est, agora)
@@ -532,6 +638,11 @@ def main() -> None:
         f"{r['trechos']} trechos ({r['com_passagem']} com passagem, {r['passagens']} passagens), "
         f"trechos.json {r['kb']:.0f} KB, {time.time() - t0:.0f} s"
     )
+    if r.get("retomar"):
+        print(f"{r['retomar']} trechos do percurso ficaram sem resposta: a próxima rodada continua deles")
+    if r.get("recusado"):
+        print(f"PARADO: {r['recusado']}")
+        sys.exit(1)
     sys.exit(1 if r.get("falhas") and r["falhas"] >= max(1, r.get("pedidos_trecho", 0)) else 0)
 
 
