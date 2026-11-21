@@ -1,0 +1,15 @@
+[Unit]
+Description=Risco de fogo do INPE, às 4h30 de Brasília (e de novo às 7h30, se o dia ainda não saiu)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/risco-fogo
+
+[Timer]
+# O INPE publica por volta das 3h30 de Brasília o dia anterior. Às 7h30 a
+# rodada só pede algo ao INPE se o dia ainda não estiver publicado aqui.
+OnCalendar=*-*-* 04:30:00 America/Sao_Paulo
+OnCalendar=*-*-* 07:30:00 America/Sao_Paulo
+Persistent=true
+AccuracySec=1min
+Unit=amaview-risco-fogo.service
+
+[Install]
+WantedBy=timers.target

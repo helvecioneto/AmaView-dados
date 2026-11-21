@@ -1,0 +1,28 @@
+[Unit]
+Description=Risco de fogo e dias sem chuva do INPE para o AmaView (recorte da Amazônia Legal em PNG)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/risco-fogo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/risco-fogo/risco_fogo.py
+User=amaview-risco-fogo
+Group=amaview-risco-fogo
+# /var/cache/amaview-risco-fogo, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-risco-fogo
+CacheDirectoryMode=0755
+UMask=0022
+Environment=RISCO_RAIZ=/var/cache/amaview-risco-fogo
+Environment=PYTHONUNBUFFERED=1
+# Um dia novo: ~15 MB baixados para a memória e ~5 s de processador.
+TimeoutStartSec=15min
+Nice=10
+CPUQuota=100%
+MemoryMax=768M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
