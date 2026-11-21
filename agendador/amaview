@@ -111,8 +111,10 @@ gerar_site_blocos() {
   # próxima rodada não acha o site quebrado (nem derruba o dados.amaview.com.br).
   itens="$(cd /etc/nginx && ls -d snippets/amaview-*.conf conf.d/amaview-*.conf sites-available/amaview-blocos 2>/dev/null)"
   copia="$(mktemp)"
+  # O tar (root) escreve na saída e o arquivo é aberto por quem roda: no /tmp,
+  # o `fs.protected_regular` impede o root de abrir o arquivo de outro usuário.
   # shellcheck disable=SC2086 # lista de nomes sem espaço, um por palavra
-  [ -n "$itens" ] && sudo tar -C /etc/nginx -cf "$copia" $itens
+  [ -n "$itens" ] && sudo tar -C /etc/nginx -cf - $itens >"$copia"
   sudo install -m 644 "$src/nginx-locais.conf" /etc/nginx/snippets/amaview-blocos.conf
   sudo install -m 644 "$DESTINO/agendador/fumaca/nginx-locais.conf" /etc/nginx/snippets/amaview-fumaca.conf
   sudo install -m 644 "$DESTINO/agendador/ar/nginx-locais.conf" /etc/nginx/snippets/amaview-ar.conf
@@ -164,7 +166,7 @@ gerar_site_blocos() {
     sudo nginx -t 2>&1 | tail -n 3 | sed 's/^/    /'
     sudo rm -f /etc/nginx/snippets/amaview-*.conf /etc/nginx/conf.d/amaview-*.conf
     if [ -n "$itens" ]; then
-      sudo tar -C /etc/nginx -xf "$copia"
+      sudo tar -C /etc/nginx -xf - <"$copia"
     else
       sudo rm -f "$BLOCOS_SITE" /etc/nginx/sites-enabled/amaview-blocos
     fi
