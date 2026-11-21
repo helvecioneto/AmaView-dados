@@ -1,0 +1,37 @@
+[Unit]
+Description=Nível dos rios pelo satélite SWOT para o AmaView (séries do Hydrocron, incremental)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/swot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/swot/swot.py
+User=amaview-swot
+Group=amaview-swot
+# /var/cache/amaview-swot, legível pelo nginx (www-data): pastas 755, arquivos 644.
+# O estado (estado.json, ~3 MB) fica na raiz, fora do que o nginx serve;
+# apagado, a próxima rodada refaz o percurso da rede (~2.700 pedidos).
+CacheDirectory=amaview-swot
+CacheDirectoryMode=0755
+UMask=0022
+Environment=SWOT_RAIZ=/var/cache/amaview-swot
+# Chave opcional do Hydrocron (`amaview chave hydrocron`); sem o arquivo, sem chave.
+Environment=SWOT_CHAVE=/etc/amaview/hydrocron-key
+# Dois pedidos ao Hydrocron de cada vez, no máximo 1.500 por rodada.
+Environment=SWOT_PARALELO=2
+Environment=SWOT_LIMITE=1500
+Environment=PYTHONUNBUFFERED=1
+# Dia a dia: alguns minutos. O primeiro percurso da rede: ~1 h (medido no
+# Mac em 21/11/2026; o Hydrocron às vezes fica lento). Sem completar, nada é
+# gravado e a próxima rodada recomeça: o prazo é folgado de propósito.
+TimeoutStartSec=4h
+Nice=10
+CPUQuota=50%
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

@@ -1,0 +1,14 @@
+[Unit]
+Description=Nível dos rios pelo SWOT, todo dia às 5h de Brasília
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/swot
+
+[Timer]
+# O satélite passa por cada trecho a cada ~10–21 dias e o Hydrocron recebe a
+# passagem ~4–5 dias depois: uma rodada por dia basta, de madrugada.
+OnCalendar=*-*-* 05:00:00 America/Sao_Paulo
+Persistent=true
+AccuracySec=1min
+Unit=amaview-swot.service
+
+[Install]
+WantedBy=timers.target
