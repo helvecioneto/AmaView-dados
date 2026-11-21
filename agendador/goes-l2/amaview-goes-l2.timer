@@ -1,0 +1,15 @@
+[Unit]
+Description=Medições do GOES-19 (produtos L2 da NOAA) a cada 10 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/goes-l2
+
+[Timer]
+# A NOAA põe cada quadro no S3 de 10 a 14 min depois do início da varredura
+# (de 10 em 10 min; o LST, de hora em hora). Olhar no minuto 4 de cada dezena
+# pega o AOD e o CAPE da varredura de 20 min antes e o TPW da de 10 min antes.
+OnCalendar=*:04/10
+Persistent=true
+AccuracySec=10s
+Unit=amaview-goes-l2.service
+
+[Install]
+WantedBy=timers.target

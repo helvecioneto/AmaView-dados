@@ -1,0 +1,31 @@
+[Unit]
+Description=Medições do GOES-19 para o AmaView (AOD, LST, TPW e CAPE da NOAA em PNG)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/goes-l2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/goes-l2/goes_l2.py
+User=amaview-goes-l2
+Group=amaview-goes-l2
+# /var/cache/amaview-goes-l2, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-goes-l2
+CacheDirectoryMode=0755
+UMask=0022
+Environment=GOESL2_RAIZ=/var/cache/amaview-goes-l2
+Environment=PYTHONUNBUFFERED=1
+# A rodada para de pegar quadro novo em 5,5 min (GOESL2_TEMPO_RODADA_S); o
+# resto fica na fila da próxima. O preenchimento das 48 h leva ~4 h de rodadas.
+TimeoutStartSec=9min
+# Trabalho de fundo: o agendador, os blocos e o nginx vêm primeiro. Um núcleo
+# no máximo; o AOD de dia (~42 MB) fica todo na memória enquanto é lido.
+Nice=10
+CPUQuota=100%
+MemoryMax=1G
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
