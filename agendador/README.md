@@ -418,6 +418,13 @@ URLs (em `https://147.15.84.134/ar/v1/`):
 - `cams-series.json` (~1 MB, ~250 KB com gzip): as seis variáveis por célula
   (`vars`, `unidades`, `series`), para a ficha de uma célula.
 
+Uma fonte fora do ar não segura a rodada: cada uma tem 60 s (o CAMS, 150 s),
+somando as novas tentativas, e a rodada inteira 210 s, abaixo do limite de
+5 min do serviço; o `pontos.json` sai com as que responderam e o `erro` da que
+falhou. A que cai por rede duas rodadas seguidas descansa 30 min (antes disso,
+a RedeAr fora do ar em 23/11/2026 fez o systemd matar toda rodada e o arquivo
+parou de ser publicado).
+
 Logs: `journalctl -u amaview-ar`. Testes (sem rede):
 `python3 -m unittest discover -s agendador/ar`.
 

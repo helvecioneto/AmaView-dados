@@ -55,11 +55,13 @@ Saída (abaixo de AR_RAIZ, servida pelo nginx em /ar/v1/):
 import json
 import math
 import os
+import signal
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 VERSAO = 1
@@ -138,6 +140,15 @@ REDEAR_SERIE_S = 6 * 3600
 # A produção da RedeAr é conferida de tempos em tempos: se voltar a ter o dado
 # mais novo, passa a ser a base.
 REDEAR_CONFERE_S = 6 * 3600
+# Cada fonte tem um prazo (todos os pedidos dela, com as novas tentativas) e
+# a rodada um orçamento abaixo do TimeoutStartSec do serviço (5 min). Em
+# 23/11/2026 a RedeAr saiu do ar inteira: cada conexão esperava 120 s, três
+# vezes, nas duas bases, o systemd matava a rodada e o pontos.json parou.
+PRAZO_FONTE_S = 60
+PRAZO_CAMS_S = 150
+ORCAMENTO_RODADA_S = 210
+# Fonte que cai por rede duas rodadas seguidas descansa antes de ser tentada de novo.
+PAUSA_FONTE_S = 30 * 60
 # Deduplicação por proximidade (OpenAQ × fontes diretas).
 MESMO_LUGAR_M = 200
 # Um sensor de fonte horária pinta o mapa até esta folga depois da leitura.
@@ -190,6 +201,27 @@ def baixar(url: str, tentativas: int = 3, timeout: int = 60, cabecalhos: dict | 
 
 def baixar_json(url: str, **kw):
     return json.loads(baixar(url, **kw))
+
+
+class PrazoEsgotado(BaseException):
+    """A fonte passou do prazo. Não é `Exception`: nenhuma nova tentativa nem a base reserva a seguram."""
+
+
+@contextmanager
+def prazo(segundos: float):
+    def estourou(*_):
+        raise PrazoEsgotado(f"sem resposta em {segundos:.0f} s")
+
+    anterior = signal.signal(signal.SIGALRM, estourou)
+    signal.setitimer(signal.ITIMER_REAL, segundos)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, anterior)
+
+
+ERROS_DE_REDE = (PrazoEsgotado, urllib.error.URLError, TimeoutError, ConnectionError)
 
 
 # ---------------------------------------------------------------------------
@@ -1501,21 +1533,39 @@ def rodada(agora: float | None = None) -> dict:
     fontes = estado.setdefault("fontes", {})
     anel = carregar_anel()
     conf = ler_conf()
+    pausas = estado.setdefault("pausas", {})
+    inicio = time.monotonic()
     falhas = 0
     tentadas = 0
 
-    def tentar(nome: str, fn) -> None:
+    def tentar(nome: str, fn, limite: float = PRAZO_FONTE_S) -> None:
         nonlocal falhas, tentadas
+        p = pausas.get(nome, {})
+        if agora < p.get("ate", 0):
+            return  # fora do ar há pouco: fica com o que já tinha
+        resta = ORCAMENTO_RODADA_S - (time.monotonic() - inicio)
+        if resta < 5:
+            print(f"{nome}: fica para a próxima rodada (sem tempo nesta)", file=sys.stderr)
+            return
         tentadas += 1
         try:
-            r = fn()
+            with prazo(min(limite, resta)):
+                r = fn()
+            pausas.pop(nome, None)
             if r:
                 print(f"{nome}: {r}")
                 marcar(fontes, nome, agora, None)
-        except Exception as e:  # noqa: BLE001 — uma fonte fora não derruba as outras
+        except (Exception, PrazoEsgotado) as e:  # noqa: BLE001 — uma fonte fora não derruba as outras
             falhas += 1
             marcar(fontes, nome, agora, e)
             print(f"{nome}: falhou — {e}", file=sys.stderr)
+            if isinstance(e, ERROS_DE_REDE):
+                seguidas = p.get("seguidas", 0) + 1
+                pausas[nome] = {"seguidas": seguidas, "ate": agora + PAUSA_FONTE_S if seguidas >= 2 else 0}
+                if seguidas >= 2:
+                    print(f"{nome}: fora do ar; nova tentativa em {PAUSA_FONTE_S // 60} min", file=sys.stderr)
+            else:
+                pausas.pop(nome, None)
 
     tentar("ufac", lambda: atualizar_ufac(estado, agora))
     tentar("redear", lambda: atualizar_redear(estado, agora, anel))
@@ -1524,7 +1574,7 @@ def rodada(agora: float | None = None) -> dict:
     tentar("purpleair", lambda: atualizar_purpleair(estado, agora, anel, conf, fontes))
     tentar("openaq", lambda: atualizar_openaq(estado, agora, anel, conf, fontes))
     tentar("monitorar", lambda: atualizar_monitorar(estado, agora))
-    tentar("cams", lambda: atualizar_cams(estado, agora, anel))
+    tentar("cams", lambda: atualizar_cams(estado, agora, anel), PRAZO_CAMS_S)
 
     sensores, municipios = publicar_ufac(estado.get("ufac", {}), agora)
     sensores["lista"] = juntar_sensores(
@@ -1584,7 +1634,7 @@ def main() -> None:
         f"rodada: {r['sensores']} sensores ({r['vivos']} com dado em 48 h: {por_fonte}), {r['estacoes']} estações oficiais, "
         f"{r['falhas']} fontes falharam · {r['publicado']}"
     )
-    sys.exit(1 if r["falhas"] == r["tentadas"] else 0)
+    sys.exit(1 if r["tentadas"] and r["falhas"] == r["tentadas"] else 0)
 
 
 if __name__ == "__main__":

@@ -564,6 +564,35 @@ class TestFontesNovas(unittest.TestCase):
         self.assertTrue(any(u.startswith(ar.REDEAR_PROD) for u, _ in self.api.pedidos))
         self.assertIn(161259, self.sensores())
 
+    def test_fonte_que_trava_e_cortada_no_prazo_e_descansa(self):
+        # A RedeAr fora do ar (23/11/2026): a conexão não responde nem dá erro.
+        import select
+
+        def travada(url, **kw):
+            if "redear.org.br" in url:
+                select.select([], [], [], 5)
+            return self.api(url, **kw)
+
+        with mock.patch.object(ar, "baixar_json", side_effect=travada), mock.patch.object(ar, "PRAZO_FONTE_S", 0.2):
+            r = ar.rodada(AGORA2)
+            self.assertEqual(r["falhas"], 1)
+            p = self.ler()
+            self.assertIn("sem resposta", p["fontes"]["redear"]["erro"])
+            self.assertIsNone(p["fontes"]["ufac"]["erro"])
+            self.assertIn(25531, self.sensores())  # as outras fontes publicadas
+            # Segunda queda seguida: pausa; na rodada seguinte nem é pedida.
+            ar.rodada(AGORA2 + 300)
+            n = len(self.api.pedidos)
+            r = ar.rodada(AGORA2 + 600)
+            self.assertEqual((r["falhas"], r["tentadas"]), (0, 6))
+            self.assertFalse(any("redear" in u for u, _ in self.api.pedidos[n:]))
+            # Passada a pausa, volta a ser tentada (e volta ao normal ao responder).
+            n = len(self.api.pedidos)
+        r = ar.rodada(AGORA2 + 300 + ar.PAUSA_FONTE_S + 1)
+        self.assertEqual(r["falhas"], 0)
+        self.assertTrue(any("redear" in u for u, _ in self.api.pedidos[n:]))
+        self.assertIsNone(self.ler()["fontes"]["redear"]["erro"])
+
     def test_purpleair_com_chave_so_consulta_o_que_falta(self):
         self.chave("purpleair")
         ar.rodada(AGORA2)
