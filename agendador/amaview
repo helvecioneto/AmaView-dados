@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato, risco de fogo, medições, SWOT)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios, o retrato da denúncia, o risco de fogo, as medições do GOES-19 e o SWOT
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato, risco de fogo, medições, SWOT, aeronaves)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios, o retrato da denúncia, o risco de fogo, as medições do GOES-19, o SWOT e as aeronaves
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
@@ -13,6 +13,7 @@
 #   amaview chave openwaters    grava o token opcional do AIS (embarcações; sem eco)
 #   amaview chave redemet       grava a chave da API da REDEMET (radares do DECEA; sem eco; testa antes)
 #   amaview chave hydrocron     grava a chave opcional do Hydrocron (SWOT; sem eco; testa antes)
+#   amaview chave opensky       grava a conta opcional da OpenSky (reserva das aeronaves; sem eco; testa antes)
 #   amaview disparar [g] roda um ciclo agora (chuva, radar ou sondagem)
 #   amaview logs [n]     últimas execuções
 #   amaview parar        desliga os timers
@@ -97,6 +98,7 @@ instalar() {
   instalar_risco_fogo
   instalar_goes_l2
   instalar_swot
+  instalar_aeronaves
   instalar_blocos
   instalar_dados
   # Depois do site do nginx refeito sem o include dela.
@@ -128,6 +130,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/risco-fogo/nginx-locais.conf" /etc/nginx/snippets/amaview-risco-fogo.conf
   sudo install -m 644 "$DESTINO/agendador/goes-l2/nginx-locais.conf" /etc/nginx/snippets/amaview-goes-l2.conf
   sudo install -m 644 "$DESTINO/agendador/swot/nginx-locais.conf" /etc/nginx/snippets/amaview-swot.conf
+  sudo install -m 644 "$DESTINO/agendador/aeronaves/nginx-locais.conf" /etc/nginx/snippets/amaview-aeronaves.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -340,6 +343,72 @@ instalar_swot() {
     sudo systemctl start --no-block amaview-swot.service \
       && echo "  primeiro percurso da rede disparado (~1 h; journalctl -u amaview-swot)"
   fi
+}
+
+# Aeronaves (agendador/aeronaves): ADS-B das redes abertas a cada minuto,
+# JSON em /var/cache/amaview-aeronaves, que o nginx serve em /aeronaves/. O
+# estado (/var/lib/amaview-aeronaves) tem a posição recente das aeronaves de
+# fiscalização, que saem com 1 h de atraso, e não é servido.
+instalar_aeronaves() {
+  titulo "Aeronaves"
+  getent passwd amaview-aeronaves >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-aeronaves
+  sudo cp "$DESTINO/agendador/aeronaves/amaview-aeronaves.service" "$DESTINO/agendador/aeronaves/amaview-aeronaves.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-aeronaves.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-aeronaves.timer && verde "  amaview-aeronaves.timer ligado (a cada minuto)"
+}
+
+situacao_aeronaves() {
+  titulo "Aeronaves (/aeronaves/)"
+  systemctl is-active --quiet amaview-aeronaves.timer || amarelo "  amaview-aeronaves.timer desligado — rode: amaview instalar"
+  python3 - <<'PY2' 2>/dev/null || amarelo "  sem atual.json ainda em /var/cache/amaview-aeronaves"
+import json
+from datetime import datetime, timezone
+a = json.load(open("/var/cache/amaview-aeronaves/aeronaves/v1/atual.json"))
+idade = (datetime.now(timezone.utc) - datetime.fromisoformat(a["gerado"].replace("Z", "+00:00"))).total_seconds() / 60
+pub = sum(1 for x in a["aeronaves"] if x["c"] != "outro")
+print(f"  {len(a['aeronaves'])} aeronaves ({pub} de serviço público) · fonte {a['fonte']} · há {idade:.0f} min")
+PY2
+  journalctl -u amaview-aeronaves -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  sudo test -s /etc/amaview/opensky.env && echo "  com a conta da OpenSky" || echo "  sem a conta da OpenSky (opcional: amaview chave opensky)"
+  echo "  em disco: $(du -sh /var/cache/amaview-aeronaves 2>/dev/null | cut -f1) publicado, $(sudo du -sh /var/lib/amaview-aeronaves 2>/dev/null | cut -f1) de estado"
+}
+
+# Conta da OpenSky (reserva das aeronaves, OAuth2 client credentials):
+# client_id e client_secret pedidos sem eco, testados ANTES de gravar (o
+# segredo vai pelo stdin do curl, nunca na linha de comando) e gravados 600
+# root, que o systemd lê no EnvironmentFile.
+gravar_conta_opensky() {
+  local arq="/etc/amaview/opensky.env" acao="${1:-}"
+  titulo "Conta da OpenSky"
+  if [ "$acao" = "remover" ]; then
+    sudo rm -f "$arq" && verde "  $arq apagado; a OpenSky segue anônima (400 créditos/dia)"
+    return 0
+  fi
+  echo "  Onde conseguir: https://opensky-network.org/my-opensky/account → API Client (baixe o credentials.json)"
+  echo
+  read -rp "  client_id: " cid
+  read -rsp "  client_secret (não aparece na tela): " seg
+  echo
+  cid="$(printf '%s' "$cid" | tr -d '[:space:]')"; seg="$(printf '%s' "$seg" | tr -d '[:space:]')"
+  if [ -z "$cid" ] || [ -z "$seg" ]; then vermelho "  faltou o client_id ou o segredo; nada gravado"; return 1; fi
+  echo "  Testando…"
+  local codigo
+  codigo="$(printf 'grant_type=client_credentials&client_id=%s&client_secret=%s' "$cid" "$seg" \
+    | curl -s -m 30 -o /dev/null -w '%{http_code}' --data-binary @- \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token)"
+  if [ "$codigo" != "200" ]; then
+    unset seg
+    vermelho "  conta recusada (HTTP $codigo) — nada gravado"
+    return 1
+  fi
+  sudo mkdir -p /etc/amaview
+  sudo install -m 600 -o root -g root /dev/null "$arq"
+  printf 'OPENSKY_CLIENT_ID=%s\nOPENSKY_CLIENT_SECRET=%s\n' "$cid" "$seg" | sudo tee "$arq" >/dev/null
+  unset seg
+  verde "  aceita e gravada em $arq (600 root); vale a partir da próxima rodada"
 }
 
 situacao_swot() {
@@ -1266,6 +1335,7 @@ situacao() {
   situacao_risco_fogo
   situacao_goes_l2
   situacao_swot
+  situacao_aeronaves
 
   situacao_blocos
   situacao_fumaca
@@ -1291,6 +1361,7 @@ case "${1:-status}" in
       cemaden | openwaters) gravar_conta_dados "$2" "${3:-}" ;;
       redemet) gravar_chave_redemet "${3:-}" ;;
       hydrocron) gravar_chave_hydrocron "${3:-}" ;;
+      opensky) gravar_conta_opensky "${3:-}" ;;
       *) gravar_chave "${2:-}" "${3:-}" ;;
     esac
     ;;
@@ -1308,7 +1379,7 @@ case "${1:-status}" in
     sudo rm -f /etc/systemd/system/amaview-dados@.service
     sudo systemctl disable --now amaview-focos.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-focos.service /etc/systemd/system/amaview-focos.timer /etc/nginx/snippets/amaview-focos.conf
-    for u in amaview-risco-fogo amaview-goes-l2 amaview-swot; do
+    for u in amaview-risco-fogo amaview-goes-l2 amaview-swot amaview-aeronaves; do
       sudo systemctl disable --now "$u.timer" 2>/dev/null
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" "/etc/nginx/snippets/$u.conf"
     done

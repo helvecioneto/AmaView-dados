@@ -14,6 +14,7 @@
 > | `amaview-dados-chuva.timer` | a cada 15 min | CEMADEN, embarcações, rios (1×/h) |
 > | `amaview-dados-sondagem.timer` | 07/10/19/22h22 UTC | radiossondas do Wyoming |
 > | `amaview-focos.timer` | a cada minuto | focos do GOES-19 (FDC da NOAA) em `/focos/v1/` |
+> | `amaview-aeronaves.timer` | a cada minuto | aeronaves por ADS-B (adsb.fi, adsb.lol, OpenSky) em `/aeronaves/v1/` |
 > | `amaview-risco-fogo.timer` | 4h30 de Brasília (7h30 se o INPE atrasar) | risco de fogo e dias sem chuva do INPE em `/risco-fogo/v1/` |
 > | `amaview-goes-l2.timer` | a cada 10 min | medições do GOES-19 (AOD, LST, TPW, CAPE da NOAA) em `/goes-l2/v1/` |
 > | `amaview-swot.timer` | todo dia às 5h de Brasília | nível dos rios pelo SWOT (Hydrocron) em `/swot/v1/` |
@@ -1050,3 +1051,22 @@ sudo userdel amaview-area-queimada
 - Se vazar, revogue em <https://github.com/settings/tokens?type=beta>. O pior
   que alguém faz com ele é disparar ciclos de dados públicos.
 
+## Aeronaves (`aeronaves/`)
+
+`amaview-aeronaves.timer` (a cada minuto, oneshot, usuário `amaview-aeronaves`) lê a
+posição por ADS-B das aeronaves sobre a Amazônia Legal nas redes abertas e grava
+`/var/cache/amaview-aeronaves/aeronaves/v1/atual.json` (6 h de trilha), que o nginx
+serve em `/aeronaves/v1/`. Detalhes no cabeçalho de `aeronaves.py`.
+
+- **Fontes:** adsb.fi (principal, 1 pedido/s), adsb.lol (reserva; 500 pedidos/dia por
+  IP, só com cota), OpenSky (se as duas falharem, no máximo a cada 2 min; conta
+  opcional com `sudo amaview chave opensky`, em `/etc/amaview/opensky.env`).
+- **Serviço público:** militares do Brasil, órgãos públicos do RAB da ANAC e os
+  aviões-tanque e helicópteros das contratadas do combate a incêndio (`CONTRATADAS`,
+  rever a cada temporada). A frota é refeita uma vez por dia (RAB + banco aberto
+  `wiedehopf/tar1090-db`) em `/var/lib/amaview-aeronaves/frota.json`.
+- **Atraso de 1 h** para polícia, meio ambiente, governo e Forças Armadas (menos os
+  cargueiros): a posição recente fica só em `/var/lib/amaview-aeronaves`, que não é
+  servido. As demais, em tempo real. Particular nunca leva o nome do dono; PIA e LADD
+  ficam de fora.
+- Testes: `python3 -m unittest discover -s agendador/aeronaves`.

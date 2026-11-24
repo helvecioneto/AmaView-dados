@@ -1,0 +1,13 @@
+[Unit]
+Description=Aeronaves sobre a Amazônia Legal (ADS-B) a cada minuto
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/aeronaves
+
+[Timer]
+# A posição do ADS-B muda a cada segundo; um minuto é o passo da trilha.
+# Rodada ainda em curso: o systemd pula o disparo (oneshot), nada se acumula.
+OnCalendar=*:*:40
+AccuracySec=2s
+Unit=amaview-aeronaves.service
+
+[Install]
+WantedBy=timers.target

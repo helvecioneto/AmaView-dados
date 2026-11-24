@@ -1,0 +1,33 @@
+[Unit]
+Description=Aeronaves sobre a Amazônia Legal para o AmaView (ADS-B: adsb.fi, adsb.lol, OpenSky)
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/aeronaves
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/aeronaves/aeronaves.py
+User=amaview-aeronaves
+Group=amaview-aeronaves
+# Publicado: /var/cache/amaview-aeronaves, legível pelo nginx (pastas 755, arquivos 644).
+CacheDirectory=amaview-aeronaves
+CacheDirectoryMode=0755
+UMask=0022
+# Estado: a posição recente das aeronaves que saem com atraso. NUNCA servido.
+StateDirectory=amaview-aeronaves
+StateDirectoryMode=0700
+Environment=AERONAVES_RAIZ=/var/cache/amaview-aeronaves
+Environment=AERONAVES_ESTADO=/var/lib/amaview-aeronaves
+Environment=PYTHONUNBUFFERED=1
+# A conta da OpenSky (opcional), gravada pelo `amaview chave opensky`.
+EnvironmentFile=-/etc/amaview/opensky.env
+# Uma rodada leva ~15 s; a frota do dia (RAB + banco de endereços, ~14 MB) mais ~30 s.
+TimeoutStartSec=3min
+Nice=5
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
