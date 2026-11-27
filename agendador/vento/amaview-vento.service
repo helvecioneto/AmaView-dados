@@ -1,5 +1,5 @@
 [Unit]
-Description=Vento do ECMWF (IFS, dados abertos) em três níveis para a camada Vento do AmaView
+Description=Vento do ECMWF (IFS, dados abertos) em cinco alturas para a camada Vento do AmaView
 Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/vento
 After=network-online.target
 Wants=network-online.target
