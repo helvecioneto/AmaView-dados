@@ -1,0 +1,29 @@
+[Unit]
+Description=Vento do ECMWF (IFS, dados abertos) em três níveis para a camada Vento do AmaView
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/vento
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/amaview/agendador/vento/vento.py
+User=amaview-vento
+Group=amaview-vento
+# /var/cache/amaview-vento, legível pelo nginx (www-data): pastas 755, arquivos 644.
+CacheDirectory=amaview-vento
+CacheDirectoryMode=0755
+UMask=0022
+Environment=VENTO_RAIZ=/var/cache/amaview-vento
+Environment=PYTHONUNBUFFERED=1
+# Rodada nova: 7 passos × 6 campos (~25 MB, ~2 min). A primeira execução preenche
+# 3 dias (~25 passos, ~8 min). Sem novidade: um HEAD no ECMWF.
+TimeoutStartSec=40min
+Nice=10
+CPUQuota=100%
+MemoryMax=768M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true

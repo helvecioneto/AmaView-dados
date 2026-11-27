@@ -1,0 +1,14 @@
+[Unit]
+Description=Vento do ECMWF a cada 20 minutos
+Documentation=https://github.com/helvecioneto/AmaView-dados/tree/main/agendador/vento
+
+[Timer]
+# Rodadas de 00, 06, 12 e 18 UTC, no servidor aberto ~7,5 h depois. Fora dos
+# minutos da previsão (:00/:20/:40), que usa o mesmo servidor e o limite dele.
+OnCalendar=*:10/20
+Persistent=true
+AccuracySec=1min
+Unit=amaview-vento.service
+
+[Install]
+WantedBy=timers.target

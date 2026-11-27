@@ -2,8 +2,8 @@
 #
 # Painel do agendador do AmaView numa linha só.
 #
-#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato, risco de fogo, medições, SWOT, aeronaves)
-#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios, o retrato da denúncia, o risco de fogo, as medições do GOES-19, o SWOT e as aeronaves
+#   amaview              situação (timers, últimas execuções, frescor do dado, blocos, fumaça, ar, estações, rastreio, previsão, GSMaP, rastreio da chuva, terreno, raios, retrato, risco de fogo, medições, SWOT, aeronaves, vento)
+#   amaview instalar     clona/atualiza, instala as unidades e liga os timers, os blocos, a fumaça, o ar, as estações, a previsão, o GSMaP e o rastreio da chuva, o terreno, os raios, o retrato da denúncia, o risco de fogo, as medições do GOES-19, o SWOT, as aeronaves e o vento
 #   amaview certificado  HTTPS dos blocos (Let's Encrypt; uma vez, renova sozinho)
 #   amaview renovar-ip   emite/renova o certificado do IP (o timer chama; manual também serve)
 #   amaview chave F      grava a chave da qualidade do ar (F = purpleair | openaq; sem eco; testa antes)
@@ -99,6 +99,7 @@ instalar() {
   instalar_goes_l2
   instalar_swot
   instalar_aeronaves
+  instalar_vento
   instalar_blocos
   instalar_dados
   # Depois do site do nginx refeito sem o include dela.
@@ -131,6 +132,7 @@ gerar_site_blocos() {
   sudo install -m 644 "$DESTINO/agendador/goes-l2/nginx-locais.conf" /etc/nginx/snippets/amaview-goes-l2.conf
   sudo install -m 644 "$DESTINO/agendador/swot/nginx-locais.conf" /etc/nginx/snippets/amaview-swot.conf
   sudo install -m 644 "$DESTINO/agendador/aeronaves/nginx-locais.conf" /etc/nginx/snippets/amaview-aeronaves.conf
+  sudo install -m 644 "$DESTINO/agendador/vento/nginx-locais.conf" /etc/nginx/snippets/amaview-vento.conf
   # O terreno tem cache e limite de taxa, que só valem no bloco http (conf.d).
   # O nginx cria só o último nível da pasta do cache.
   sudo install -d -m 755 /var/cache/nginx
@@ -373,6 +375,45 @@ PY2
   journalctl -u amaview-aeronaves -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
   sudo test -s /etc/amaview/opensky.env && echo "  com a conta da OpenSky" || echo "  sem a conta da OpenSky (opcional: amaview chave opensky)"
   echo "  em disco: $(du -sh /var/cache/amaview-aeronaves 2>/dev/null | cut -f1) publicado, $(sudo du -sh /var/lib/amaview-aeronaves 2>/dev/null | cut -f1) de estado"
+}
+
+# Vento do ECMWF (agendador/vento): análise e previsão curta do IFS, de 3 em 3 h,
+# em três níveis (10 m, 500 e 200 hPa), 7 dias em /var/cache/amaview-vento, que o
+# nginx serve em /vento/. O GRIB é lido pela libeccodes, como na previsão.
+instalar_vento() {
+  titulo "Vento (ECMWF)"
+  getent passwd amaview-vento >/dev/null \
+    || sudo useradd --system --no-create-home --shell /usr/sbin/nologin amaview-vento
+  local falta=""
+  for p in python3-numpy libeccodes0; do
+    dpkg -s "$p" >/dev/null 2>&1 || falta="$falta $p"
+  done
+  [ -z "$falta" ] || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $falta >/dev/null
+  sudo install -d -m 755 -o amaview-vento -g amaview-vento /var/cache/amaview-vento
+  sudo cp "$DESTINO/agendador/vento/amaview-vento.service" "$DESTINO/agendador/vento/amaview-vento.timer" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable amaview-vento.timer >/dev/null 2>&1
+  sudo systemctl restart amaview-vento.timer && verde "  amaview-vento.timer ligado (a cada 20 min)"
+  if ! sudo test -s /var/cache/amaview-vento/vento/v1/indice.json; then
+    sudo systemctl start --no-block amaview-vento.service && echo "  primeira rodada disparada (journalctl -u amaview-vento)"
+  fi
+}
+
+situacao_vento() {
+  titulo "Vento (/vento/)"
+  systemctl is-active --quiet amaview-vento.timer || amarelo "  amaview-vento.timer desligado — rode: amaview instalar"
+  python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-vento"
+import json
+i = json.load(open("/var/cache/amaview-vento/vento/v1/indice.json"))
+h = i["horarios"]
+if h:
+    an = [x for x in h if x["p"] == 0]
+    print(f"  {len(h)} horários, {h[0]['t']}–{h[-1]['t']} UTC · última análise {an[-1]['t'] if an else '—'}")
+if i.get("erro"):
+    print(f"  erro: {i['erro']}")
+PY
+  journalctl -u amaview-vento -n 1 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  echo "  em disco: $(du -sh /var/cache/amaview-vento 2>/dev/null | cut -f1)"
 }
 
 # Conta da OpenSky (reserva das aeronaves, OAuth2 client credentials):
@@ -1336,6 +1377,7 @@ situacao() {
   situacao_goes_l2
   situacao_swot
   situacao_aeronaves
+  situacao_vento
 
   situacao_blocos
   situacao_fumaca
@@ -1379,7 +1421,7 @@ case "${1:-status}" in
     sudo rm -f /etc/systemd/system/amaview-dados@.service
     sudo systemctl disable --now amaview-focos.timer 2>/dev/null
     sudo rm -f /etc/systemd/system/amaview-focos.service /etc/systemd/system/amaview-focos.timer /etc/nginx/snippets/amaview-focos.conf
-    for u in amaview-risco-fogo amaview-goes-l2 amaview-swot amaview-aeronaves; do
+    for u in amaview-risco-fogo amaview-goes-l2 amaview-swot amaview-aeronaves amaview-vento; do
       sudo systemctl disable --now "$u.timer" 2>/dev/null
       sudo rm -f "/etc/systemd/system/$u.service" "/etc/systemd/system/$u.timer" "/etc/nginx/snippets/$u.conf"
     done
