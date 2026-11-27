@@ -378,7 +378,8 @@ PY2
 }
 
 # Vento do ECMWF (agendador/vento): análise e previsão curta do IFS, de 3 em 3 h,
-# em três níveis (10 m, 500 e 200 hPa), 7 dias em /var/cache/amaview-vento, que o
+# em cinco alturas (10 m; 850, 700, 500 e 250 hPa ≈ 1,5/3/5/10 km), 7 dias em
+# /var/cache/amaview-vento (v2; o v1, de três níveis, parou em 27/11/2026), que o
 # nginx serve em /vento/. O GRIB é lido pela libeccodes, como na previsão.
 instalar_vento() {
   titulo "Vento (ECMWF)"
@@ -394,7 +395,7 @@ instalar_vento() {
   sudo systemctl daemon-reload
   sudo systemctl enable amaview-vento.timer >/dev/null 2>&1
   sudo systemctl restart amaview-vento.timer && verde "  amaview-vento.timer ligado (a cada 20 min)"
-  if ! sudo test -s /var/cache/amaview-vento/vento/v1/indice.json; then
+  if ! sudo test -s /var/cache/amaview-vento/vento/v2/indice.json; then
     sudo systemctl start --no-block amaview-vento.service && echo "  primeira rodada disparada (journalctl -u amaview-vento)"
   fi
 }
@@ -404,7 +405,7 @@ situacao_vento() {
   systemctl is-active --quiet amaview-vento.timer || amarelo "  amaview-vento.timer desligado — rode: amaview instalar"
   python3 - <<'PY' 2>/dev/null || amarelo "  sem índice ainda em /var/cache/amaview-vento"
 import json
-i = json.load(open("/var/cache/amaview-vento/vento/v1/indice.json"))
+i = json.load(open("/var/cache/amaview-vento/vento/v2/indice.json"))
 h = i["horarios"]
 if h:
     an = [x for x in h if x["p"] == 0]

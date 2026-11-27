@@ -38,7 +38,9 @@ class Servidor:
         self.pedidos: list[str] = []
 
     def campos(self):
-        return [("sfc", None, "10u"), ("sfc", None, "10v"), ("pl", "500", "u"), ("pl", "500", "v"), ("pl", "200", "u"), ("pl", "200", "v"), ("pl", "850", "u")]
+        niveis = [("pl", lv, c) for lv in ("850", "700", "500", "250") for c in ("u", "v")]
+        # O 200 hPa e o gh estão no índice de verdade, mas não são pedidos.
+        return [("sfc", None, "10u"), ("sfc", None, "10v"), *niveis, ("sfc", None, "sp"), ("pl", "200", "u"), ("pl", "850", "gh")]
 
     def baixar(self, url, cabecalhos=None, dados=None, tentativas=3, metodo=None):
         self.pedidos.append(url)
@@ -59,10 +61,18 @@ class Servidor:
         return json.dumps({"passo": passo, "nivel": lv or "10m", "comp": p[-1]}).encode()
 
 
+# Uma faixa de "Andes" (70°W–65°W) com o chão a 650 hPa: 850 e 700 hPa ficam abaixo dele.
+ANDES = (LONS >= -70) & (LONS <= -65)
+
+
 class Leitor:
     def ler(self, msg):
         d = json.loads(msg)
-        base = d["passo"] + {"10m": 1.0, "500": 10.0, "200": 40.0}[d["nivel"]]
+        if d["comp"] == "p":
+            val = np.full((721, 1440), 100_000.0)
+            val[:, ANDES] = 65_000.0
+            return {"valores": val, "lats": LATS, "lons": LONS}
+        base = d["passo"] + {"10m": 1.0, "850": 5.0, "700": 8.0, "500": 10.0, "250": 40.0}[d["nivel"]]
         val = np.full((721, 1440), base if d["comp"] == "u" else -base, np.float64)
         return {"valores": val, "lats": LATS, "lons": LONS}
 
@@ -71,7 +81,7 @@ class Caso(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
-        for nome, valor in (("RAIZ", self.dir), ("PASTA", os.path.join(self.dir, "vento", "v1")), ("ESTADO", os.path.join(self.dir, "estado.json"))):
+        for nome, valor in (("RAIZ", self.dir), ("PASTA", os.path.join(self.dir, "vento", "v2")), ("ESTADO", os.path.join(self.dir, "estado-v2.json"))):
             p = mock.patch.object(vento, nome, valor)
             p.start()
             self.addCleanup(p.stop)
@@ -120,12 +130,27 @@ class TestExecucao(Caso):
         self.assertEqual(por_t["2026112703"]["p"], 3)
         self.assertEqual(por_t["2026112718"], {"t": "2026112718", "r": "2026112700", "p": 18})
         # O arquivo: u e v, valor = (q − 127) × escala.
-        with open(vento.arquivo("200", "2026112715", "2026112700"), "rb") as f:
+        with open(vento.arquivo("250", "2026112715", "2026112700"), "rb") as f:
             b = np.frombuffer(f.read(), np.uint8)
         self.assertEqual(b.size, 2 * 161 * 221)
         u, v = (int(b[0]) - 127) * 0.8, (int(b[-1]) - 127) * 0.8
         self.assertAlmostEqual(u, 15 + 40, delta=0.4)
         self.assertAlmostEqual(v, -(15 + 40), delta=0.4)
+        self.assertEqual(sorted(ind["niveis"]), ["10m", "250", "500", "700", "850"])
+
+        # Abaixo do chão (a faixa de 650 hPa, coluna de 67°W): 850 e 700 sem dado; 500 e a superfície, com.
+        j = round((-67 - vento.LON0) / vento.PASSO)
+
+        def no_andes(nv):
+            with open(vento.arquivo(nv, "2026112715", "2026112700"), "rb") as f:
+                return int(np.frombuffer(f.read(), np.uint8)[j])
+
+        self.assertEqual(no_andes("850"), 255)
+        self.assertEqual(no_andes("700"), 255)
+        self.assertNotEqual(no_andes("500"), 255)
+        self.assertNotEqual(no_andes("10m"), 255)
+        with open(vento.arquivo("850", "2026112715", "2026112700"), "rb") as f:
+            self.assertAlmostEqual((int(np.frombuffer(f.read(), np.uint8)[0]) - 127) * 0.3, 15 + 5, delta=0.2)
 
         # Nada novo: nenhum passo baixado de novo.
         srv.pedidos.clear()

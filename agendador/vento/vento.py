@@ -2,13 +2,19 @@
 """
 Vento do ECMWF para a camada "Vento" do AmaView (a parte observada, não a
 previsão): a análise do IFS de 6 em 6 h e, entre elas e nas horas mais novas,
-a previsão curta da rodada mais recente, de 3 em 3 h, em três níveis.
+a previsão curta da rodada mais recente, de 3 em 3 h, em cinco alturas.
 
 - Fonte: IFS do ECMWF, dados abertos (`data.ecmwf.int`, sem conta, CC BY 4.0).
   Rodadas de 00, 06, 12 e 18 UTC, grade de 0,25°. O servidor guarda só ~4 dias;
   aqui ficam 7 (`RETENCAO_H`).
-- Níveis: superfície (10 m: `10u`/`10v`), médios (500 hPa) e altos (200 hPa).
-  Só esses 6 campos são baixados, por intervalo de bytes (~3,5 MB por passo).
+- Níveis: superfície (10 m: `10u`/`10v`) e, nos níveis de pressão do modelo,
+  ~1,5 km (850 hPa), ~3 km (700 hPa), ~5 km (500 hPa) e ~10 km (250 hPa).
+  Só esses 10 campos e a pressão na superfície (`sp`) são baixados, por
+  intervalo de bytes (~6 MB por passo). Onde o nível de pressão fica abaixo do
+  chão (pressão maior que a da superfície: 850 e 700 hPa nos Andes), o valor é
+  o que o modelo extrapola para dentro do terreno — sai como sem dado.
+- v2 (27/11/2026): as alturas de 1,5/3/5/10 km no lugar de 500 e 200 hPa. O v1
+  (três níveis) ficou no disco para o app antigo, parado.
 - Cada horário (múltiplo de 3 h) vem da rodada mais nova que já o alcança:
   passo 0 (a análise) quando há, senão o menor passo. Quando sai uma rodada
   nova, os horários dela trocam a previsão mais longa pela mais curta. A
@@ -42,10 +48,10 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "previsao"))
 import previsao as P  # noqa: E402 — GRIB pela libeccodes, downloads com espera do 429
 
-VERSAO = 1
+VERSAO = 2
 RAIZ = os.environ.get("VENTO_RAIZ", "/var/cache/amaview-vento")
 PASTA = os.path.join(RAIZ, "vento", f"v{VERSAO}")
-ESTADO = os.path.join(RAIZ, "estado.json")
+ESTADO = os.path.join(RAIZ, f"estado-v{VERSAO}.json")
 
 LAT0, LAT1 = 15.0, -25.0
 LON0, LON1 = -85.0, -30.0
@@ -58,9 +64,13 @@ ZERO = 127
 # id → (nome, escala em m/s por unidade, (levtype, levelist, u), (levtype, levelist, v))
 NIVEIS = {
     "10m": ("Superfície (10 m)", 0.2, ("sfc", None, "10u"), ("sfc", None, "10v")),
-    "500": ("Médios níveis (500 hPa, ~5,5 km)", 0.4, ("pl", "500", "u"), ("pl", "500", "v")),
-    "200": ("Altos níveis (200 hPa, ~12 km)", 0.8, ("pl", "200", "u"), ("pl", "200", "v")),
+    "850": ("~1,5 km (850 hPa)", 0.3, ("pl", "850", "u"), ("pl", "850", "v")),
+    "700": ("~3 km (700 hPa)", 0.3, ("pl", "700", "u"), ("pl", "700", "v")),
+    "500": ("~5 km (500 hPa)", 0.4, ("pl", "500", "u"), ("pl", "500", "v")),
+    "250": ("~10 km (250 hPa)", 0.8, ("pl", "250", "u"), ("pl", "250", "v")),
 }
+# Pressão na superfície (Pa): esconde os níveis de pressão abaixo do chão.
+PRESSAO_SUPERFICIE = ("sfc", None, "sp")
 
 HORA_S = 3600
 INTERVALO_H = 3
@@ -139,11 +149,21 @@ def codificar(u, v, escala: float) -> bytes:
     return np.concatenate([quantizar(u, escala).ravel(), quantizar(v, escala).ravel()]).tobytes()
 
 
+def abaixo_do_chao(u, v, nivel_hpa: str | None, sp):
+    """Sem dado onde o nível de pressão fica abaixo do chão (pressão do nível > a da superfície)."""
+    import numpy as np
+
+    if nivel_hpa is None:
+        return u, v
+    chao = sp < float(nivel_hpa) * 100
+    return np.where(chao, np.nan, u), np.where(chao, np.nan, v)
+
+
 def baixar_passo(rodada: datetime, passo: int, ec) -> dict[str, bytes]:
-    """Os 6 campos de um passo → {nível: bytes do .bin}. 404 sobe como HTTPError."""
+    """Os campos de um passo → {nível: bytes do .bin}. 404 sobe como HTTPError."""
     base = url_base(rodada, passo)
     indice = [json.loads(l) for l in P.baixar(base + ".index", tentativas=2).decode().splitlines() if l.strip()]
-    quer = {c for _, _, cu, cv in NIVEIS.values() for c in (cu, cv)}
+    quer = {c for _, _, cu, cv in NIVEIS.values() for c in (cu, cv)} | {PRESSAO_SUPERFICIE}
     faixas = {}
     for e in indice:
         k = (e.get("levtype"), e.get("levelist"), e.get("param"))
@@ -159,7 +179,8 @@ def baixar_passo(rodada: datetime, passo: int, ec) -> dict[str, bytes]:
     with ThreadPoolExecutor(max_workers=P.IFS_PARALELO) as pool:
         msgs = dict(zip(faixas, pool.map(pedir, faixas.values())))
     campos = {k: recortar(ec.ler(m)) for k, m in msgs.items()}
-    return {nv: codificar(campos[cu], campos[cv], esc) for nv, (_, esc, cu, cv) in NIVEIS.items()}
+    sp = campos[PRESSAO_SUPERFICIE]
+    return {nv: codificar(*abaixo_do_chao(campos[cu], campos[cv], cu[1], sp), esc) for nv, (_, esc, cu, cv) in NIVEIS.items()}
 
 
 def arquivo(nivel: str, horario: str, rodada: str) -> str:
